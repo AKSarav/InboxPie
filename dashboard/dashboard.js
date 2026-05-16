@@ -198,7 +198,7 @@
   // ══════════════════════════════════════════
   function renderSunburst(filterFn = null, breadcrumbPath = []) {
     const svg = $("#sunburstSvg");
-    svg.innerHTML = "";
+    clearElement(svg);
     const tooltip = $("#sunburstTooltip");
     const breadcrumb = $("#sunburstBreadcrumb");
     const legend = $("#legendPanel");
@@ -211,8 +211,9 @@
     const msgs = filterFn ? allMessages.filter(filterFn) : allMessages;
     const total = msgs.length;
     if (total === 0) {
-      svg.innerHTML = `<text x="400" y="400" text-anchor="middle" fill="${textMuted}" font-size="14">No messages</text>`;
-      legend.innerHTML = "";
+      clearElement(svg);
+      addSvgText(svg, 400, 400, "No messages", { fill: textMuted, fontSize: "14" });
+      clearElement(legend);
       return;
     }
 
@@ -350,7 +351,7 @@
 
     html += '<div class="legend-section"><div class="legend-section-title">Years (inner ring)</div>';
     years.forEach((y) => {
-      html += `<div class="legend-item"><div class="legend-swatch" style="background:${y.color}"></div><span class="legend-label">${y.label}</span><span class="legend-count">${y.count.toLocaleString()}</span></div>`;
+      html += `<div class="legend-item"><div class="legend-swatch" style="background:${escAttr(y.color)}"></div><span class="legend-label">${escHtml(y.label)}</span><span class="legend-count">${y.count.toLocaleString()}</span></div>`;
     });
     html += '</div>';
 
@@ -358,15 +359,15 @@
     const topDomains = Object.entries(domains).sort((a, b) => b[1].count - a[1].count).slice(0, 15);
     html += '<div class="legend-section"><div class="legend-section-title">Top Domains (outer ring)</div>';
     topDomains.forEach(([name, d]) => {
-      html += `<div class="legend-item"><div class="legend-swatch" style="background:${d.color}"></div><span class="legend-label">${name}</span><span class="legend-count">${d.count.toLocaleString()}</span></div>`;
+      html += `<div class="legend-item"><div class="legend-swatch" style="background:${escAttr(d.color)}"></div><span class="legend-label">${escHtml(name)}</span><span class="legend-count">${d.count.toLocaleString()}</span></div>`;
     });
     html += '</div>';
 
-    panel.innerHTML = html;
+    setSafeHtml(panel, html);
   }
 
   function renderBreadcrumb(breadcrumb, path, filterFn) {
-    breadcrumb.innerHTML = "";
+    clearElement(breadcrumb);
     const allSpan = document.createElement("span");
     allSpan.textContent = "All Mail";
     allSpan.classList.toggle("bc-active", path.length === 0);
@@ -395,8 +396,8 @@
     });
     const sorted = Object.entries(bySender).sort((a, b) => b[1].count - a[1].count);
 
-    detail.innerHTML = `
-      <h3 style="font-size:14px; margin-bottom:10px; color:var(--accent);">${domain} — ${msgs.length} emails</h3>
+    setSafeHtml(detail, `
+      <h3 style="font-size:14px; margin-bottom:10px; color:var(--accent);">${escHtml(domain)} — ${msgs.length} emails</h3>
       <table>
         <thead><tr><th>Sender</th><th>Count</th><th>Select</th></tr></thead>
         <tbody>
@@ -404,20 +405,24 @@
             <tr>
               <td><strong>${escHtml(data.name)}</strong><br><span style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);">${escHtml(email)}</span></td>
               <td style="font-family:var(--font-mono);color:var(--accent);">${data.count}</td>
-              <td><button class="btn btn-danger" style="font-size:11px;padding:4px 10px;" onclick="window._selectForDelete('${escAttr(email)}')">Select</button></td>
+              <td><button class="btn btn-secondary" style="font-size:11px;padding:4px 10px;" data-select-email="${escAttr(email)}">Select</button></td>
             </tr>
           `).join("")}
         </tbody>
       </table>
-    `;
+    `);
+
+    detail.querySelectorAll("[data-select-email]").forEach((btn) => {
+      btn.addEventListener("click", () => selectSenderForReview(btn.dataset.selectEmail));
+    });
   }
 
-  window._selectForDelete = function (email) {
+  function selectSenderForReview(email) {
     allMessages.filter((m) => m.senderEmail === email).forEach((m) => selectedIds.add(m.id));
     updateStats();
     if (currentView === "sender") renderSenderTable();
     else if (currentView === "domain") renderDomainTable();
-  };
+  }
 
   // ══════════════════════════════════════════
   //  SVG HELPERS
@@ -502,11 +507,11 @@
 
   function showTooltip(tooltip, event, label, count, total) {
     const pct = ((count / total) * 100).toFixed(1);
-    tooltip.innerHTML = `
+    setSafeHtml(tooltip, `
       <div class="tt-label">${escHtml(label)}</div>
       <div class="tt-count">${count.toLocaleString()} emails</div>
       <div class="tt-pct">${pct}% of total</div>
-    `;
+    `);
     tooltip.style.display = "block";
     tooltip.style.left = event.clientX + 14 + "px";
     tooltip.style.top = event.clientY - 10 + "px";
@@ -533,7 +538,7 @@
     else if (sort === "name-asc") entries.sort((a, b) => a[0].localeCompare(b[0]));
     else if (sort === "date-desc") entries.sort((a, b) => new Date(b[1][0].date) - new Date(a[1][0].date));
 
-    container.innerHTML = entries.map(([email, msgs], i) => {
+    setSafeHtml(container, entries.map(([email, msgs], i) => {
       const name = msgs[0].senderName || email;
       const count = msgs.length;
       const unread = msgs.filter((m) => !m.read).length;
@@ -622,7 +627,7 @@
           </div>
           ${expanded ? `<div class="sender-year-list">${yearRowsHtml}</div>` : ""}
         </div>`;
-    }).join("");
+    }).join(""));
 
     container.querySelectorAll(".sender-group").forEach((group) => {
       const email = group.dataset.email;
@@ -713,7 +718,7 @@
     if (q) entries = entries.filter(([domain]) => domain.toLowerCase().includes(q));
     entries.sort((a, b) => b[1].length - a[1].length);
 
-    container.innerHTML = entries.map(([domain, msgs], i) => {
+    setSafeHtml(container, entries.map(([domain, msgs], i) => {
       const count = msgs.length;
       const senderNum = new Set(msgs.map((m) => m.senderEmail)).size;
       const pct = ((count / maxCount) * 100).toFixed(0);
@@ -764,7 +769,7 @@
           </div>
           ${expanded ? `<div class="domain-sender-list">${subRows}</div>` : ""}
         </div>`;
-    }).join("");
+    }).join(""));
 
     searchInput.oninput = () => renderDomainTable();
 
@@ -865,7 +870,7 @@
         : `${formatBytes(totalBytes)} across ${knownMessages.length.toLocaleString()} messages`;
     }
 
-    container.innerHTML = `
+    setSafeHtml(container, `
       <div class="timeline-kpis">
         <div class="timeline-kpi"><span>${formatBytes(totalBytes)}</span><label>Known mailbox size</label></div>
         <div class="timeline-kpi"><span>${knownMessages.length.toLocaleString()}</span><label>Messages with size</label></div>
@@ -888,7 +893,7 @@
           ${topLargest.length ? topLargest.map((row) => renderSizeRow(row, "message")).join("") : `<div class="insight-empty">No message sizes available.</div>`}
         </div>
       </section>
-    `;
+    `);
 
     container.querySelectorAll("[data-size-kind]").forEach((btn) => {
       btn.addEventListener("click", () => selectSizeInsight(btn, knownMessages));
@@ -990,10 +995,10 @@
 
     const months = buildTimelineMonths();
     if (!months.length) {
-      if (controls) controls.innerHTML = "";
-      if (insights) insights.innerHTML = "";
+      if (controls) clearElement(controls);
+      if (insights) clearElement(insights);
       if (label) label.textContent = "No timeline data";
-      container.innerHTML = `<p style="color:${textMuted};">No data</p>`;
+      setSafeHtml(container, `<p style="color:${textMuted};">No data</p>`);
       updateBulkButtons();
       return;
     }
@@ -1006,7 +1011,7 @@
       : `${visible[0].label} - ${visible[visible.length - 1].label} · ${messagesInRange.length.toLocaleString()} emails`;
     if (label) label.textContent = activeLabel;
 
-    controls.innerHTML = `
+    setSafeHtml(controls, `
       <div class="timeline-control-group">
         <button class="btn btn-secondary ${timelineState.windowMonths === null ? "active" : ""}" data-timeline-action="window" data-window="all">All</button>
         <button class="btn btn-secondary ${timelineState.windowMonths === 12 ? "active" : ""}" data-timeline-action="window" data-window="12">12M</button>
@@ -1020,7 +1025,7 @@
         <button class="btn btn-secondary" data-timeline-action="zoom-out">Zoom Out</button>
         <button class="btn btn-secondary" data-timeline-action="reset">Reset</button>
       </div>
-    `;
+    `);
 
     const maxVal = Math.max(1, ...visible.map((m) => m.count));
     const svgW = Math.max(760, visible.length * 34 + 70);
@@ -1046,14 +1051,14 @@
         </g>`;
     });
 
-    container.innerHTML = `
+    setSafeHtml(container, `
       <svg viewBox="0 0 ${svgW} ${svgH}" width="${svgW}">
         <line x1="44" y1="${svgH - 48}" x2="${svgW - 10}" y2="${svgH - 48}" stroke="${border}" stroke-width="1"/>
         <text x="44" y="20" fill="${textPrimary}" font-size="12" font-weight="600">Monthly volume</text>
         <text x="44" y="38" fill="${textMuted}" font-size="11">Click a month to focus cleanup insights</text>
         ${bars}
       </svg>
-    `;
+    `);
 
     renderTimelineInsights(messagesInRange, selected ? selected.key : null);
 
@@ -1195,7 +1200,7 @@
       accountId: m.accountId,
     })).slice(0, 8);
 
-    insights.innerHTML = `
+    setSafeHtml(insights, `
       <div class="timeline-kpis">
         <div class="timeline-kpi"><span>${total.toLocaleString()}</span><label>Emails in range</label></div>
         <div class="timeline-kpi"><span>${unread.length.toLocaleString()}</span><label>Unread</label></div>
@@ -1209,7 +1214,7 @@
         ${renderInsightCard("Folder Hotspots", "Where inbox clutter is concentrated.", folderHotspots, "folder")}
       </div>
       ${selectedMonthKey ? `<div class="timeline-note">Showing insights for ${escHtml(selectedMonthKey)}. Click the month again to return to the visible range.</div>` : ""}
-    `;
+    `);
   }
 
   function renderInsightCard(title, subtitle, rows, kind) {
@@ -1386,7 +1391,7 @@
     };
 
     if (selectedIds.size === 0) {
-      table.innerHTML = `<div class="selection-empty">No messages selected.</div>`;
+      setSafeHtml(table, `<div class="selection-empty">No messages selected.</div>`);
       $("#selectionReviewTrash").disabled = true;
       $("#selectionReviewFolder").disabled = true;
       return;
@@ -1396,12 +1401,12 @@
     $("#selectionReviewFolder").disabled = false;
 
     if (selected.length === 0) {
-      table.innerHTML = `<div class="selection-empty">No selected messages match your search.</div>`;
+      setSafeHtml(table, `<div class="selection-empty">No selected messages match your search.</div>`);
       return;
     }
 
     const visible = selected.slice(0, 500);
-    table.innerHTML = `
+    setSafeHtml(table, `
       <div class="selection-review-table-head">
         <span>Subject</span><span>Sender</span><span>Date</span><span>Size</span><span></span>
       </div>
@@ -1422,7 +1427,7 @@
           </button>
         </div>`).join("")}
       ${selected.length > visible.length ? `<div class="selection-review-more">Showing first ${visible.length.toLocaleString()} of ${selected.length.toLocaleString()} matches. Narrow with search to inspect more.</div>` : ""}
-    `;
+    `);
 
     table.querySelectorAll("[data-review-remove]").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -1481,10 +1486,10 @@
     const senders = new Set();
     allMessages.forEach((m) => { if (selectedIds.has(m.id)) senders.add(m.senderEmail); });
 
-    $("#deleteModalText").innerHTML = `
+    setSafeHtml($("#deleteModalText"), `
       You're about to move <strong>${count.toLocaleString()} email(s)</strong> from
       <strong>${senders.size} sender(s)</strong> to Trash.
-    `;
+    `);
 
     const modal = $("#deleteModal");
     modal.style.display = "flex";
@@ -1543,12 +1548,12 @@
     const select = $("#folderModalSelect");
     const confirmBtn = $("#folderModalConfirm");
 
-    $("#folderModalText").innerHTML =
+    setSafeHtml($("#folderModalText"),
       accountIds.length > 1
         ? `You have <strong>${totalSel.toLocaleString()} email(s)</strong> selected across <strong>${accountIds.length} accounts</strong>. Pick a destination folder — only messages that belong to that account will be moved.`
-        : `You are moving <strong>${totalSel.toLocaleString()} email(s)</strong>. Pick a destination folder under <strong>${escHtml(selectedMsgs[0].account)}</strong>.`;
+        : `You are moving <strong>${totalSel.toLocaleString()} email(s)</strong>. Pick a destination folder under <strong>${escHtml(selectedMsgs[0].account)}</strong>.`);
 
-    select.innerHTML = "";
+    clearElement(select);
     confirmBtn.disabled = true;
     modal.style.display = "flex";
 
@@ -1583,7 +1588,7 @@
         select.appendChild(og);
       }
     } catch (e) {
-      select.innerHTML = "";
+      clearElement(select);
       const err = document.createElement("option");
       err.textContent = `Could not load folders: ${e.message}`;
       err.disabled = true;
@@ -1731,7 +1736,24 @@
     return `${email}::${year}`;
   }
 
-  function escHtml(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+  function clearElement(el) {
+    if (el) el.replaceChildren();
+  }
+
+  function setSafeHtml(el, html) {
+    if (!el) return;
+    const doc = new DOMParser().parseFromString(`<body>${html}</body>`, "text/html");
+    el.replaceChildren(...Array.from(doc.body.childNodes));
+  }
+
+  function escHtml(s) {
+    return String(s ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
   function escAttr(s) { return (s || "").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
 
   init();

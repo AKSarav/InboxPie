@@ -1,6 +1,14 @@
 # InboxPie — Thunderbird Mail Organizer
 
-InboxPie is a local-first Thunderbird extension for understanding and cleaning up a busy mailbox. It scans message metadata, turns the inbox into visual summaries, and lets you review selected messages before moving them to Trash or another folder.
+InboxPie is a local-first Thunderbird extension for visualizing and cleaning up your business email inbox. 
+
+It scans message metadata, turns the inbox into visual summaries, and lets you review selected messages before you can take the call to action to move them to Trash or another folder. 
+
+No Personal Data is collected or stored. It is a local-first extension that runs inside Thunderbird with no external service, API key, telemetry, or cloud upload.
+
+![InboxPie Screenshot](docs/screenshots/Pieview.png)
+![InboxPie Screenshot](docs/screenshots/BySender.png)
+![InboxPie Screenshot](docs/screenshots/Timeline.png)
 
 The extension is designed for people who want to answer questions like:
 
@@ -31,6 +39,8 @@ InboxPie processes mailbox information locally in Thunderbird.
 - It does **not** read or display full email bodies.
 - It uses message metadata needed for organization: sender, subject, date, folder, account, read status, tags, and size when Thunderbird exposes it.
 - Selected messages are moved only after the user reviews and confirms the action.
+
+> Why should you believe this ? - that's why InboxPie is OpenSource and you can review the code yourself.
 
 ## Permissions
 
@@ -75,7 +85,7 @@ Temporary add-ons are removed when Thunderbird restarts.
 For a release build, package only the active extension files:
 
 ```bash
-zip -r inboxpie@aksarav.dev.xpi manifest.json background.js dashboard/ icons/
+zip -r app@inboxpie.com.xpi manifest.json background.js dashboard/ icons/
 ```
 
 Do not include development notes, old prototype files, screenshots, or unrelated workspace files in the XPI.
@@ -92,19 +102,10 @@ Do not include development notes, old prototype files, screenshots, or unrelated
 - The extension uses Thunderbird MailExtension APIs and stores only the local theme preference in `localStorage`.
 - The review screen is intentionally placed before bulk actions so users can inspect message metadata before moving messages.
 
-## Open Source
+## Open Source ❤️
 
-InboxPie is intended to be published as open source under the MIT License.
+InboxPie is available as open source under the MIT License. See the [LICENSE](LICENSE) file for details.
 
-Project governance and release files:
+## Creator and Contact
 
-- `LICENSE` — MIT License.
-- `PRIVACY.md` — Privacy policy and data handling details.
-- `CONTRIBUTING.md` — Contributor setup and project guidelines.
-- `SECURITY.md` — Security reporting expectations.
-- `CODE_OF_CONDUCT.md` — Community behavior expectations.
-- `RELEASE_CHECKLIST.md` — ATN and release validation checklist.
-
-## License
-
-MIT
+InboxPie is created and maintained by AKSarav. Follow me on LinkedIn [@aksarav](https://www.linkedin.com/in/aksarav/) 
