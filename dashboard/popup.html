@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>InboxPie — Email Analytics & Cleanup</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <header id="header">
+      <div class="header-left">
+        <img src="../icons/icon-96.png" alt="InboxPie Logo" class="logo-icon" height="40" width="40">
+        <h1>InboxPie</h1>
+      </div>
+      <div class="header-right">
+        <button id="themeToggle" class="theme-toggle" title="Toggle theme">☀</button>
+        <select id="accountSelect">
+          <option value="all">All Accounts</option>
+        </select>
+        <button id="scanBtn" class="btn btn-primary">
+          <span class="btn-text">Scan Mailbox</span>
+          <span class="btn-loader" style="display:none;">Scanning…</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="statsBar" class="stats-bar" style="display:none;">
+      <div class="stat-card">
+        <div class="stat-icon" aria-hidden="true">
+          <svg viewBox="0 0 20 20"><path d="M3.5 6.5h13v8h-13z"></path><path d="m3.5 6.5 6.5 5 6.5-5"></path></svg>
+        </div>
+        <div><div class="stat-number" id="statTotal">0</div><div class="stat-label">Total Emails</div></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon" aria-hidden="true">
+          <svg viewBox="0 0 20 20"><circle cx="10" cy="7" r="3"></circle><path d="M4.5 17c.8-3.2 2.7-5 5.5-5s4.7 1.8 5.5 5"></path></svg>
+        </div>
+        <div><div class="stat-number" id="statSenders">0</div><div class="stat-label">Unique Senders</div></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon" aria-hidden="true">
+          <svg viewBox="0 0 20 20"><path d="M4 5h12v10H4z"></path><path d="M4 8h12"></path><path d="M7 11h4"></path></svg>
+        </div>
+        <div><div class="stat-number" id="statUnread">0</div><div class="stat-label">Unread</div></div>
+      </div>
+      <div class="stat-card stat-card-selected">
+        <div class="stat-icon" aria-hidden="true">
+          <svg viewBox="0 0 20 20"><path d="M4 10.5 8 14l8-8"></path></svg>
+        </div>
+        <div><div class="stat-number" id="statSelected">0</div><div class="stat-label">Selected for Action</div></div>
+      </div>
+    </div>
+
+    <div id="progressArea" style="display:none;">
+      <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+      <div class="progress-text" id="progressText">Scanning...</div>
+    </div>
+
+    <div id="exportBar" class="export-bar" style="display:none;">
+      <button id="exportCsvBtn" class="btn btn-secondary">⬇ Export CSV</button>
+      <button id="exportJsonBtn" class="btn btn-secondary">⬇ Export JSON</button>
+    </div>
+
+    <div id="viewTabs" class="view-tabs" style="display:none;">
+      <button class="tab active" data-view="sunburst">
+        <svg class="tab-icon" viewBox="0 0 20 20" aria-hidden="true">
+          <circle cx="10" cy="10" r="7"></circle>
+          <path d="M10 3v7l5 5"></path>
+        </svg>
+        PieView
+      </button>
+      <button class="tab" data-view="sender">
+        <svg class="tab-icon" viewBox="0 0 20 20" aria-hidden="true">
+          <circle cx="10" cy="7" r="3"></circle>
+          <path d="M4.5 17c.8-3.2 2.7-5 5.5-5s4.7 1.8 5.5 5"></path>
+        </svg>
+        By Sender
+      </button>
+      <button class="tab" data-view="domain">
+        <svg class="tab-icon" viewBox="0 0 20 20" aria-hidden="true">
+          <circle cx="10" cy="10" r="7"></circle>
+          <path d="M3 10h14M10 3c2 2.2 3 4.5 3 7s-1 4.8-3 7M10 3c-2 2.2-3 4.5-3 7s1 4.8 3 7"></path>
+        </svg>
+        By Domain
+      </button>
+      <button class="tab" data-view="size">
+        <svg class="tab-icon" viewBox="0 0 20 20" aria-hidden="true">
+          <path d="M4 6.5c0-1.7 2.7-3 6-3s6 1.3 6 3-2.7 3-6 3-6-1.3-6-3z"></path>
+          <path d="M4 6.5v7c0 1.7 2.7 3 6 3s6-1.3 6-3v-7M4 10c0 1.7 2.7 3 6 3s6-1.3 6-3"></path>
+        </svg>
+        By Size
+      </button>
+      <button class="tab" data-view="timeline">
+        <svg class="tab-icon" viewBox="0 0 20 20" aria-hidden="true">
+          <circle cx="10" cy="10" r="7"></circle>
+          <path d="M10 6v4l3 2"></path>
+        </svg>
+        Timeline
+      </button>
+    </div>
+
+    <main id="mainContent">
+      <div id="landingState" class="landing">
+        <div class="landing-visual">
+          <svg viewBox="0 0 200 200" width="160" height="160">
+            <circle cx="100" cy="100" r="80" fill="none" stroke="var(--border)" stroke-width="1" stroke-dasharray="4,6"/>
+            <circle cx="100" cy="100" r="55" fill="none" stroke="var(--text-muted)" stroke-width="1" stroke-dasharray="3,5"/>
+            <circle cx="100" cy="100" r="30" fill="none" stroke="var(--text-muted)" stroke-width="1" stroke-dasharray="2,4"/>
+            <circle cx="100" cy="100" r="8" fill="var(--accent)" opacity="0.8"/>
+          </svg>
+        </div>
+        <p class="landing-text">Connect your mailbox and scan to generate<br>a sunburst report of all your emails.</p>
+      </div>
+
+      <div id="sunburstView" class="view-panel" style="display:none;">
+        <div class="sunburst-layout">
+          <div>
+            <div class="sunburst-container">
+              <svg id="sunburstSvg" viewBox="0 0 800 800"></svg>
+              <div id="sunburstTooltip" class="sunburst-tooltip" style="display:none;"></div>
+            </div>
+            <div id="sunburstBreadcrumb" class="breadcrumb"></div>
+          </div>
+          <div id="legendPanel" class="legend-panel"></div>
+        </div>
+        <div id="sunburstDetail" class="detail-panel"></div>
+      </div>
+
+      <div id="senderView" class="view-panel" style="display:none;">
+        <div class="table-controls">
+          <input type="text" id="senderSearch" class="search-input" placeholder="Search senders…">
+          <select id="senderSort">
+            <option value="count-desc">Most emails first</option>
+            <option value="count-asc">Fewest emails first</option>
+            <option value="name-asc">Name A→Z</option>
+            <option value="date-desc">Most recent first</option>
+          </select>
+          <div id="senderBulkButtons" class="bulk-buttons-group" style="display:none;">
+            <button type="button" class="btn btn-primary" data-action="bulk-review">
+              Review Selected (<span class="bulk-delete-count">0</span>)
+            </button>
+          </div>
+        </div>
+        <div id="senderTable" class="sender-table"></div>
+      </div>
+
+      <div id="domainView" class="view-panel" style="display:none;">
+        <div class="table-controls">
+          <input type="text" id="domainSearch" class="search-input" placeholder="Search domains…">
+          <div id="domainBulkButtons" class="bulk-buttons-group" style="display:none;">
+            <button type="button" class="btn btn-primary" data-action="bulk-review">
+              Review Selected (<span class="bulk-delete-count">0</span>)
+            </button>
+          </div>
+        </div>
+        <div id="domainTable" class="sender-table"></div>
+      </div>
+
+      <div id="sizeView" class="view-panel" style="display:none;">
+        <div class="size-dashboard">
+          <div class="timeline-header">
+            <div>
+              <h2>Storage Cleanup</h2>
+              <p id="sizeSummaryLabel">Find the messages using the most mailbox space.</p>
+            </div>
+            <div id="sizeBulkButtons" class="bulk-buttons-group" style="display:none;">
+              <button type="button" class="btn btn-primary" data-action="bulk-review">
+                Review Selected (<span class="bulk-delete-count">0</span>)
+              </button>
+            </div>
+          </div>
+          <div id="sizeInsights" class="timeline-insights"></div>
+        </div>
+      </div>
+
+      <div id="timelineView" class="view-panel" style="display:none;">
+        <div class="timeline-dashboard">
+          <div class="timeline-header">
+            <div>
+              <h2>Inbox Timeline</h2>
+              <p id="timelineRangeLabel">All scanned mail</p>
+            </div>
+            <div id="timelineBulkButtons" class="bulk-buttons-group" style="display:none;">
+              <button type="button" class="btn btn-primary" data-action="bulk-review">
+                Review Selected (<span class="bulk-delete-count">0</span>)
+              </button>
+            </div>
+          </div>
+          <div id="timelineControls" class="timeline-controls"></div>
+          <div id="timelineChart" class="timeline-chart"></div>
+          <div id="timelineInsights" class="timeline-insights"></div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div id="selectionReviewModal" class="modal-overlay" style="display:none;">
+    <div class="modal-box selection-review-modal">
+      <div class="selection-review-head">
+        <div>
+          <h3>Review selected emails</h3>
+          <p id="selectionReviewSummary"></p>
+        </div>
+        <button type="button" id="selectionReviewClose" class="btn btn-secondary">Close</button>
+      </div>
+      <div class="selection-review-controls">
+        <input type="text" id="selectionReviewSearch" class="search-input" placeholder="Search subject, sender, folder…">
+        <select id="selectionReviewSort">
+          <option value="date-desc">Newest first</option>
+          <option value="date-asc">Oldest first</option>
+          <option value="size-desc">Largest first</option>
+          <option value="sender-asc">Sender A→Z</option>
+          <option value="subject-asc">Subject A→Z</option>
+        </select>
+        <button type="button" id="selectionReviewUnselectMatches" class="btn btn-secondary">Unselect Matches</button>
+      </div>
+      <div id="selectionReviewTable" class="selection-review-table"></div>
+      <div class="modal-actions selection-review-actions">
+        <button type="button" id="selectionReviewClear" class="btn btn-secondary">Clear Selection</button>
+        <button type="button" id="selectionReviewFolder" class="btn btn-secondary">Move to Folder</button>
+        <button type="button" id="selectionReviewTrash" class="btn btn-danger">Move to Trash</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Delete confirmation modal (hidden) -->
+  <div id="deleteModal" class="modal-overlay" style="display:none;">
+    <div class="modal-box">
+      <h3>⚠ Confirm Move to Trash</h3>
+      <p id="deleteModalText"></p>
+      <p><span class="badge-safe">SAFE</span> Messages will be moved to Trash — not permanently deleted. You can recover them from your Trash folder.</p>
+      <div class="modal-actions">
+        <button id="modalCancel" class="btn btn-secondary">Cancel</button>
+        <button id="modalConfirm" class="btn btn-danger">Move to Trash</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="folderModal" class="modal-overlay" style="display:none;">
+    <div class="modal-box modal-box-wide">
+      <h3>Move to folder</h3>
+      <p id="folderModalText"></p>
+      <label class="folder-modal-label" for="folderModalSelect">Destination</label>
+      <select id="folderModalSelect" class="folder-modal-select" size="12"></select>
+      <div class="modal-actions">
+        <button type="button" id="folderModalCancel" class="btn btn-secondary">Cancel</button>
+        <button type="button" id="folderModalConfirm" class="btn btn-primary">Move here</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>

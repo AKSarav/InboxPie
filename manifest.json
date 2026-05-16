@@ -1,0 +1,29 @@
+{
+  "manifest_version": 2,
+  "name": "InboxPie",
+  "version": "2.0.0",
+  "description": "Visualize your inbox with interactive sunburst pie charts. See your email patterns by year, month, domain, and sender — then clean up with confidence.",
+  "author": "AKSarav",
+  "applications": {
+    "gecko": {
+      "id": "inboxpie@aksarav.dev",
+      "strict_min_version": "115.0"
+    }
+  },
+  "permissions": [
+    "accountsRead",
+    "messagesRead",
+    "messagesMove",
+    "messagesDelete"
+  ],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "browser_action": {
+    "default_title": "InboxPie - Open Dashboard"
+  },
+  "icons": {
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png"
+  }
+}

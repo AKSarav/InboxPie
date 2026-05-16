@@ -1,0 +1,17 @@
+.DS_Store
+*.xpi
+*.zip
+*.log
+
+# Local/editor files
+.vscode/
+.idea/
+
+# Dependency/build folders if added later
+node_modules/
+dist/
+build/
+
+# Local environment files
+.env
+.env.*
