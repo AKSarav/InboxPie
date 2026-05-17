@@ -1,4 +1,4 @@
-# InboxPie — Thunderbird Mail Organizer
+# InboxPie — Privacy First Thunderbird Mail Organizer
 
 InboxPie is a local-first Thunderbird extension for visualizing and cleaning up your business email inbox. 
 
