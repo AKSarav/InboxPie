@@ -21,6 +21,9 @@
     query: "",
     sort: "date-desc",
   };
+  let privacyMaskEnabled = false;
+  const DEFAULT_FOLDER_TYPES = ["inbox", "sent", "archives", "junk"];
+  let selectedFolderTypes = [...DEFAULT_FOLDER_TYPES];
 
   const PALETTE = [
     "#3b82f6", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316",
@@ -47,6 +50,10 @@
     document.documentElement.setAttribute("data-theme", saved);
     updateThemeIcon(saved);
 
+    // Load saved privacy mask setting
+    privacyMaskEnabled = localStorage.getItem("mail-audit-privacy-mask") === "true";
+    updatePrivacyToggle();
+
     // Theme toggle
     $("#themeToggle").addEventListener("click", () => {
       const cur = document.documentElement.getAttribute("data-theme");
@@ -58,13 +65,32 @@
       if (allMessages.length > 0) switchView(currentView);
     });
 
+    // Privacy mask toggle
+    $("#privacyToggle").addEventListener("click", () => {
+      privacyMaskEnabled = !privacyMaskEnabled;
+      localStorage.setItem("mail-audit-privacy-mask", privacyMaskEnabled);
+      updatePrivacyToggle();
+      updateAccountSelectDisplay();
+      if (allMessages.length > 0) switchView(currentView);
+    });
+
+    // Clickable stat card for selected emails
+    $("#statCardSelected").addEventListener("click", () => {
+      if (selectedIds.size > 0) showSelectionReviewModal();
+    });
+
+    // Folder selection
+    initFolderSelection();
+
     // Accounts
     try {
       const accounts = await browser.runtime.sendMessage({ action: "getAccounts" });
       accounts.forEach((a) => {
         const opt = document.createElement("option");
         opt.value = a.id;
-        opt.textContent = `${a.name} (${a.type})`;
+        const originalText = `${a.name} (${a.type})`;
+        opt.dataset.originalText = originalText;
+        opt.textContent = privacyMaskEnabled ? maskAccountText(originalText) : originalText;
         accountSelect.appendChild(opt);
       });
     } catch (e) {
@@ -72,6 +98,7 @@
     }
 
     scanBtn.addEventListener("click", startScan);
+    accountSelect.addEventListener("change", resetDashboard);
     document.querySelectorAll(".tab").forEach((t) =>
       t.addEventListener("click", () => switchView(t.dataset.view))
     );
@@ -110,17 +137,190 @@
     $("#themeToggle").title = theme === "dark" ? "Switch to Light" : "Switch to Dark";
   }
 
+  function updatePrivacyToggle() {
+    const btn = $("#privacyToggle");
+    if (privacyMaskEnabled) {
+      btn.classList.add("active");
+      btn.title = "Privacy mode ON — emails masked. Click to show full emails.";
+    } else {
+      btn.classList.remove("active");
+      btn.title = "Privacy mode OFF — full emails shown. Click to mask emails.";
+    }
+  }
+
+  function updateAccountSelectDisplay() {
+    const select = accountSelect;
+    Array.from(select.options).forEach((opt) => {
+      if (opt.value === "all") return;
+      const original = opt.dataset.originalText || opt.textContent;
+      opt.dataset.originalText = original;
+      opt.textContent = privacyMaskEnabled ? maskAccountText(original) : original;
+    });
+  }
+
+  function maskAccountText(text) {
+    return text.replace(/([a-zA-Z0-9._%+-]+)@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g, (match, local, domain) => {
+      return maskEmail(`${local}@${domain}`);
+    });
+  }
+
+  function maskEmail(email) {
+    if (!email || !email.includes("@")) return email;
+    const [local, domain] = email.split("@");
+    if (local.length <= 1) return `${local}***@${domain}`;
+    const masked = local.charAt(0) + "***";
+    return `${masked}@${domain}`;
+  }
+
+  function displayEmail(email) {
+    return privacyMaskEnabled ? maskEmail(email) : email;
+  }
+
+  // ══════════════════════════════════════════
+  //  FOLDER SELECTION
+  // ══════════════════════════════════════════
+  function initFolderSelection() {
+    // Load saved folder selection
+    const saved = localStorage.getItem("mail-audit-folder-types");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          selectedFolderTypes = parsed;
+        }
+      } catch (e) {
+        console.warn("Could not parse saved folder types:", e);
+      }
+    }
+
+    // Apply saved selection to checkboxes
+    const dropdown = $("#folderDropdown");
+    const checkboxes = dropdown.querySelectorAll('input[type="checkbox"]');
+    checkboxes.forEach((cb) => {
+      cb.checked = selectedFolderTypes.includes(cb.value);
+    });
+    updateFolderBadge();
+
+    // Toggle dropdown
+    $("#folderSelectBtn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isVisible = dropdown.style.display === "block";
+      dropdown.style.display = isVisible ? "none" : "block";
+    });
+
+    // Close dropdown when clicking outside
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest(".folder-select-wrap")) {
+        dropdown.style.display = "none";
+      }
+    });
+
+    // Handle checkbox changes
+    checkboxes.forEach((cb) => {
+      cb.addEventListener("change", () => {
+        updateSelectedFolders();
+      });
+    });
+
+    // Select All button
+    $("#folderSelectAll").addEventListener("click", () => {
+      checkboxes.forEach((cb) => { cb.checked = true; });
+      updateSelectedFolders();
+    });
+
+    // Select None button
+    $("#folderSelectNone").addEventListener("click", () => {
+      checkboxes.forEach((cb) => { cb.checked = false; });
+      updateSelectedFolders();
+    });
+  }
+
+  function updateSelectedFolders() {
+    const checkboxes = $("#folderDropdown").querySelectorAll('input[type="checkbox"]:checked');
+    selectedFolderTypes = Array.from(checkboxes).map((cb) => cb.value);
+    localStorage.setItem("mail-audit-folder-types", JSON.stringify(selectedFolderTypes));
+    updateFolderBadge();
+  }
+
+  function updateFolderBadge() {
+    const badge = $("#folderCountBadge");
+    badge.textContent = selectedFolderTypes.length;
+    badge.style.display = selectedFolderTypes.length > 0 ? "inline-block" : "none";
+  }
+
+  // ══════════════════════════════════════════
+  //  RESET (account change)
+  // ══════════════════════════════════════════
+  function resetDashboard() {
+    allMessages = [];
+    selectedIds.clear();
+    expandedDomains.clear();
+    expandedSenders.clear();
+    expandedSenderYears.clear();
+    timelineState.windowMonths = 24;
+    timelineState.offsetMonths = 0;
+    timelineState.selectedMonth = null;
+    reviewState.query = "";
+    reviewState.sort = "date-desc";
+    currentView = "sunburst";
+
+    $("#selectionReviewModal").style.display = "none";
+    $("#deleteModal").style.display = "none";
+    $("#folderModal").style.display = "none";
+
+    $("#progressArea").style.display = "none";
+    $("#statsBar").style.display = "none";
+    $("#viewTabs").style.display = "none";
+    $("#exportBar").style.display = "none";
+    $("#landingState").style.display = "flex";
+
+    document.querySelectorAll(".view-panel").forEach((p) => (p.style.display = "none"));
+    document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+    document.querySelector('.tab[data-view="sunburst"]')?.classList.add("active");
+
+    $("#statTotal").textContent = "0";
+    $("#statSenders").textContent = "0";
+    $("#statUnread").textContent = "0";
+    $("#statSelected").textContent = "0";
+
+    clearElement($("#sunburstSvg"));
+    clearElement($("#sunburstBreadcrumb"));
+    clearElement($("#legendPanel"));
+    clearElement($("#sunburstDetail"));
+    clearElement($("#senderTable"));
+    clearElement($("#domainTable"));
+    clearElement($("#sizeInsights"));
+    clearElement($("#timelineChart"));
+    clearElement($("#timelineControls"));
+    clearElement($("#timelineInsights"));
+
+    const senderSearch = $("#senderSearch");
+    const domainSearch = $("#domainSearch");
+    if (senderSearch) senderSearch.value = "";
+    if (domainSearch) domainSearch.value = "";
+
+    scanBtn.disabled = false;
+    scanBtn.querySelector(".btn-text").style.display = "inline";
+    scanBtn.querySelector(".btn-loader").style.display = "none";
+    $("#progressFill").style.width = "0%";
+  }
+
   // ══════════════════════════════════════════
   //  SCAN
   // ══════════════════════════════════════════
   async function startScan() {
+    if (selectedFolderTypes.length === 0) {
+      alert("Please select at least one folder type to scan.");
+      return;
+    }
+
     scanBtn.querySelector(".btn-text").style.display = "none";
     scanBtn.querySelector(".btn-loader").style.display = "inline";
     scanBtn.disabled = true;
     $("#landingState").style.display = "none";
     $("#progressArea").style.display = "block";
     $("#progressFill").style.width = "20%";
-    $("#progressText").textContent = "Scanning folders…";
+    $("#progressText").textContent = `Scanning ${selectedFolderTypes.length} folder type${selectedFolderTypes.length > 1 ? "s" : ""}…`;
 
     try {
       const acctVal = accountSelect.value;
@@ -128,7 +328,7 @@
         action: "fetchAllMail",
         options: {
           accountId: acctVal === "all" ? null : acctVal,
-          folderTypes: ["inbox", "sent", "archives", "junk"],
+          folderTypes: selectedFolderTypes,
         },
       });
 
@@ -403,7 +603,7 @@
         <tbody>
           ${sorted.map(([email, data]) => `
             <tr>
-              <td><strong>${escHtml(data.name)}</strong><br><span style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);">${escHtml(email)}</span></td>
+              <td><strong>${escHtml(data.name)}</strong><br><span style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);">${escHtml(displayEmail(email))}</span></td>
               <td style="font-family:var(--font-mono);color:var(--accent);">${data.count}</td>
               <td><button class="btn btn-secondary" style="font-size:11px;padding:4px 10px;" data-select-email="${escAttr(email)}">Select</button></td>
             </tr>
@@ -619,7 +819,7 @@
         <div class="sender-group" data-email="${escAttr(email)}">
           <div class="sender-row sender-head ${expanded ? "expanded" : ""} ${isSelected ? "selected" : ""}" data-email="${escAttr(email)}">
             <div class="sr-check"></div>
-            <div class="sr-info"><div class="sr-name">${escHtml(name)}</div><div class="sr-email">${escHtml(email)}</div></div>
+            <div class="sr-info"><div class="sr-name">${escHtml(name)}</div><div class="sr-email">${escHtml(displayEmail(email))}</div></div>
             <div class="sr-count">${count}</div>
             <div class="sr-bar-wrap"><div class="sr-bar" style="width:${pct}%;background:${color};"></div></div>
             <div class="sr-unread">${unread ? unread + " unread" : ""}</div>
@@ -745,7 +945,7 @@
               return `
         <div class="sender-row ${partialSel ? "selected" : ""}" data-role="sender" data-email="${escAttr(email)}">
           <div class="sr-check"></div>
-          <div class="sr-info"><div class="sr-name">${escHtml(name)}</div><div class="sr-email">${escHtml(email)}</div></div>
+          <div class="sr-info"><div class="sr-name">${escHtml(name)}</div><div class="sr-email">${escHtml(displayEmail(email))}</div></div>
           <div class="sr-count">${subCount}</div>
           <div class="sr-bar-wrap"><div class="sr-bar" style="width:${spct}%;background:${sc};"></div></div>
           <div class="sr-unread">${unread ? unread + " unread" : ""}</div>
@@ -835,7 +1035,7 @@
     const largest = knownMessages.slice().sort((a, b) => messageSize(b) - messageSize(a));
     const topLargest = largest.slice(0, 12).map((m) => ({
       title: m.subject || "(No Subject)",
-      subtitle: `${m.senderName || m.senderEmail} · ${m.folder || "Unknown folder"} · ${formatDate(m.date)}`,
+      subtitle: `${m.senderName || displayEmail(m.senderEmail)} · ${m.folder || "Unknown folder"} · ${formatDate(m.date)}`,
       count: messageSize(m),
       value: String(m.id),
       messages: [m],
@@ -843,8 +1043,8 @@
 
     const buckets = buildSizeBuckets(knownMessages);
     const heavySenders = groupBySize(knownMessages, (m) => m.senderEmail, (m) => ({
-      title: m.senderName || m.senderEmail,
-      subtitle: m.senderEmail,
+      title: m.senderName || displayEmail(m.senderEmail),
+      subtitle: displayEmail(m.senderEmail),
       value: m.senderEmail,
     })).slice(0, 8);
     const heavyDomains = groupBySize(knownMessages, (m) => m.domain, (m) => ({
@@ -858,7 +1058,7 @@
       .slice(0, 8)
       .map((m) => ({
         title: m.subject || "(No Subject)",
-        subtitle: `${m.senderName || m.senderEmail} · ${Math.floor(ageDays(m.date) / 365)}y old`,
+        subtitle: `${m.senderName || displayEmail(m.senderEmail)} · ${Math.floor(ageDays(m.date) / 365)}y old`,
         count: messageSize(m),
         value: String(m.id),
         messages: [m],
@@ -1173,8 +1373,8 @@
     const unreadPct = total ? Math.round((unread.length / total) * 100) : 0;
 
     const topUnreadSenders = groupTimeline(messages.filter((m) => !m.read), (m) => m.senderEmail, (m) => ({
-      title: m.senderName || m.senderEmail,
-      subtitle: m.senderEmail,
+      title: m.senderName || displayEmail(m.senderEmail),
+      subtitle: displayEmail(m.senderEmail),
       value: m.senderEmail,
     })).slice(0, 8);
 
@@ -1350,6 +1550,9 @@
       modal.style.display = "none";
       showMoveFolderModal();
     };
+    $("#selectionReviewExport").onclick = () => {
+      exportSelectedCSV();
+    };
   }
 
   function renderSelectionReview() {
@@ -1417,8 +1620,8 @@
             <span>${escHtml(m.folder || "Unknown folder")} · ${escHtml(m.account || "")}</span>
           </div>
           <div class="selection-sender">
-            <strong>${escHtml(m.senderName || m.senderEmail)}</strong>
-            <span>${escHtml(m.senderEmail || "")}</span>
+            <strong>${escHtml(m.senderName || displayEmail(m.senderEmail))}</strong>
+            <span>${escHtml(displayEmail(m.senderEmail) || "")}</span>
           </div>
           <div class="selection-date">${escHtml(formatDate(m.date))}</div>
           <div class="selection-size">${formatBytes(messageSize(m))}</div>
@@ -1687,6 +1890,30 @@
       newest: msgs.reduce((a, m) => (new Date(m.date) > new Date(a.date) ? m : a)).date,
     })).sort((a, b) => b.count - a.count);
     downloadFile(JSON.stringify(report, null, 2), "mail-audit-report.json", "application/json");
+  }
+
+  function exportSelectedCSV() {
+    const selected = getReviewedSelectedMessages();
+    if (selected.length === 0) {
+      alert("No selected messages to export.");
+      return;
+    }
+    const header = "Subject,Sender Name,Sender Email,Domain,Date,Size (bytes),Read,Folder,Account\n";
+    const rows = selected.map((m) =>
+      [
+        `"${(m.subject || '').replace(/"/g, '""')}"`,
+        `"${(m.senderName || '').replace(/"/g, '""')}"`,
+        m.senderEmail || '',
+        m.domain || '',
+        m.date || '',
+        messageSize(m),
+        m.read ? 'Yes' : 'No',
+        `"${(m.folder || '').replace(/"/g, '""')}"`,
+        `"${(m.account || '').replace(/"/g, '""')}"`
+      ].join(",")
+    ).join("\n");
+    const timestamp = new Date().toISOString().slice(0, 10);
+    downloadFile(header + rows, `inboxpie-selected-${timestamp}.csv`, "text/csv");
   }
 
   function downloadFile(content, filename, mimeType) {

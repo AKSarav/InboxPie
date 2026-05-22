@@ -24,9 +24,11 @@ The extension is designed for people who want to answer questions like:
 - **By Domain** — Group messages by sender domain and expand each domain to inspect individual senders.
 - **By Size** — Find storage-heavy messages, senders, domains, and size buckets.
 - **Timeline** — Explore message volume over time with range controls, zoom, month selection, and cleanup insight cards.
-- **Review Selected** — Before moving anything, review selected messages in a mini inbox table with subject, sender, folder, account, date, and size.
+- **Review Selected** — Before moving anything, review selected messages in a mini inbox table with subject, sender, folder, account, date, and size. Export the selection as CSV for record-keeping.
 - **Move to Trash** — Safely move reviewed messages to Trash rather than permanently deleting them.
 - **Move to Folder** — Move reviewed messages into another Thunderbird folder.
+- **Privacy Mode** — Toggle email masking to hide email addresses for screenshots, demos, or screen sharing (e.g., `john@example.com` → `j***@example.com`).
+- **Folder Selection** — Choose which folder types to scan (Inbox, Sent, Archives, Drafts, Junk, Trash). Selection persists across sessions.
 - **Multi-account support** — Scan all connected accounts or focus on one account.
 - **Local-first** — Runs inside Thunderbird with no external service, API key, telemetry, or cloud upload.
 
@@ -62,13 +64,23 @@ InboxPie processes mailbox information locally in Thunderbird.
    - **By Domain** to identify domains producing the most mail.
    - **By Size** to recover mailbox storage.
    - **Timeline** to review message volume and cleanup opportunities over time.
-5. Select rows or insight groups.
-6. Click **Review Selected**.
-7. Inspect the selected messages, search/filter the review list, unselect exceptions, then choose **Move to Trash** or **Move to Folder**.
+5. Select rows or insight groups. Click the **Selected for Action** stat card to quickly open the review modal.
+6. Click **Review Selected** (or the stat card).
+7. Inspect the selected messages, search/filter the review list, unselect exceptions, export to CSV if needed, then choose **Move to Trash** or **Move to Folder**.
+
+**Privacy Mode:** Click the eye icon in the header to toggle email masking — useful for taking screenshots or sharing your screen without exposing email addresses.
 
 ## Folder Scanning
 
-By default, InboxPie scans Inbox, Sent, Archives, and Junk folders. Trash and Drafts are excluded from the initial scan.
+Click the **Folders** button in the header to choose which folder types to scan:
+- **Inbox** (default: on)
+- **Sent** (default: on)
+- **Archives** (default: on)
+- **Junk** (default: on)
+- **Drafts** (default: off)
+- **Trash** (default: off)
+
+Your folder selection is saved and persists across sessions. Use **All** or **None** buttons for quick selection.
 
 ## Development Installation
 
@@ -99,7 +111,7 @@ Do not include development notes, old prototype files, screenshots, or unrelated
 
 - No remote JavaScript or third-party runtime libraries are used.
 - No external network calls are required for the extension's core functionality.
-- The extension uses Thunderbird MailExtension APIs and stores only the local theme preference in `localStorage`.
+- The extension uses Thunderbird MailExtension APIs and stores only the local theme preference and privacy mask setting in `localStorage`.
 - The review screen is intentionally placed before bulk actions so users can inspect message metadata before moving messages.
 
 ## Open Source ❤️

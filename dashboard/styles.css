@@ -96,6 +96,64 @@ body {
 }
 .theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
 
+/* Privacy Toggle */
+.privacy-toggle {
+  width: 36px; height: 36px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg-card);
+  color: var(--text-secondary); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.2s; line-height: 0; padding: 0; overflow: visible;
+  position: relative;
+}
+.privacy-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.privacy-toggle.active { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.privacy-icon {
+  width: 18px; height: 18px; display: block; flex-shrink: 0; overflow: visible;
+}
+.privacy-icon-on { display: none; }
+.privacy-toggle.active .privacy-icon-off { display: none; }
+.privacy-toggle.active .privacy-icon-on { display: block; }
+
+/* Folder Select Dropdown */
+.folder-select-wrap { position: relative; }
+.folder-select-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 12px; font-size: 13px;
+}
+.folder-select-btn svg { flex-shrink: 0; }
+.folder-count-badge {
+  background: var(--accent); color: var(--accent-text);
+  font-size: 10px; font-weight: 700; padding: 2px 6px;
+  border-radius: 10px; min-width: 18px; text-align: center;
+}
+.folder-dropdown {
+  position: absolute; top: 100%; left: 0; margin-top: 6px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 0; min-width: 180px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.15); z-index: 100;
+}
+.folder-dropdown-header {
+  font-size: 11px; font-weight: 600; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 6px 14px 10px; border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.folder-option {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 14px; cursor: pointer; transition: background 0.15s;
+  font-size: 13px; color: var(--text-primary);
+}
+.folder-option:hover { background: var(--bg-hover); }
+.folder-option input[type="checkbox"] {
+  width: 16px; height: 16px; accent-color: var(--accent);
+  cursor: pointer; flex-shrink: 0;
+}
+.folder-dropdown-actions {
+  display: flex; gap: 6px; padding: 10px 14px 6px;
+  border-top: 1px solid var(--border); margin-top: 4px;
+}
+.btn-small { padding: 5px 10px; font-size: 11px; }
+
 /* Form elements */
 select, .search-input {
   font-family: var(--font-body); font-size: 13px;
@@ -148,6 +206,9 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 }
 .stat-card-selected .stat-number { color: var(--accent); }
 .stat-card-selected .stat-icon { color: var(--accent); background: var(--accent-dim); }
+.stat-card-clickable { cursor: pointer; transition: transform 0.15s, box-shadow 0.15s; }
+.stat-card-clickable:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+.stat-card-clickable:active { transform: translateY(0); }
 
 /* Progress */
 #progressArea { padding: 20px 24px; }
@@ -169,10 +230,11 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 #mainContent { padding: 20px 24px; min-height: 400px; }
 
 /* Landing */
-.landing { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 380px; gap: 24px; }
+.landing { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 380px; gap: 24px; width: 100%; text-align: center; }
+.landing-visual { display: flex; justify-content: center; align-items: center; width: 100%; }
 .landing-visual svg { animation: pulse-ring 3s ease-in-out infinite; }
 @keyframes pulse-ring { 0%, 100% { opacity: 0.6; transform: scale(1); } 50% { opacity: 1; transform: scale(1.03); } }
-.landing-text { font-size: 14px; color: var(--text-muted); text-align: center; line-height: 1.7; }
+.landing-text { font-size: 14px; color: var(--text-muted); text-align: center; line-height: 1.7; max-width: 400px; }
 
 /* Sunburst Layout */
 .sunburst-layout { display: grid; grid-template-columns: 1fr 260px; gap: 20px; align-items: start; }

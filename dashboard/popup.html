@@ -14,10 +14,34 @@
         <h1>InboxPie</h1>
       </div>
       <div class="header-right">
+        <button id="privacyToggle" class="privacy-toggle" title="Toggle email masking for privacy">
+          <svg class="privacy-icon privacy-icon-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.75"/></svg>
+          <svg class="privacy-icon privacy-icon-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12c2-3 5.5-5 9-5s7 2 9 5" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/><path d="M3 12c2 3 5.5 5 9 5s7-2 9-5" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+        </button>
         <button id="themeToggle" class="theme-toggle" title="Toggle theme">☀</button>
         <select id="accountSelect">
           <option value="all">All Accounts</option>
         </select>
+        <div class="folder-select-wrap">
+          <button type="button" id="folderSelectBtn" class="btn btn-secondary folder-select-btn">
+            <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><path d="M2 4h5l2 2h9v10H2V4z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+            Folders
+            <span id="folderCountBadge" class="folder-count-badge">4</span>
+          </button>
+          <div id="folderDropdown" class="folder-dropdown" style="display:none;">
+            <div class="folder-dropdown-header">Select folders to scan</div>
+            <label class="folder-option"><input type="checkbox" value="inbox" checked> <span>Inbox</span></label>
+            <label class="folder-option"><input type="checkbox" value="sent" checked> <span>Sent</span></label>
+            <label class="folder-option"><input type="checkbox" value="archives" checked> <span>Archives</span></label>
+            <label class="folder-option"><input type="checkbox" value="drafts"> <span>Drafts</span></label>
+            <label class="folder-option"><input type="checkbox" value="junk" checked> <span>Junk</span></label>
+            <label class="folder-option"><input type="checkbox" value="trash"> <span>Trash</span></label>
+            <div class="folder-dropdown-actions">
+              <button type="button" class="btn btn-secondary btn-small" id="folderSelectAll">All</button>
+              <button type="button" class="btn btn-secondary btn-small" id="folderSelectNone">None</button>
+            </div>
+          </div>
+        </div>
         <button id="scanBtn" class="btn btn-primary">
           <span class="btn-text">Scan Mailbox</span>
           <span class="btn-loader" style="display:none;">Scanning…</span>
@@ -44,7 +68,7 @@
         </div>
         <div><div class="stat-number" id="statUnread">0</div><div class="stat-label">Unread</div></div>
       </div>
-      <div class="stat-card stat-card-selected">
+      <div class="stat-card stat-card-selected stat-card-clickable" id="statCardSelected" title="Click to review selected emails">
         <div class="stat-icon" aria-hidden="true">
           <svg viewBox="0 0 20 20"><path d="M4 10.5 8 14l8-8"></path></svg>
         </div>
@@ -217,6 +241,7 @@
       </div>
       <div id="selectionReviewTable" class="selection-review-table"></div>
       <div class="modal-actions selection-review-actions">
+        <button type="button" id="selectionReviewExport" class="btn btn-secondary">Export CSV</button>
         <button type="button" id="selectionReviewClear" class="btn btn-secondary">Clear Selection</button>
         <button type="button" id="selectionReviewFolder" class="btn btn-secondary">Move to Folder</button>
         <button type="button" id="selectionReviewTrash" class="btn btn-danger">Move to Trash</button>
