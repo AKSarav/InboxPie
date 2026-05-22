@@ -129,8 +129,18 @@ body {
 .folder-dropdown {
   position: absolute; top: 100%; left: 0; margin-top: 6px;
   background: var(--bg-card); border: 1px solid var(--border);
-  border-radius: 8px; padding: 8px 0; min-width: 180px;
+  border-radius: 8px; padding: 8px 0; min-width: 240px; max-width: 320px;
   box-shadow: 0 8px 24px rgba(0,0,0,0.15); z-index: 100;
+}
+.folder-dropdown-list {
+  max-height: 280px; overflow-y: auto;
+}
+.folder-dropdown-account {
+  font-size: 11px; font-weight: 600; color: var(--text-muted);
+  padding: 8px 14px 4px; text-transform: uppercase; letter-spacing: 0.04em;
+}
+.folder-dropdown-empty {
+  padding: 12px 14px; font-size: 12px; color: var(--text-muted);
 }
 .folder-dropdown-header {
   font-size: 11px; font-weight: 600; color: var(--text-muted);
@@ -514,6 +524,17 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 .selection-review-row strong {
   display: block; color: var(--text-primary); font-size: 12px; font-weight: 500;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.selection-open-link {
+  display: block; width: 100%; background: none; border: none; padding: 0;
+  color: var(--accent); font-weight: 600; font-size: 12px;
+  font-family: inherit; text-align: left; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.selection-open-link:hover { filter: brightness(1.08); }
+.selection-open-link:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px;
 }
 .selection-review-row span {
   display: block; margin-top: 2px; color: var(--text-muted); font-size: 11px;

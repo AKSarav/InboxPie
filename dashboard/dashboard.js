@@ -23,7 +23,10 @@
   };
   let privacyMaskEnabled = false;
   const DEFAULT_FOLDER_TYPES = ["inbox", "sent", "archives", "junk"];
-  let selectedFolderTypes = [...DEFAULT_FOLDER_TYPES];
+  /** Selected scan folders as `${accountId}::${path}` keys. */
+  let selectedFolderKeys = new Set();
+  let scanFolderList = [];
+  let folderListLoaded = false;
   /** Last domain drill-down shown under PieView (for refresh on privacy toggle). */
   let sunburstDetailState = null;
 
@@ -121,6 +124,13 @@
     // Export buttons
     $("#exportCsvBtn").addEventListener("click", exportCSV);
     $("#exportJsonBtn").addEventListener("click", exportJSON);
+
+    $("#selectionReviewTable").addEventListener("click", (e) => {
+      const link = e.target.closest("[data-open-message]");
+      if (!link) return;
+      e.preventDefault();
+      openMessageInThunderbird(link.getAttribute("data-open-message"));
+    });
 
     $("#app").addEventListener("click", (e) => {
       const btn = e.target.closest("[data-action]");
@@ -239,73 +249,202 @@
   // ══════════════════════════════════════════
   //  FOLDER SELECTION
   // ══════════════════════════════════════════
-  function initFolderSelection() {
-    // Load saved folder selection
+  function folderKey(accountId, path) {
+    return `${accountId}::${path}`;
+  }
+
+  function parseFolderKey(key) {
+    const idx = key.indexOf("::");
+    return { accountId: key.slice(0, idx), path: key.slice(idx + 2) };
+  }
+
+  function loadSavedFolderSelections() {
+    const saved = localStorage.getItem("mail-audit-folder-selections");
+    if (!saved) return;
+    try {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        selectedFolderKeys = new Set(parsed);
+      }
+    } catch (e) {
+      console.warn("Could not parse saved folder selections:", e);
+    }
+  }
+
+  function saveFolderSelections() {
+    localStorage.setItem("mail-audit-folder-selections", JSON.stringify(Array.from(selectedFolderKeys)));
+  }
+
+  function getLegacyFolderTypes() {
     const saved = localStorage.getItem("mail-audit-folder-types");
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          selectedFolderTypes = parsed;
-        }
-      } catch (e) {
-        console.warn("Could not parse saved folder types:", e);
+    if (!saved) return [...DEFAULT_FOLDER_TYPES];
+    try {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    } catch (e) {
+      console.warn("Could not parse saved folder types:", e);
+    }
+    return [...DEFAULT_FOLDER_TYPES];
+  }
+
+  function applyDefaultFolderSelections() {
+    const types = getLegacyFolderTypes();
+    const typeMatches = new Set();
+    for (const folder of scanFolderList) {
+      if (types.includes(folder.type)) {
+        typeMatches.add(folderKey(folder.accountId, folder.path));
       }
     }
+    selectedFolderKeys.clear();
+    for (const folder of scanFolderList) {
+      const key = folderKey(folder.accountId, folder.path);
+      if (typeMatches.has(key)) {
+        selectedFolderKeys.add(key);
+        continue;
+      }
+      for (const matchKey of typeMatches) {
+        const { accountId, path } = parseFolderKey(matchKey);
+        if (folder.accountId === accountId && folder.path.startsWith(`${path}/`)) {
+          selectedFolderKeys.add(key);
+          break;
+        }
+      }
+    }
+    if (selectedFolderKeys.size === 0) {
+      const inbox = scanFolderList.find((f) => f.type === "inbox");
+      if (inbox) selectedFolderKeys.add(folderKey(inbox.accountId, inbox.path));
+    }
+    saveFolderSelections();
+  }
 
-    // Apply saved selection to checkboxes
-    const dropdown = $("#folderDropdown");
-    const checkboxes = dropdown.querySelectorAll('input[type="checkbox"]');
-    checkboxes.forEach((cb) => {
-      cb.checked = selectedFolderTypes.includes(cb.value);
+  function syncFolderSelectionsToList() {
+    const validKeys = new Set(scanFolderList.map((f) => folderKey(f.accountId, f.path)));
+    selectedFolderKeys = new Set(Array.from(selectedFolderKeys).filter((key) => validKeys.has(key)));
+    if (selectedFolderKeys.size === 0) applyDefaultFolderSelections();
+  }
+
+  async function loadScanFolders() {
+    const acctVal = accountSelect.value;
+    const accountId = acctVal === "all" ? null : acctVal;
+    scanFolderList = await browser.runtime.sendMessage({ action: "listFoldersForScan", accountId });
+    folderListLoaded = true;
+    syncFolderSelectionsToList();
+  }
+
+  function renderFolderDropdown() {
+    const list = $("#folderDropdownList");
+    clearElement(list);
+    if (!scanFolderList.length) {
+      const empty = document.createElement("div");
+      empty.className = "folder-dropdown-empty";
+      empty.textContent = "No folders found";
+      list.appendChild(empty);
+      return;
+    }
+
+    let lastAccountId = null;
+    const showAccountGroups = accountSelect.value === "all";
+    scanFolderList.forEach((folder) => {
+      if (showAccountGroups && folder.accountId !== lastAccountId) {
+        lastAccountId = folder.accountId;
+        const hdr = document.createElement("div");
+        hdr.className = "folder-dropdown-account";
+        hdr.textContent = displayAccount(folder.accountName);
+        list.appendChild(hdr);
+      }
+
+      const key = folderKey(folder.accountId, folder.path);
+      const label = document.createElement("label");
+      label.className = "folder-option";
+      label.style.paddingLeft = `${14 + folder.depth * 16}px`;
+
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.value = key;
+      cb.checked = selectedFolderKeys.has(key);
+      cb.addEventListener("change", updateSelectedFolders);
+
+      const span = document.createElement("span");
+      span.textContent = folder.name;
+
+      label.appendChild(cb);
+      label.appendChild(span);
+      list.appendChild(label);
     });
+  }
+
+  async function refreshFolderDropdown() {
+    const list = $("#folderDropdownList");
+    clearElement(list);
+    const loading = document.createElement("div");
+    loading.className = "folder-dropdown-empty";
+    loading.textContent = "Loading folders…";
+    list.appendChild(loading);
+    try {
+      await loadScanFolders();
+      renderFolderDropdown();
+      updateFolderBadge();
+    } catch (e) {
+      clearElement(list);
+      const err = document.createElement("div");
+      err.className = "folder-dropdown-empty";
+      err.textContent = `Could not load folders: ${e.message}`;
+      list.appendChild(err);
+    }
+  }
+
+  function initFolderSelection() {
+    loadSavedFolderSelections();
     updateFolderBadge();
 
-    // Toggle dropdown
-    $("#folderSelectBtn").addEventListener("click", (e) => {
+    const dropdown = $("#folderDropdown");
+
+    $("#folderSelectBtn").addEventListener("click", async (e) => {
       e.stopPropagation();
       const isVisible = dropdown.style.display === "block";
-      dropdown.style.display = isVisible ? "none" : "block";
+      if (isVisible) {
+        dropdown.style.display = "none";
+        return;
+      }
+      dropdown.style.display = "block";
+      if (!folderListLoaded) await refreshFolderDropdown();
     });
 
-    // Close dropdown when clicking outside
     document.addEventListener("click", (e) => {
       if (!e.target.closest(".folder-select-wrap")) {
         dropdown.style.display = "none";
       }
     });
 
-    // Handle checkbox changes
-    checkboxes.forEach((cb) => {
-      cb.addEventListener("change", () => {
-        updateSelectedFolders();
-      });
-    });
-
-    // Select All button
     $("#folderSelectAll").addEventListener("click", () => {
-      checkboxes.forEach((cb) => { cb.checked = true; });
+      scanFolderList.forEach((folder) => {
+        selectedFolderKeys.add(folderKey(folder.accountId, folder.path));
+      });
+      renderFolderDropdown();
       updateSelectedFolders();
     });
 
-    // Select None button
     $("#folderSelectNone").addEventListener("click", () => {
-      checkboxes.forEach((cb) => { cb.checked = false; });
+      selectedFolderKeys.clear();
+      renderFolderDropdown();
       updateSelectedFolders();
     });
   }
 
   function updateSelectedFolders() {
-    const checkboxes = $("#folderDropdown").querySelectorAll('input[type="checkbox"]:checked');
-    selectedFolderTypes = Array.from(checkboxes).map((cb) => cb.value);
-    localStorage.setItem("mail-audit-folder-types", JSON.stringify(selectedFolderTypes));
+    const checkboxes = $("#folderDropdownList").querySelectorAll('input[type="checkbox"]');
+    selectedFolderKeys.clear();
+    checkboxes.forEach((cb) => {
+      if (cb.checked) selectedFolderKeys.add(cb.value);
+    });
+    saveFolderSelections();
     updateFolderBadge();
   }
 
   function updateFolderBadge() {
     const badge = $("#folderCountBadge");
-    badge.textContent = selectedFolderTypes.length;
-    badge.style.display = selectedFolderTypes.length > 0 ? "inline-block" : "none";
+    badge.textContent = selectedFolderKeys.size;
+    badge.style.display = selectedFolderKeys.size > 0 ? "inline-block" : "none";
   }
 
   // ══════════════════════════════════════════
@@ -324,6 +463,12 @@
     reviewState.sort = "date-desc";
     currentView = "sunburst";
     sunburstDetailState = null;
+    folderListLoaded = false;
+
+    const folderDropdown = $("#folderDropdown");
+    if (folderDropdown && folderDropdown.style.display === "block") {
+      refreshFolderDropdown();
+    }
 
     $("#selectionReviewModal").style.display = "none";
     $("#deleteModal").style.display = "none";
@@ -370,10 +515,22 @@
   //  SCAN
   // ══════════════════════════════════════════
   async function startScan() {
-    if (selectedFolderTypes.length === 0) {
-      alert("Please select at least one folder type to scan.");
-      return;
+    if (selectedFolderKeys.size === 0) {
+      if (!folderListLoaded) {
+        try {
+          await loadScanFolders();
+        } catch (e) {
+          alert(`Could not load folders: ${e.message}`);
+          return;
+        }
+      }
+      if (selectedFolderKeys.size === 0) {
+        alert("Please select at least one folder to scan.");
+        return;
+      }
     }
+
+    const folderSelections = Array.from(selectedFolderKeys).map(parseFolderKey);
 
     scanBtn.querySelector(".btn-text").style.display = "none";
     scanBtn.querySelector(".btn-loader").style.display = "inline";
@@ -381,7 +538,7 @@
     $("#landingState").style.display = "none";
     $("#progressArea").style.display = "block";
     $("#progressFill").style.width = "20%";
-    $("#progressText").textContent = `Scanning ${selectedFolderTypes.length} folder type${selectedFolderTypes.length > 1 ? "s" : ""}…`;
+    $("#progressText").textContent = `Scanning ${folderSelections.length.toLocaleString()} folder${folderSelections.length === 1 ? "" : "s"}…`;
 
     try {
       const acctVal = accountSelect.value;
@@ -389,7 +546,7 @@
         action: "fetchAllMail",
         options: {
           accountId: acctVal === "all" ? null : acctVal,
-          folderTypes: selectedFolderTypes,
+          folderSelections,
         },
       });
 
@@ -1689,7 +1846,7 @@
       ${visible.map((m) => `
         <div class="selection-review-row" data-id="${escAttr(String(m.id))}">
           <div class="selection-subject">
-            <strong>${escHtml(m.subject || "(No Subject)")}</strong>
+            <button type="button" class="selection-open-link" data-open-message="${escAttr(String(m.id))}" title="Open in Thunderbird">${escHtml(m.subject || "(No Subject)")}</button>
             <span>${escHtml(m.folder || "Unknown folder")} · ${escHtml(displayAccount(m.account || ""))}</span>
           </div>
           <div class="selection-sender">
@@ -1725,6 +1882,21 @@
     selectedIds.delete(rawId);
     const numericId = Number(rawId);
     if (!Number.isNaN(numericId)) selectedIds.delete(numericId);
+  }
+
+  async function openMessageInThunderbird(messageId) {
+    if (messageId == null || messageId === "") return;
+    try {
+      const result = await browser.runtime.sendMessage({
+        action: "openMessage",
+        messageId,
+      });
+      if (!result || !result.success) {
+        alert(result?.error || "Could not open this message in Thunderbird.");
+      }
+    } catch (e) {
+      alert(`Could not open message: ${e.message}`);
+    }
   }
 
   function getReviewedSelectedMessages() {

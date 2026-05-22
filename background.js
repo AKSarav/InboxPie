@@ -21,16 +21,22 @@ browser.runtime.onMessage.addListener(async (message, sender) => {
   if (message.action === "listFolders") {
     return await listFoldersFlat(message.accountId);
   }
+  if (message.action === "listFoldersForScan") {
+    return await listFoldersForScan(message.accountId);
+  }
   if (message.action === "getAccounts") {
     return await browser.accounts.list();
   }
   if (message.action === "getTrashFolder") {
     return await getTrashFolder(message.accountId);
   }
+  if (message.action === "openMessage") {
+    return await openMessageInTab(message.messageId);
+  }
 });
 
 async function fetchAllMail(options) {
-  const { accountId, folderTypes } = options;
+  const { accountId, folderTypes, folderSelections } = options;
   const accounts = await browser.accounts.list();
   const targetAccounts = accountId
     ? accounts.filter(a => a.id === accountId)
@@ -40,8 +46,17 @@ async function fetchAllMail(options) {
   let totalProcessed = 0;
 
   for (const account of targetAccounts) {
-    const folders = flattenFolders(account.folders, folderTypes);
-    for (const folder of folders) {
+    let foldersToScan = [];
+    if (folderSelections && folderSelections.length > 0) {
+      const accountSelections = folderSelections.filter((s) => s.accountId === account.id);
+      foldersToScan = accountSelections
+        .map((s) => findFolderByPath(account.folders, s.path))
+        .filter(Boolean);
+    } else {
+      foldersToScan = flattenFolders(account.folders, folderTypes);
+    }
+
+    for (const folder of foldersToScan) {
       try {
         let page = await browser.messages.list(folder);
         allMessages.push(...page.messages.map(m => extractMessageData(m, account, folder)));
@@ -123,6 +138,26 @@ async function getTrashFolder(accountId) {
   return findFolderByType(account.folders, "trash");
 }
 
+async function openMessageInTab(messageId) {
+  if (messageId == null || messageId === "") {
+    return { success: false, error: "No message selected" };
+  }
+  const id = typeof messageId === "number" ? messageId : parseInt(String(messageId), 10);
+  if (Number.isNaN(id)) {
+    return { success: false, error: "Invalid message id" };
+  }
+  try {
+    await browser.messageDisplay.open({
+      messageId: id,
+      active: true,
+      location: "tab",
+    });
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message || "Could not open message" };
+  }
+}
+
 function findFolderByType(folders, type) {
   for (const folder of folders) {
     if (folder.type === type) return folder;
@@ -159,6 +194,35 @@ async function listFoldersFlat(accountId) {
       displayPath: `${label} — ${f.path}`,
     }))
     .sort((a, b) => a.displayPath.localeCompare(b.displayPath));
+}
+
+async function listFoldersForScan(accountId) {
+  const accounts = await browser.accounts.list();
+  const targetAccounts = accountId ? accounts.filter((a) => a.id === accountId) : accounts;
+  const result = [];
+  for (const account of targetAccounts) {
+    collectFoldersForScan(account.folders, account.id, account.name || account.id, 0, result);
+  }
+  return result.sort((a, b) => {
+    const acct = a.accountName.localeCompare(b.accountName);
+    return acct !== 0 ? acct : a.path.localeCompare(b.path);
+  });
+}
+
+function collectFoldersForScan(folders, accountId, accountName, depth, result) {
+  for (const folder of folders) {
+    result.push({
+      path: folder.path,
+      name: folder.name,
+      type: folder.type || "",
+      accountId,
+      accountName,
+      depth,
+    });
+    if (folder.subFolders && folder.subFolders.length > 0) {
+      collectFoldersForScan(folder.subFolders, accountId, accountName, depth + 1, result);
+    }
+  }
 }
 
 async function moveMessagesToFolder(messageIds, accountId, folderPath) {
