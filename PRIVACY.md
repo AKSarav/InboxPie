@@ -18,9 +18,25 @@ InboxPie does not read or display full email body content.
 
 ## Data Storage
 
-InboxPie does not maintain a remote database. Scanned mailbox metadata is held in the extension dashboard while you use it.
+InboxPie does not maintain a remote database. Scanned mailbox metadata is held in memory in the extension dashboard while you use it. It is not written to disk by the extension.
 
-The extension stores only a local theme preference in `localStorage`.
+The extension stores only local UI preferences in `localStorage`:
+
+| Key | Purpose |
+|---|---|
+| `mail-audit-theme` | Light or dark dashboard theme |
+| `mail-audit-privacy-mask` | Whether on-screen email/domain masking is enabled |
+| `mail-audit-folder-selections` | Which folders you chose to scan |
+
+No mailbox content or message metadata is persisted to `localStorage`.
+
+## Privacy Mode
+
+InboxPie includes an optional privacy mode that masks email addresses and domains on screen (for example, `john@example.com` → `j***@l***.com`).
+
+- Masking applies only to what is shown in the dashboard UI.
+- CSV exports always contain the real sender addresses and metadata.
+- Privacy mode does not change what Thunderbird stores or what is sent anywhere; it is a display-only preference.
 
 ## Data Sharing
 
@@ -35,9 +51,12 @@ InboxPie does not:
 
 InboxPie can move messages only after you select and review them.
 
-- `Move to Trash` moves reviewed messages to Thunderbird's Trash where supported.
-- `Move to Folder` moves reviewed messages to a folder you choose.
-- InboxPie does not permanently delete messages.
+- **Move to Trash** moves reviewed messages to Thunderbird's Trash where supported.
+- **Move to Folder** moves reviewed messages to a folder you choose.
+- **Open in Thunderbird** — In Review Selected, you can click a subject to open that message in a Thunderbird tab. This is user-initiated; InboxPie does not read the message body through this action.
+- **Export CSV** — Exports selected message metadata to a file on your device. The export stays local; InboxPie does not upload it.
+
+InboxPie does not permanently delete messages.
 
 ## Network Access
 
