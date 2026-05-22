@@ -24,6 +24,8 @@
   let privacyMaskEnabled = false;
   const DEFAULT_FOLDER_TYPES = ["inbox", "sent", "archives", "junk"];
   let selectedFolderTypes = [...DEFAULT_FOLDER_TYPES];
+  /** Last domain drill-down shown under PieView (for refresh on privacy toggle). */
+  let sunburstDetailState = null;
 
   const PALETTE = [
     "#3b82f6", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316",
@@ -71,7 +73,20 @@
       localStorage.setItem("mail-audit-privacy-mask", privacyMaskEnabled);
       updatePrivacyToggle();
       updateAccountSelectDisplay();
+      const detailSnapshot = sunburstDetailState
+        ? { domain: sunburstDetailState.domain, msgs: sunburstDetailState.msgs.slice() }
+        : null;
       if (allMessages.length > 0) switchView(currentView);
+      if (currentView === "sunburst" && detailSnapshot) {
+        showDomainDetail(detailSnapshot.domain, detailSnapshot.msgs);
+      }
+    });
+
+    $("#sunburstDetail").addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-select-email]");
+      if (!btn || !sunburstDetailState) return;
+      e.preventDefault();
+      selectSenderForReview(btn.getAttribute("data-select-email"), sunburstDetailState.msgs);
     });
 
     // Clickable stat card for selected emails
@@ -167,13 +182,58 @@
   function maskEmail(email) {
     if (!email || !email.includes("@")) return email;
     const [local, domain] = email.split("@");
-    if (local.length <= 1) return `${local}***@${domain}`;
-    const masked = local.charAt(0) + "***";
-    return `${masked}@${domain}`;
+    const maskedLocal = local.length <= 1 ? `${local}***` : `${local.charAt(0)}***`;
+    return `${maskedLocal}@${maskDomain(domain)}`;
+  }
+
+  function maskDomain(domain) {
+    if (!domain || typeof domain !== "string") return domain || "";
+    const trimmed = domain.trim();
+    if (!trimmed || trimmed === "unknown") return domain;
+    const parts = trimmed.split(".");
+    if (parts.length < 2) return `${trimmed.charAt(0)}***`;
+    const tld = parts[parts.length - 1];
+    const base = parts.slice(0, -1).join(".");
+    return `${base.charAt(0)}***.${tld}`;
   }
 
   function displayEmail(email) {
     return privacyMaskEnabled ? maskEmail(email) : email;
+  }
+
+  function displayDomain(domain) {
+    return privacyMaskEnabled ? maskDomain(domain) : domain;
+  }
+
+  function displayAccount(account) {
+    if (!account) return "";
+    if (!privacyMaskEnabled) return account;
+    return maskAccountText(String(account));
+  }
+
+  function looksLikeEmail(value) {
+    return typeof value === "string" && value.includes("@");
+  }
+
+  function looksLikeDomain(value) {
+    return typeof value === "string" && !value.includes("@") && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(value.trim());
+  }
+
+  function displayPrivateLabel(label) {
+    if (!privacyMaskEnabled || label == null) return label;
+    const text = String(label);
+    if (looksLikeEmail(text)) return displayEmail(text);
+    if (looksLikeDomain(text)) return displayDomain(text);
+    return maskAccountText(text);
+  }
+
+  function displaySenderName(name, email) {
+    const n = name || "";
+    if (!privacyMaskEnabled) return n || displayEmail(email);
+    if (looksLikeEmail(n) || n.toLowerCase() === String(email || "").toLowerCase()) {
+      return displayEmail(email || n);
+    }
+    return n;
   }
 
   // ══════════════════════════════════════════
@@ -263,6 +323,7 @@
     reviewState.query = "";
     reviewState.sort = "date-desc";
     currentView = "sunburst";
+    sunburstDetailState = null;
 
     $("#selectionReviewModal").style.display = "none";
     $("#deleteModal").style.display = "none";
@@ -399,6 +460,8 @@
   function renderSunburst(filterFn = null, breadcrumbPath = []) {
     const svg = $("#sunburstSvg");
     clearElement(svg);
+    clearElement($("#sunburstDetail"));
+    sunburstDetailState = null;
     const tooltip = $("#sunburstTooltip");
     const breadcrumb = $("#sunburstBreadcrumb");
     const legend = $("#legendPanel");
@@ -513,9 +576,9 @@
 
           drawArc(svg, cx, cy, rings[2].innerR, rings[2].outerR, angle2, angle2 + dAngle, dColor, 0.6, gapStroke,
             () => showDomainDetail(domain, dMsgs),
-            (e) => showTooltip(tooltip, e, domain, dMsgs.length, total)
+            (e) => showTooltip(tooltip, e, displayDomain(domain), dMsgs.length, total)
           );
-          addArcLabel(svg, cx, cy, rings[2], angle2, angle2 + dAngle, domain, {
+          addArcLabel(svg, cx, cy, rings[2], angle2, angle2 + dAngle, displayDomain(domain), {
             minAngle: 24,
             maxChars: 12,
             fill: "rgba(255,255,255,0.82)",
@@ -559,7 +622,7 @@
     const topDomains = Object.entries(domains).sort((a, b) => b[1].count - a[1].count).slice(0, 15);
     html += '<div class="legend-section"><div class="legend-section-title">Top Domains (outer ring)</div>';
     topDomains.forEach(([name, d]) => {
-      html += `<div class="legend-item"><div class="legend-swatch" style="background:${escAttr(d.color)}"></div><span class="legend-label">${escHtml(name)}</span><span class="legend-count">${d.count.toLocaleString()}</span></div>`;
+      html += `<div class="legend-item"><div class="legend-swatch" style="background:${escAttr(d.color)}"></div><span class="legend-label">${escHtml(displayDomain(name))}</span><span class="legend-count">${d.count.toLocaleString()}</span></div>`;
     });
     html += '</div>';
 
@@ -588,6 +651,7 @@
 
   function showDomainDetail(domain, msgs) {
     const detail = $("#sunburstDetail");
+    sunburstDetailState = { domain, msgs };
     const bySender = {};
     msgs.forEach((m) => {
       if (!bySender[m.senderEmail]) bySender[m.senderEmail] = { name: m.senderName, count: 0, ids: [] };
@@ -597,31 +661,40 @@
     const sorted = Object.entries(bySender).sort((a, b) => b[1].count - a[1].count);
 
     setSafeHtml(detail, `
-      <h3 style="font-size:14px; margin-bottom:10px; color:var(--accent);">${escHtml(domain)} — ${msgs.length} emails</h3>
+      <h3 style="font-size:14px; margin-bottom:10px; color:var(--accent);">${escHtml(displayDomain(domain))} — ${msgs.length} emails</h3>
       <table>
         <thead><tr><th>Sender</th><th>Count</th><th>Select</th></tr></thead>
         <tbody>
-          ${sorted.map(([email, data]) => `
+          ${sorted.map(([email, data]) => {
+            const senderMsgs = msgs.filter((m) => m.senderEmail === email);
+            const allSelected = senderMsgs.length > 0 && senderMsgs.every((m) => selectedIds.has(m.id));
+            return `
             <tr>
-              <td><strong>${escHtml(data.name)}</strong><br><span style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);">${escHtml(displayEmail(email))}</span></td>
+              <td><strong>${escHtml(displaySenderName(data.name, email))}</strong><br><span style="font-family:var(--font-mono);font-size:11px;color:var(--text-muted);">${escHtml(displayEmail(email))}</span></td>
               <td style="font-family:var(--font-mono);color:var(--accent);">${data.count}</td>
-              <td><button class="btn btn-secondary" style="font-size:11px;padding:4px 10px;" data-select-email="${escAttr(email)}">Select</button></td>
-            </tr>
-          `).join("")}
+              <td><button type="button" class="btn btn-secondary" style="font-size:11px;padding:4px 10px;" data-select-email="${escAttr(email)}">${allSelected ? "Selected" : "Select"}</button></td>
+            </tr>`;
+          }).join("")}
         </tbody>
       </table>
     `);
-
-    detail.querySelectorAll("[data-select-email]").forEach((btn) => {
-      btn.addEventListener("click", () => selectSenderForReview(btn.dataset.selectEmail));
-    });
   }
 
-  function selectSenderForReview(email) {
-    allMessages.filter((m) => m.senderEmail === email).forEach((m) => selectedIds.add(m.id));
+  function selectSenderForReview(email, scopeMsgs = null) {
+    const pool = scopeMsgs || allMessages;
+    const matches = pool.filter((m) => m.senderEmail === email);
+    if (!matches.length) return;
+    const allSelected = matches.every((m) => selectedIds.has(m.id));
+    matches.forEach((m) => {
+      if (allSelected) removeSelectedId(String(m.id));
+      else selectedIds.add(m.id);
+    });
     updateStats();
     if (currentView === "sender") renderSenderTable();
     else if (currentView === "domain") renderDomainTable();
+    else if (currentView === "sunburst" && sunburstDetailState) {
+      showDomainDetail(sunburstDetailState.domain, sunburstDetailState.msgs);
+    }
   }
 
   // ══════════════════════════════════════════
@@ -708,7 +781,7 @@
   function showTooltip(tooltip, event, label, count, total) {
     const pct = ((count / total) * 100).toFixed(1);
     setSafeHtml(tooltip, `
-      <div class="tt-label">${escHtml(label)}</div>
+      <div class="tt-label">${escHtml(displayPrivateLabel(label))}</div>
       <div class="tt-count">${count.toLocaleString()} emails</div>
       <div class="tt-pct">${pct}% of total</div>
     `);
@@ -961,7 +1034,7 @@
         <div class="domain-group" data-domain="${escAttr(domain)}">
           <div class="sender-row domain-row ${expanded ? "expanded" : ""} ${anySel ? "selected" : ""}" data-role="domain-head">
             <div class="sr-check"></div>
-            <div class="sr-info"><div class="sr-name">${escHtml(domain)}</div><div class="sr-email">${senderNum} sender${senderNum > 1 ? "s" : ""} · click › to expand</div></div>
+            <div class="sr-info"><div class="sr-name">${escHtml(displayDomain(domain))}</div><div class="sr-email">${senderNum} sender${senderNum > 1 ? "s" : ""} · click › to expand</div></div>
             <div class="sr-count">${count}</div>
             <div class="sr-bar-wrap"><div class="sr-bar" style="width:${pct}%;background:${color};"></div></div>
             <div class="sr-unread"></div>
@@ -1048,7 +1121,7 @@
       value: m.senderEmail,
     })).slice(0, 8);
     const heavyDomains = groupBySize(knownMessages, (m) => m.domain, (m) => ({
-      title: m.domain,
+      title: displayDomain(m.domain),
       subtitle: "domain storage",
       value: m.domain,
     })).slice(0, 8);
@@ -1381,7 +1454,7 @@
     const ageBuckets = buildAgeBuckets(messages);
 
     const noisyDomains = groupTimeline(messages, (m) => m.domain, (m) => ({
-      title: m.domain,
+      title: displayDomain(m.domain),
       subtitle: "domain volume",
       value: m.domain,
     }))
@@ -1395,7 +1468,7 @@
 
     const folderHotspots = groupTimeline(messages, (m) => `${m.accountId}::${m.folder}`, (m) => ({
       title: m.folder || "(Unknown folder)",
-      subtitle: m.account || m.accountId,
+      subtitle: displayAccount(m.account || m.accountId),
       value: m.folder || "",
       accountId: m.accountId,
     })).slice(0, 8);
@@ -1617,7 +1690,7 @@
         <div class="selection-review-row" data-id="${escAttr(String(m.id))}">
           <div class="selection-subject">
             <strong>${escHtml(m.subject || "(No Subject)")}</strong>
-            <span>${escHtml(m.folder || "Unknown folder")} · ${escHtml(m.account || "")}</span>
+            <span>${escHtml(m.folder || "Unknown folder")} · ${escHtml(displayAccount(m.account || ""))}</span>
           </div>
           <div class="selection-sender">
             <strong>${escHtml(m.senderName || displayEmail(m.senderEmail))}</strong>
@@ -1754,7 +1827,7 @@
     setSafeHtml($("#folderModalText"),
       accountIds.length > 1
         ? `You have <strong>${totalSel.toLocaleString()} email(s)</strong> selected across <strong>${accountIds.length} accounts</strong>. Pick a destination folder — only messages that belong to that account will be moved.`
-        : `You are moving <strong>${totalSel.toLocaleString()} email(s)</strong>. Pick a destination folder under <strong>${escHtml(selectedMsgs[0].account)}</strong>.`);
+        : `You are moving <strong>${totalSel.toLocaleString()} email(s)</strong>. Pick a destination folder under <strong>${escHtml(displayAccount(selectedMsgs[0].account))}</strong>.`);
 
     clearElement(select);
     confirmBtn.disabled = true;
@@ -1772,11 +1845,11 @@
         const folders = await browser.runtime.sendMessage({ action: "listFolders", accountId: aid });
         const acctName = selectedMsgs.find((m) => m.accountId === aid)?.account || aid;
         const og = document.createElement("optgroup");
-        og.label = acctName;
+        og.label = displayAccount(acctName);
         let n = 0;
         folders.forEach((f) => {
           const opt = document.createElement("option");
-          opt.textContent = f.displayPath;
+          opt.textContent = displayAccount(f.displayPath);
           opt.dataset.accountId = f.accountId;
           opt.dataset.folderPath = f.path;
           og.appendChild(opt);
@@ -1903,13 +1976,13 @@
       [
         `"${(m.subject || '').replace(/"/g, '""')}"`,
         `"${(m.senderName || '').replace(/"/g, '""')}"`,
-        m.senderEmail || '',
-        m.domain || '',
-        m.date || '',
+        m.senderEmail || "",
+        m.domain || "",
+        m.date || "",
         messageSize(m),
-        m.read ? 'Yes' : 'No',
+        m.read ? "Yes" : "No",
         `"${(m.folder || '').replace(/"/g, '""')}"`,
-        `"${(m.account || '').replace(/"/g, '""')}"`
+        `"${(m.account || "").replace(/"/g, '""')}"`,
       ].join(",")
     ).join("\n");
     const timestamp = new Date().toISOString().slice(0, 10);
