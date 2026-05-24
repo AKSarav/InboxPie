@@ -16,7 +16,6 @@ InboxPie helps you visualize, analyze, and clean up your email inbox — all loc
 | [**Thunderbird Extension**](THUNDERBIRD/) | Interactive dashboard for Thunderbird with PieView, Timeline, By Sender/Domain/Size views, and bulk cleanup actions | Thunderbird 115+ |
 | [**CLI**](CLI/) | Command-line tool to scan Apple Mail and generate reports (terminal, CSV, JSON, HTML) | macOS / Python 3.10+ |
 
----
 
 ## Key Features
 
@@ -27,7 +26,7 @@ InboxPie helps you visualize, analyze, and clean up your email inbox — all loc
 - **Export to CSV/JSON** — Keep records of what you reviewed and moved
 - **100% local** — No servers, no APIs, no telemetry, no cloud upload
 
----
+
 
 ## Quick Start
 
@@ -63,7 +62,7 @@ inboxpie scan --source apple-mail --output all --report-dir ./reports
 
 See [CLI/README.md](CLI/README.md) for full documentation.
 
----
+
 
 ## Screenshots
 
@@ -76,7 +75,7 @@ See [CLI/README.md](CLI/README.md) for full documentation.
 ### Timeline — Monthly volume with cleanup insights
 ![Timeline](docs/screenshots/Timeline.png)
 
----
+
 
 ## Privacy
 
@@ -91,7 +90,7 @@ InboxPie reads only **message metadata** (sender, subject, date, folder, read st
 
 See [THUNDERBIRD/PRIVACY.md](THUNDERBIRD/PRIVACY.md) and [CLI/PRIVACY.md](CLI/PRIVACY.md) for detailed privacy policies.
 
----
+
 
 ## Project Structure
 
@@ -114,7 +113,7 @@ InboxPie/
 └── README.md              # You are here
 ```
 
----
+
 
 ## Contributing
 
@@ -123,19 +122,19 @@ Contributions are welcome! Please read [THUNDERBIRD/CONTRIBUTING.md](THUNDERBIRD
 - **Thunderbird extension**: JavaScript, Thunderbird MailExtension APIs
 - **CLI**: Python 3.10+, Typer, Rich, Jinja2
 
----
+
 
 ## License
 
 MIT License. See [THUNDERBIRD/LICENSE](THUNDERBIRD/LICENSE).
 
----
+
 
 ## Author
 
 Created by [AKSarav](https://www.linkedin.com/in/aksarav/)
 
----
+
 
 ## Support
 
