@@ -18,19 +18,6 @@ InboxPie helps you visualize, analyze, and clean up your email inbox — all loc
 
 ---
 
-## Screenshots
-
-### PieView — Year → Month → Domain sunburst
-![PieView](docs/screenshots/Pieview.png)
-
-### By Sender — Drill down into senders by year and month
-![By Sender](docs/screenshots/BySender.png)
-
-### Timeline — Monthly volume with cleanup insights
-![Timeline](docs/screenshots/Timeline.png)
-
----
-
 ## Key Features
 
 - **5 visualization views** — PieView (sunburst), By Sender, By Domain, By Size, Timeline
@@ -75,6 +62,19 @@ inboxpie scan --source apple-mail --output all --report-dir ./reports
 ```
 
 See [CLI/README.md](CLI/README.md) for full documentation.
+
+---
+
+## Screenshots
+
+### PieView — Year → Month → Domain sunburst
+![PieView](docs/screenshots/Pieview.png)
+
+### By Sender — Drill down into senders by year and month
+![By Sender](docs/screenshots/BySender.png)
+
+### Timeline — Monthly volume with cleanup insights
+![Timeline](docs/screenshots/Timeline.png)
 
 ---
 
