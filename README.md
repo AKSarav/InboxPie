@@ -2,14 +2,11 @@
 
 InboxPie is a local-first Thunderbird extension for visualizing and cleaning up your business email inbox. 
 
-<p align="center">
-  <img src="THUNDERBIRD/icons/InboxPieLogo.png" alt="InboxPie logo">
-</p>
-
 **Privacy-first email inbox analytics and cleanup tools.**
 
 InboxPie helps you visualize, analyze, and clean up your email inbox — all locally, with no cloud, no telemetry, and no data leaving your machine.
 
+![PieView](docs/screenshots/Pieview.png)
 
 
 ---
