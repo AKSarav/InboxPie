@@ -19,17 +19,23 @@
           <svg class="privacy-icon privacy-icon-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12c2-3 5.5-5 9-5s7 2 9 5" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/><path d="M3 12c2 3 5.5 5 9 5s7-2 9-5" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
         </button>
         <button id="themeToggle" class="theme-toggle" title="Toggle theme">☀</button>
+        <button id="resetBtn" class="theme-toggle" title="Reset dashboard and start over">
+          <svg class="reset-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M3 12a9 9 0 1 0 2.1-5.7" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
+            <path d="M3 4v5h5" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
         <select id="accountSelect">
           <option value="all">All Accounts</option>
         </select>
         <div class="folder-select-wrap">
           <button type="button" id="folderSelectBtn" class="btn btn-secondary folder-select-btn">
             <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><path d="M2 4h5l2 2h9v10H2V4z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
-            Folders
+            <span id="folderSelectLabel">Folders</span>
             <span id="folderCountBadge" class="folder-count-badge" style="display:none;">0</span>
           </button>
           <div id="folderDropdown" class="folder-dropdown" style="display:none;">
-            <div class="folder-dropdown-header">Select folders to scan</div>
+            <div id="folderDropdownHeader" class="folder-dropdown-header">Select folders to scan</div>
             <div id="folderDropdownList" class="folder-dropdown-list">
               <div class="folder-dropdown-empty">Open to load folders…</div>
             </div>
@@ -37,6 +43,7 @@
               <button type="button" class="btn btn-secondary btn-small" id="folderSelectAll">All</button>
               <button type="button" class="btn btn-secondary btn-small" id="folderSelectNone">None</button>
             </div>
+            <div id="folderDropdownFooter" class="folder-dropdown-footer" style="display:none;"></div>
           </div>
         </div>
         <button id="scanBtn" class="btn btn-primary">
