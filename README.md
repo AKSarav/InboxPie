@@ -9,8 +9,6 @@ InboxPie helps you visualize, analyze, and clean up your email inbox — all loc
 ![PieView](docs/screenshots/Pieview.png)
 
 
----
-
 ## What's in this repo
 
 | Project | Description | Platform |
