@@ -11,6 +11,11 @@
 node_modules/
 dist/
 build/
+CLI/.venv/
+CLI/dist/
+CLI/build/
+CLI/.pytest_cache/
+CLI/*.egg-info/
 
 # Local environment files
 .env
