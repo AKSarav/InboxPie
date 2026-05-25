@@ -8,7 +8,6 @@ InboxPie helps you understand where your email comes from, what is unread or tak
 
 ![PieView — Year → Month → Domain sunburst](docs/screenshots/Pieview.png)
 
----
 
 ## Vision
 
@@ -16,7 +15,7 @@ Most inboxes grow faster than we can manage. Newsletters, alerts, and old unread
 
 InboxPie turns mailbox metadata into visual summaries so you can **explore first, decide second, and act third**. The same analytics mindset powers both products in this repo: understand patterns, focus on what matters, then take action only when you are ready.
 
----
+
 
 ## Choose your path
 
@@ -30,7 +29,7 @@ Both tools read **metadata only** (sender, subject, date, folder, read status, s
 
 → Full docs: [THUNDERBIRD/README.md](THUNDERBIRD/README.md) · [CLI/README.md](CLI/README.md)
 
----
+
 
 ## Shared principles
 
@@ -45,7 +44,7 @@ These apply to **every** InboxPie product — that is why they live here, not re
 
 Detailed privacy policies: [THUNDERBIRD/PRIVACY.md](THUNDERBIRD/PRIVACY.md) · [CLI/PRIVACY.md](CLI/PRIVACY.md)
 
----
+
 
 ## Quick start
 
@@ -63,7 +62,6 @@ cd CLI && python3 -m venv .venv && source .venv/bin/activate && pip install -e .
 inboxpie scan --source apple-mail --output all --report-dir ./reports
 ```
 
----
 
 ## Where features live (and why)
 
@@ -81,19 +79,19 @@ We split detail by product so each README stays focused:
 
 If you are deciding **whether** InboxPie fits you, stay here. If you are using **one product**, open its README next.
 
----
+
 
 ## Contributing
 
 Contributions welcome. See [THUNDERBIRD/CONTRIBUTING.md](THUNDERBIRD/CONTRIBUTING.md).
 
----
+
 
 ## License
 
 MIT — see [THUNDERBIRD/LICENSE](THUNDERBIRD/LICENSE).
 
----
+
 
 ## Author
 
