@@ -1,135 +1,97 @@
-# InboxPie — Privacy First Thunderbird Mail Organizer
-
-InboxPie is a local-first Thunderbird extension for visualizing and cleaning up your business email inbox. 
-
-**Privacy-first email inbox analytics and cleanup tools.**
-
-InboxPie helps you visualize, analyze, and clean up your email inbox — all locally, with no cloud, no telemetry, and no data leaving your machine.
-
-![PieView](docs/screenshots/Pieview.png)
 
 
----
+# InboxPie
 
-## What's in this repo
+**See your inbox clearly. Clean up with confidence. Keep everything on your machine.**
 
-| Project | Description | Platform |
-|---------|-------------|----------|
-| [**Thunderbird Extension**](THUNDERBIRD/) | Interactive dashboard for Thunderbird with PieView, Timeline, By Sender/Domain/Size views, and bulk cleanup actions | Thunderbird 115+ |
-| [**CLI**](CLI/) | Command-line tool to scan Apple Mail and generate reports (terminal, CSV, JSON, HTML) | macOS / Python 3.10+ |
+InboxPie helps you understand where your email comes from, what is unread or taking space, and what you are about to change — before you act. No cloud, no telemetry, no data leaving your device.
+
+![PieView — Year → Month → Domain sunburst](docs/screenshots/Pieview.png)
 
 ---
 
-## Screenshots
+## Vision
 
-### PieView — Year → Month → Domain sunburst
-![PieView](docs/screenshots/Pieview.png)
+Most inboxes grow faster than we can manage. Newsletters, alerts, and old unread mail pile up until cleanup feels risky — you are never quite sure what you will delete or move.
 
-### By Sender — Drill down into senders by year and month
-![By Sender](docs/screenshots/BySender.png)
-
-### Timeline — Monthly volume with cleanup insights
-![Timeline](docs/screenshots/Timeline.png)
+InboxPie turns mailbox metadata into visual summaries so you can **explore first, decide second, and act third**. The same analytics mindset powers both products in this repo: understand patterns, focus on what matters, then take action only when you are ready.
 
 ---
 
-## Key Features
+## Choose your path
 
-- **5 visualization views** — PieView (sunburst), By Sender, By Domain, By Size, Timeline
-- **Review before action** — Inspect selected messages before moving to Trash or another folder
-- **Privacy Mode** — Mask emails/domains on-screen for screenshots and demos
-- **Folder selection** — Pick exactly which folders and subfolders to scan
-- **Export to CSV/JSON** — Keep records of what you reviewed and moved
-- **100% local** — No servers, no APIs, no telemetry, no cloud upload
+| | [**Thunderbird Extension**](THUNDERBIRD/) | [**CLI**](CLI/) |
+|---|---|---|
+| **For** | Thunderbird users who want an interactive dashboard inside their mail client | macOS users with Apple Mail who want reports from the terminal |
+| **You get** | PieView, Timeline, sender/domain/size views, and bulk cleanup with review | Terminal, CSV, JSON, and HTML reports from a local scan |
+| **Best when** | You live in Thunderbird and want to select, review, and move messages | You want offline audits, exports, or Apple Mail analysis without Thunderbird |
+
+Both tools read **metadata only** (sender, subject, date, folder, read status, size). Neither reads email bodies or sends data anywhere.
+
+→ Full docs: [THUNDERBIRD/README.md](THUNDERBIRD/README.md) · [CLI/README.md](CLI/README.md)
 
 ---
 
-## Quick Start
+## Shared principles
 
-### Thunderbird Extension
+These apply to **every** InboxPie product — that is why they live here, not repeated in full in each sub-README.
 
-1. Download the latest `.xpi` from [Releases](https://github.com/AKSarav/InboxPie/releases) or build from source
-2. In Thunderbird: **Tools → Add-ons and Themes → ⚙️ → Install Add-on From File**
-3. Click the **InboxPie** toolbar icon to open the dashboard
+| Principle | What it means |
+|---|---|
+| **Local-first** | Scanning, charts, and exports run on your machine |
+| **Metadata only** | Headers and mailbox fields — never message body content |
+| **Review before action** | Extension: inspect selections before move. CLI: read-only reports for informed cleanup |
+| **Open source** | Inspect the code, verify the privacy claims yourself |
 
-For development:
+Detailed privacy policies: [THUNDERBIRD/PRIVACY.md](THUNDERBIRD/PRIVACY.md) · [CLI/PRIVACY.md](CLI/PRIVACY.md)
+
+---
+
+## Quick start
+
+**Thunderbird** — install the `.xpi`, open the toolbar dashboard, scan, explore, review, then move.
 
 ```bash
-cd THUNDERBIRD
-# Load as temporary add-on in Thunderbird (about:debugging)
+# Install from Releases, then in Thunderbird:
+# Tools → Add-ons and Themes → ⚙️ → Install Add-on From File
 ```
 
-See [THUNDERBIRD/README.md](THUNDERBIRD/README.md) for full documentation.
-
-### CLI (Apple Mail)
+**CLI (Apple Mail)** — install, scan, generate reports.
 
 ```bash
-cd CLI
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-
-# Scan and show terminal summary
-inboxpie scan --source apple-mail
-
-# Generate all reports
+cd CLI && python3 -m venv .venv && source .venv/bin/activate && pip install -e .
 inboxpie scan --source apple-mail --output all --report-dir ./reports
 ```
 
-See [CLI/README.md](CLI/README.md) for full documentation.
-
 ---
 
-## Privacy
+## Where features live (and why)
 
-InboxPie reads only **message metadata** (sender, subject, date, folder, read status, size). It never reads or stores email body content.
+We split detail by product so each README stays focused:
 
-| What InboxPie does | What InboxPie does NOT do |
-|---|---|
-| Reads message headers and metadata | Read email bodies |
-| Stores UI preferences locally | Send data to any server |
-| Exports reports to your local files | Use analytics or telemetry |
-| Moves messages on your explicit action | Delete messages permanently |
+| Topic | Root (here) | [THUNDERBIRD/README.md](THUNDERBIRD/README.md) | [CLI/README.md](CLI/README.md) |
+|---|---|---|---|
+| Vision & product choice | ✓ | — | — |
+| PieView, Timeline, drill-down views | Mention only | Full feature list + usage | HTML report parity |
+| Review modal, Move to Trash/Folder | Mention only | Full workflow | — (read-only) |
+| Scan modes (`emlx` / Envelope Index) | — | — | Full reference |
+| CSV / JSON / terminal output | Mention only | Export selected rows | Full reference |
+| Permissions & add-on submission | — | ✓ | — |
+| Full Disk Access (macOS) | — | — | ✓ |
 
-See [THUNDERBIRD/PRIVACY.md](THUNDERBIRD/PRIVACY.md) and [CLI/PRIVACY.md](CLI/PRIVACY.md) for detailed privacy policies.
-
----
-
-## Project Structure
-
-```
-InboxPie/
-├── THUNDERBIRD/           # Thunderbird MailExtension
-│   ├── manifest.json
-│   ├── background.js
-│   ├── dashboard/
-│   │   ├── popup.html
-│   │   ├── dashboard.js
-│   │   └── styles.css
-│   └── icons/
-├── CLI/                   # Python CLI for Apple Mail
-│   ├── pyproject.toml
-│   ├── src/inboxpie_cli/
-│   └── tests/
-├── docs/
-│   └── screenshots/
-└── README.md              # You are here
-```
+If you are deciding **whether** InboxPie fits you, stay here. If you are using **one product**, open its README next.
 
 ---
 
 ## Contributing
 
-Contributions are welcome! Please read [THUNDERBIRD/CONTRIBUTING.md](THUNDERBIRD/CONTRIBUTING.md) before submitting PRs.
-
-- **Thunderbird extension**: JavaScript, Thunderbird MailExtension APIs
-- **CLI**: Python 3.10+, Typer, Rich, Jinja2
+Contributions welcome. See [THUNDERBIRD/CONTRIBUTING.md](THUNDERBIRD/CONTRIBUTING.md).
 
 ---
 
 ## License
 
-MIT License. See [THUNDERBIRD/LICENSE](THUNDERBIRD/LICENSE).
+MIT — see [THUNDERBIRD/LICENSE](THUNDERBIRD/LICENSE).
 
 ---
 
@@ -137,11 +99,4 @@ MIT License. See [THUNDERBIRD/LICENSE](THUNDERBIRD/LICENSE).
 
 Created by [AKSarav](https://www.linkedin.com/in/aksarav/)
 
----
-
-## Support
-
-If you find InboxPie useful, consider:
-- Starring this repo ⭐
-- [Sponsoring on GitHub](https://github.com/sponsors/AKSarav)
-- Sharing with others who might benefit
+If InboxPie helps you, consider starring the repo or [sponsoring on GitHub](https://github.com/sponsors/AKSarav).
