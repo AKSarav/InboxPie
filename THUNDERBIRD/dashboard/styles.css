@@ -95,6 +95,9 @@ body {
   transition: all 0.2s; font-size: 18px; line-height: 1;
 }
 .theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.reset-icon {
+  width: 18px; height: 18px; display: block; flex-shrink: 0;
+}
 
 /* Privacy Toggle */
 .privacy-toggle {
@@ -162,6 +165,29 @@ body {
   display: flex; gap: 6px; padding: 10px 14px 6px;
   border-top: 1px solid var(--border); margin-top: 4px;
 }
+.folder-dropdown-section {
+  font-size: 10px; font-weight: 700; color: var(--text-label);
+  text-transform: uppercase; letter-spacing: 0.06em;
+  padding: 10px 14px 6px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+.folder-dropdown-section:first-child { border-top: none; margin-top: 0; }
+.folder-dropdown-section-note {
+  font-size: 11px; font-weight: 400; color: var(--text-muted);
+  text-transform: none; letter-spacing: 0; margin-top: 3px; line-height: 1.4;
+}
+.folder-option-unscanned {
+  opacity: 0.72; cursor: default; color: var(--text-secondary);
+}
+.folder-option-unscanned:hover { background: transparent; }
+.folder-dropdown-footer {
+  padding: 10px 14px 6px; border-top: 1px solid var(--border); margin-top: 4px;
+}
+.folder-dropdown-footer p {
+  font-size: 11px; color: var(--text-muted); line-height: 1.45; margin-bottom: 8px;
+}
+.folder-dropdown-footer .btn { width: 100%; justify-content: center; }
 .btn-small { padding: 5px 10px; font-size: 11px; }
 
 /* Form elements */
@@ -431,6 +457,7 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 }
 .timeline-month { cursor: pointer; }
 .timeline-month rect { transition: opacity 0.15s, filter 0.15s; }
+.timeline-month text { pointer-events: none; }
 .timeline-month:hover rect, .timeline-month.selected rect { filter: brightness(1.12); }
 .timeline-insights { display: flex; flex-direction: column; gap: 16px; }
 .timeline-kpis {

@@ -1,0 +1,2006 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
+  <title>InboxPie Report</title>
+  <style>
+    :root, [data-theme="dark"] {
+      --bg-primary: #0c0f14;
+      --bg-secondary: #13161d;
+      --bg-card: #181c25;
+      --bg-hover: #1e2330;
+      --border: #2a3040;
+      --text-primary: #eaedf2;
+      --text-secondary: #a0a6b4;
+      --text-muted: #737a8a;
+      --text-label: #c0c5d0;
+      --accent: #93c5fd;
+      --accent-rgb: 147, 197, 253;
+      --accent-text: #0c0f14;
+      --accent-dim: rgba(147, 197, 253, 0.15);
+      --selection: #93c5fd;
+      --svg-gap-stroke: #0c0f14;
+      --tooltip-shadow: rgba(0,0,0,0.5);
+      --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --font-mono: "SF Mono", "Cascadia Code", "Fira Code", Consolas, "Liberation Mono", monospace;
+    }
+    [data-theme="light"] {
+      --bg-primary: #f4f5f7;
+      --bg-secondary: #ffffff;
+      --bg-card: #ffffff;
+      --bg-hover: #eef0f4;
+      --border: #d4d8e0;
+      --text-primary: #1a1d24;
+      --text-secondary: #4a5060;
+      --text-muted: #6b7280;
+      --text-label: #374151;
+      --accent: #2563eb;
+      --accent-rgb: 37, 99, 235;
+      --accent-text: #ffffff;
+      --accent-dim: rgba(37, 99, 235, 0.1);
+      --selection: #2563eb;
+      --svg-gap-stroke: #ffffff;
+      --tooltip-shadow: rgba(0,0,0,0.12);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { background: var(--bg-primary); }
+    body {
+      font-family: var(--font-body);
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      max-width: 1100px;
+      margin: 0 auto;
+      min-height: 100vh;
+      transition: background 0.3s, color 0.3s;
+    }
+    #app { background: transparent; }
+    [data-theme="light"] #app { background: #ffffff; }
+    
+    /* Header */
+    #header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 24px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-secondary);
+      position: sticky; top: 0; z-index: 20;
+    }
+    .header-left { display: flex; align-items: center; gap: 10px; }
+    .logo-wrap {
+      display: inline-flex; align-items: center; justify-content: center;
+      flex-shrink: 0; line-height: 0;
+    }
+    .logo-icon {
+      width: 36px; height: 36px; object-fit: contain; display: block;
+      filter: none;
+      opacity: 1;
+      mix-blend-mode: normal;
+    }
+    /* Logo is a full-color PNG — never dim or filter it; use a light surface on dark UI */
+    [data-theme="dark"] .logo-wrap {
+      background: #ffffff;
+      border-radius: 8px;
+      padding: 2px;
+    }
+    #header h1 {
+      font-size: 16px; font-weight: 700; letter-spacing: -0.02em;
+      color: var(--text-primary);
+    }
+    .header-right { display: flex; align-items: center; gap: 10px; }
+    
+    .icon-btn {
+      width: 36px; height: 36px; border-radius: 8px;
+      border: 1px solid var(--border); background: var(--bg-card);
+      color: var(--text-secondary); cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.2s; font-size: 18px;
+    }
+    .icon-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .icon-btn.active { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+    .icon-btn svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.75; }
+    
+    .folder-multiselect { position: relative; }
+    .folder-select-btn {
+      font-family: var(--font-body); font-size: 13px;
+      background: var(--bg-card); color: var(--text-primary);
+      border: 1px solid var(--border); border-radius: 6px;
+      padding: 8px 12px; outline: none; cursor: pointer;
+      min-width: 180px; max-width: 280px;
+      display: flex; align-items: center; gap: 8px;
+      transition: border-color 0.2s;
+    }
+    .folder-select-btn:hover { border-color: var(--accent); }
+    .folder-select-btn .chevron { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; margin-left: auto; transition: transform 0.2s; }
+    .folder-multiselect.open .chevron { transform: rotate(180deg); }
+    #folderSelectLabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; text-align: left; }
+    
+    .folder-dropdown {
+      position: absolute; top: calc(100% + 4px); right: 0;
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+      min-width: 280px; max-width: 360px; max-height: 400px;
+      display: none; flex-direction: column; z-index: 1000;
+    }
+    .folder-multiselect.open .folder-dropdown { display: flex; }
+    
+    .folder-dropdown-header {
+      display: flex; gap: 8px; padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .folder-action-btn {
+      font-size: 12px; padding: 4px 10px;
+      background: var(--bg-app); border: 1px solid var(--border);
+      border-radius: 4px; color: var(--text-secondary);
+      cursor: pointer; transition: all 0.2s;
+    }
+    .folder-action-btn:hover { border-color: var(--accent); color: var(--accent); }
+    
+    .folder-options { overflow-y: auto; padding: 8px 0; }
+    .folder-option {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 12px; cursor: pointer; transition: background 0.15s;
+    }
+    .folder-option:hover { background: var(--accent-dim); }
+    .folder-option input[type="checkbox"] {
+      width: 16px; height: 16px; cursor: pointer;
+      accent-color: var(--accent);
+    }
+    .folder-option-label { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .folder-option-count { font-size: 12px; color: var(--text-muted); }
+    
+    /* Stats Bar */
+    .stats-bar {
+      display: grid; grid-template-columns: repeat(6, 1fr);
+      gap: 12px; padding: 16px 24px; border-bottom: 1px solid var(--border);
+    }
+    @media (max-width: 900px) { .stats-bar { grid-template-columns: repeat(3, 1fr); } }
+    @media (max-width: 520px) { .stats-bar { grid-template-columns: repeat(2, 1fr); } }
+    .stat-card {
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.035), transparent), var(--bg-card);
+      border-radius: 8px; padding: 14px 16px; border: 1px solid var(--border);
+    }
+    .stat-card-selected {
+      border-color: rgba(var(--accent-rgb), 0.25);
+      background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.08), transparent), var(--bg-card);
+    }
+    .stat-card-selected .stat-number { color: var(--accent); }
+    .stat-card-clickable { cursor: pointer; transition: transform 0.15s, box-shadow 0.15s; }
+    .stat-card-clickable:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+    .stat-number { font-size: 24px; font-weight: 700; font-family: var(--font-mono); color: var(--text-primary); letter-spacing: -0.03em; }
+    .stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 4px; }
+    .selection-bar {
+      display: none; align-items: center; gap: 10px; flex-wrap: wrap;
+      padding: 10px 24px; border-bottom: 1px solid var(--border);
+      background: rgba(var(--accent-rgb), 0.06);
+    }
+    .selection-bar.visible { display: flex; }
+    .selection-bar span { font-size: 12px; color: var(--text-secondary); }
+    
+    /* Tabs */
+    .view-tabs { display: flex; gap: 0; padding: 0 24px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); }
+    .tab {
+      font-family: var(--font-body); font-size: 13px; font-weight: 500;
+      color: var(--text-muted); background: none; border: none;
+      padding: 12px 18px; cursor: pointer;
+      border-bottom: 2px solid transparent; transition: all 0.2s;
+    }
+    .tab:hover { color: var(--text-secondary); }
+    .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+    
+    /* Main Content */
+    #mainContent { padding: 20px 24px; min-height: 400px; }
+    .view-panel { display: none; }
+    .view-panel.active { display: block; }
+    
+    /* Sunburst Layout */
+    .sunburst-layout { display: grid; grid-template-columns: 1fr 260px; gap: 20px; align-items: start; }
+    @media (max-width: 900px) { .sunburst-layout { grid-template-columns: 1fr; } }
+    .sunburst-container { position: relative; background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+    #sunburstSvg { width: 100%; max-width: 600px; height: auto; display: block; margin: 0 auto; }
+    
+    /* Legend Panel */
+    .legend-panel { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; max-height: 600px; overflow-y: auto; }
+    .legend-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+    .legend-section { margin-bottom: 14px; }
+    .legend-section-title { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-label); margin-bottom: 6px; }
+    .legend-item { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 4px; font-size: 12px; }
+    .legend-swatch { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+    .legend-label { flex: 1; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .legend-count { font-family: var(--font-mono); font-size: 11px; color: var(--accent); font-weight: 600; }
+    
+    /* Tooltip */
+    .sunburst-tooltip { position: fixed; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 12px; pointer-events: none; z-index: 100; box-shadow: 0 8px 24px var(--tooltip-shadow); }
+    .tt-label { font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+    .tt-count { font-family: var(--font-mono); color: var(--accent); font-size: 14px; }
+    .tt-pct { color: var(--text-muted); font-size: 11px; }
+    
+    /* Breadcrumb */
+    .breadcrumb { display: flex; gap: 6px; align-items: center; padding: 12px 0; font-size: 12px; color: var(--text-muted); flex-wrap: wrap; }
+    .breadcrumb span { cursor: pointer; padding: 3px 8px; border-radius: 4px; transition: background 0.15s; }
+    .breadcrumb span:hover { background: var(--bg-hover); }
+    .breadcrumb .bc-sep { cursor: default; padding: 0; }
+    .breadcrumb .bc-active { color: var(--accent); font-weight: 600; }
+    
+    /* Detail Panel */
+    .detail-panel { margin-top: 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+    .detail-panel:empty { display: none; }
+    .detail-panel table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .detail-panel th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); padding: 8px 10px; border-bottom: 1px solid var(--border); }
+    .detail-panel td { padding: 8px 10px; border-bottom: 1px solid var(--border); color: var(--text-secondary); }
+    
+    /* Sender/Domain Tables */
+    .table-controls { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+    .search-input {
+      font-family: var(--font-body); font-size: 13px;
+      background: var(--bg-card); color: var(--text-primary);
+      border: 1px solid var(--border); border-radius: 6px;
+      padding: 8px 12px; outline: none; width: 220px; transition: border-color 0.2s;
+    }
+    .search-input:focus { border-color: var(--accent); }
+    
+    .sender-table { display: flex; flex-direction: column; gap: 6px; max-height: 600px; overflow-y: auto; }
+    .sender-group, .domain-group {
+      display: flex; flex-direction: column; gap: 0;
+      padding: 8px; border-radius: 10px;
+      background: rgba(var(--accent-rgb), 0.04);
+      border: 1px solid rgba(var(--accent-rgb), 0.1);
+      transition: background 0.2s, border-color 0.2s;
+    }
+    .sender-group:hover, .domain-group:hover {
+      background: rgba(var(--accent-rgb), 0.06);
+      border-color: rgba(var(--accent-rgb), 0.15);
+    }
+    
+    .sender-row {
+      display: grid; grid-template-columns: 28px 1fr 80px 120px 80px 30px;
+      align-items: center; gap: 10px; padding: 10px 14px;
+      background: var(--bg-card); border-radius: 8px;
+      transition: all 0.15s; cursor: pointer;
+    }
+    .sender-row:hover { background: var(--bg-hover); }
+    .sender-row.selected { background: var(--accent-dim); }
+    .sr-check {
+      width: 18px; height: 18px; border: 2px solid var(--border); border-radius: 4px;
+      display: flex; align-items: center; justify-content: center; transition: all 0.15s; flex-shrink: 0;
+    }
+    .sender-row.selected .sr-check, .sender-year-row.selected .sr-check, .sender-month-row.selected .sr-check {
+      border-color: var(--selection); background: var(--selection);
+    }
+    .sender-row.selected .sr-check::after, .sender-year-row.selected .sr-check::after, .sender-month-row.selected .sr-check::after {
+      content: "✓"; color: white; font-size: 12px; font-weight: bold;
+    }
+    .sender-head, .domain-head {
+      margin: -8px -8px 0 -8px; padding: 10px 14px !important;
+      border-radius: 10px 10px 0 0; background: var(--bg-card);
+    }
+    .sr-info { overflow: hidden; }
+    .sr-name { font-weight: 600; font-size: 13px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sr-email { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sr-count { font-family: var(--font-mono); font-weight: 700; font-size: 16px; color: var(--accent); text-align: right; }
+    .sr-bar-wrap { height: 6px; background: var(--bg-primary); border-radius: 3px; overflow: hidden; }
+    .sr-bar { height: 100%; border-radius: 3px; transition: width 0.4s ease; }
+    .sr-unread { font-size: 11px; color: var(--text-muted); text-align: right; }
+    .sr-expand { font-size: 14px; color: var(--text-muted); text-align: center; cursor: pointer; transition: transform 0.15s; user-select: none; }
+    .sender-head.expanded .sr-expand, .domain-head.expanded .sr-expand { transform: rotate(90deg); }
+    
+    .child-list {
+      display: none; flex-direction: column; gap: 6px; margin-top: 8px;
+      padding-left: 12px; position: relative;
+    }
+    .child-list.visible { display: flex; }
+    .child-list::before {
+      content: ""; position: absolute; left: 0; top: 0; bottom: 0;
+      width: 2px; background: linear-gradient(to bottom, var(--accent), rgba(var(--accent-rgb), 0.2)); border-radius: 1px;
+    }
+    .child-row {
+      display: grid; grid-template-columns: 28px 1fr 80px 120px 80px;
+      align-items: center; gap: 10px; padding: 8px 12px;
+      background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px;
+      font-size: 12px;
+    }
+    .child-row:hover { background: var(--bg-hover); border-color: var(--accent); }
+    .child-row.selected { background: var(--accent-dim); }
+    
+    .sender-year-row, .sender-month-row {
+      cursor: pointer; transition: all 0.15s;
+    }
+    .sender-year-row { grid-template-columns: 28px 1fr 70px 100px 70px 20px; }
+    .sender-year-row .sr-expand { transition: transform 0.15s; }
+    .sender-year-row.expanded .sr-expand { transform: rotate(90deg); }
+    .sender-month-list { display: flex; flex-direction: column; gap: 4px; }
+    .sender-month-row { grid-template-columns: 28px 1fr 70px 100px 70px; }
+    .insight-row.selected { background: var(--accent-dim); }
+    .insight-row-meta .btn { padding: 5px 10px; font-size: 11px; white-space: nowrap; }
+    
+    /* Timeline */
+    .timeline-dashboard { display: flex; flex-direction: column; gap: 16px; }
+    .timeline-header {
+      padding: 16px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+    }
+    .timeline-header h2 { font-size: 16px; margin-bottom: 4px; color: var(--text-primary); }
+    .timeline-header p { font-size: 12px; color: var(--text-muted); }
+    .timeline-controls {
+      display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+      padding: 12px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 10px;
+    }
+    .timeline-control-group { display: flex; gap: 8px; flex-wrap: wrap; }
+    .btn, .btn-secondary {
+      font-family: var(--font-body); font-size: 12px; font-weight: 600;
+      padding: 7px 14px; border: 1px solid var(--border); border-radius: 6px;
+      cursor: pointer; background: var(--bg-card); color: var(--text-secondary);
+      transition: all 0.2s;
+    }
+    .btn:hover, .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+    .btn.active, .btn-secondary.active { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+    .timeline-chart {
+      width: 100%; min-height: 300px; overflow-x: auto;
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 12px;
+    }
+    .timeline-month { cursor: pointer; }
+    .timeline-month rect { transition: opacity 0.15s, filter 0.15s; }
+    .timeline-month text { pointer-events: none; }
+    .timeline-month:hover rect, .timeline-month.selected rect { filter: brightness(1.12); }
+    .timeline-insights { display: flex; flex-direction: column; gap: 16px; }
+    .timeline-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    @media (max-width: 600px) { .timeline-kpis { grid-template-columns: repeat(2, 1fr); } }
+    .insight-grid {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px;
+    }
+    @media (max-width: 900px) { .insight-grid { grid-template-columns: 1fr; } }
+    .insight-empty { padding: 18px 14px; color: var(--text-muted); font-size: 12px; }
+    .timeline-note {
+      padding: 10px 12px; border-radius: 8px; background: var(--accent-dim); color: var(--text-secondary); font-size: 12px;
+    }
+    .timeline-kpi {
+      padding: 14px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+    }
+    .timeline-kpi span { display: block; font-family: var(--font-mono); font-size: 22px; font-weight: 700; color: var(--accent); }
+    .timeline-kpi label { display: block; margin-top: 3px; font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+    
+    /* Size View */
+    .size-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+    .insight-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    .insight-card-head { padding: 14px; border-bottom: 1px solid var(--border); background: rgba(var(--accent-rgb), 0.055); }
+    .insight-card-head h3 { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+    .insight-card-head p { font-size: 11px; color: var(--text-muted); }
+    .insight-rows { display: flex; flex-direction: column; }
+    .insight-row {
+      display: flex; justify-content: space-between; align-items: center; gap: 12px;
+      padding: 10px 14px; border-bottom: 1px solid var(--border);
+    }
+    .insight-row:last-child { border-bottom: none; }
+    .insight-row:hover { background: var(--bg-hover); }
+    .insight-row strong { display: block; color: var(--text-primary); font-size: 12px; font-weight: 500; }
+    .insight-row > div:first-child span { display: block; color: var(--text-muted); font-size: 11px; margin-top: 2px; }
+    .insight-row-meta span { font-family: var(--font-mono); font-size: 13px; font-weight: 700; color: var(--accent); }
+    
+    /* Footer */
+    footer {
+      margin-top: 40px; padding: 20px 24px;
+      border-top: 1px solid var(--border);
+      text-align: center; font-size: 12px; color: var(--text-muted);
+    }
+    footer a { color: var(--accent); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+    
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg-primary); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+    /* Selection review modal */
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+      display: none; align-items: center; justify-content: center; z-index: 2000; padding: 20px;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal-box {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.4); width: 100%; max-width: 980px; max-height: 90vh;
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .selection-review-head {
+      display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
+      padding: 18px 20px; border-bottom: 1px solid var(--border);
+    }
+    .selection-review-head h3 { margin: 0 0 6px; font-size: 16px; color: var(--text-primary); }
+    .selection-review-head p { margin: 0; font-size: 12px; color: var(--text-muted); }
+    .selection-review-controls {
+      display: flex; gap: 10px; flex-wrap: wrap; padding: 12px 20px;
+      border-bottom: 1px solid var(--border); background: var(--bg-secondary);
+    }
+    .selection-review-controls .search-input { flex: 1; min-width: 200px; width: auto; }
+    .selection-review-table { overflow: auto; flex: 1; min-height: 200px; }
+    .selection-review-table-head,
+    .selection-review-row {
+      display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1.2fr) 100px 80px;
+      gap: 12px; align-items: center; padding: 10px 20px; border-bottom: 1px solid var(--border);
+    }
+    .selection-review-table-head {
+      font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--text-muted); background: var(--bg-secondary); position: sticky; top: 0; z-index: 1;
+    }
+    .selection-review-row:hover { background: var(--bg-hover); }
+    .selection-subject strong, .selection-subject .selection-subject-text {
+      display: block; font-size: 12px; font-weight: 500; color: var(--text-primary);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .selection-subject span { display: block; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .selection-sender strong { display: block; font-size: 12px; color: var(--text-primary); }
+    .selection-sender span { display: block; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .selection-date, .selection-size { font-size: 12px; color: var(--text-secondary); font-family: var(--font-mono); }
+    .selection-review-more, .selection-empty { padding: 18px 20px; font-size: 12px; color: var(--text-muted); }
+    .selection-review-actions {
+      display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap;
+      padding: 14px 20px; border-top: 1px solid var(--border); background: var(--bg-secondary);
+    }
+    .btn-primary { background: var(--accent); color: #fff; border: none; }
+    .btn-primary:hover { filter: brightness(1.1); }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <header id="header">
+      <div class="header-left">
+        <span class="logo-wrap" aria-hidden="true">
+          <img src="InboxPieLogo.png" alt="" class="logo-icon" width="36" height="36">
+        </span>
+        <h1>InboxPie</h1>
+      </div>
+      <div class="header-right">
+        <div class="folder-multiselect" id="folderMultiselect">
+          <button class="folder-select-btn" id="folderSelectBtn" title="Filter by folders">
+            <span id="folderSelectLabel">All Folders</span>
+            <svg class="chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <div class="folder-dropdown" id="folderDropdown">
+            <div class="folder-dropdown-header">
+              <button class="folder-action-btn" id="selectAllBtn">Select All</button>
+              <button class="folder-action-btn" id="clearAllBtn">Clear All</button>
+            </div>
+            <div class="folder-options" id="folderOptions"></div>
+          </div>
+        </div>
+        <button id="privacyToggle" class="icon-btn" title="Toggle privacy mode">
+          <svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+        <button id="themeToggle" class="icon-btn" title="Toggle theme">☀</button>
+      </div>
+    </header>
+    
+    <div class="stats-bar" id="statsBar">
+      <div class="stat-card">
+        <div class="stat-number" id="statTotal">{{ "{:,}".format(total) }}</div>
+        <div class="stat-label">Total Emails</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number" id="statUnread">{{ "{:,}".format(unread) }}</div>
+        <div class="stat-label">Unread</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number" id="statSenders">{{ "{:,}".format(unique_senders) }}</div>
+        <div class="stat-label">Senders</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number" id="statDomains">{{ "{:,}".format(unique_domains) }}</div>
+        <div class="stat-label">Domains</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number" id="statSize">{{ total_size }}</div>
+        <div class="stat-label">Total Size</div>
+      </div>
+      <div class="stat-card stat-card-selected stat-card-clickable" id="statCardSelected" title="Click to review selected emails">
+        <div class="stat-number" id="statSelected">0</div>
+        <div class="stat-label">Selected</div>
+      </div>
+    </div>
+
+    <div id="selectionBar" class="selection-bar">
+      <span>Messages selected for review</span>
+      <button type="button" class="btn btn-primary" id="reviewSelectedBtn">Review Selected</button>
+      <button type="button" class="btn btn-secondary" id="clearSelectionBtn">Clear Selection</button>
+    </div>
+    
+    <div class="view-tabs">
+      <button class="tab active" data-view="sunburst">PieView</button>
+      <button class="tab" data-view="sender">By Sender</button>
+      <button class="tab" data-view="domain">By Domain</button>
+      <button class="tab" data-view="timeline">Timeline</button>
+      <button class="tab" data-view="size">By Size</button>
+    </div>
+    
+    <main id="mainContent">
+      <!-- Sunburst View -->
+      <div id="sunburstView" class="view-panel active">
+        <div class="sunburst-layout">
+          <div>
+            <div class="sunburst-container">
+              <svg id="sunburstSvg" viewBox="0 0 700 700"></svg>
+            </div>
+            <div id="breadcrumb" class="breadcrumb"></div>
+          </div>
+          <div id="legendPanel" class="legend-panel"></div>
+        </div>
+        <div id="sunburstDetail" class="detail-panel"></div>
+      </div>
+      
+      <!-- Sender View -->
+      <div id="senderView" class="view-panel">
+        <div class="table-controls">
+          <input type="text" id="senderSearch" class="search-input" placeholder="Search senders...">
+        </div>
+        <div id="senderTable" class="sender-table"></div>
+      </div>
+      
+      <!-- Domain View -->
+      <div id="domainView" class="view-panel">
+        <div class="table-controls">
+          <input type="text" id="domainSearch" class="search-input" placeholder="Search domains...">
+        </div>
+        <div id="domainTable" class="sender-table"></div>
+      </div>
+      
+      <!-- Timeline View -->
+      <div id="timelineView" class="view-panel">
+        <div class="timeline-dashboard">
+          <div class="timeline-header">
+            <h2>Inbox Timeline</h2>
+            <p id="timelineLabel">Monthly email volume</p>
+          </div>
+          <div id="timelineControls" class="timeline-controls"></div>
+          <div id="timelineChart" class="timeline-chart"></div>
+          <div id="timelineInsights" class="timeline-insights"></div>
+        </div>
+      </div>
+      
+      <!-- Size View -->
+      <div id="sizeView" class="view-panel">
+        <div class="timeline-header" style="margin-bottom: 16px;">
+          <h2>Storage Analysis</h2>
+          <p>Find the messages using the most mailbox space</p>
+        </div>
+        <div id="sizeContent" class="size-grid"></div>
+      </div>
+    </main>
+    
+    <div id="tooltip" class="sunburst-tooltip" style="display:none;">
+      <div class="tt-label"></div>
+      <div class="tt-count"></div>
+      <div class="tt-pct"></div>
+    </div>
+    
+    <footer>
+      Generated by <a href="https://github.com/AKSarav/InboxPie">InboxPie CLI</a> · <span id="genDate"></span>
+    </footer>
+  </div>
+
+  <div id="selectionReviewModal" class="modal-overlay" aria-hidden="true">
+    <div class="modal-box">
+      <div class="selection-review-head">
+        <div>
+          <h3>Review selected emails</h3>
+          <p id="selectionReviewSummary"></p>
+        </div>
+        <button type="button" id="selectionReviewClose" class="btn btn-secondary">Close</button>
+      </div>
+      <div class="selection-review-controls">
+        <input type="text" id="selectionReviewSearch" class="search-input" placeholder="Search subject, sender, folder…">
+        <select id="selectionReviewSort" class="search-input" style="width:auto;min-width:160px;">
+          <option value="date-desc">Newest first</option>
+          <option value="date-asc">Oldest first</option>
+          <option value="size-desc">Largest first</option>
+          <option value="sender-asc">Sender A→Z</option>
+          <option value="subject-asc">Subject A→Z</option>
+        </select>
+      </div>
+      <div id="selectionReviewTable" class="selection-review-table"></div>
+      <div class="selection-review-actions">
+        <button type="button" id="selectionReviewExport" class="btn btn-secondary">Export CSV</button>
+        <button type="button" id="selectionReviewClear" class="btn btn-secondary">Clear Selection</button>
+      </div>
+    </div>
+  </div>
+  
+  <script>
+  (function() {
+    "use strict";
+    
+    // Raw data for dynamic filtering
+    const allMessages = {{ all_messages_json | safe }};
+    const allFolders = {{ folders_json | safe }};
+    
+    // Current filtered/computed data
+    let messages = allMessages;
+    let pieTree = {};
+    let byMonth = [];
+    let bySender = [];
+    let byDomain = [];
+    let sizeBuckets = [];
+    let heavySenders = [];
+    let heavyDomains = [];
+    let totalEmails = 0;
+    let totalUnread = 0;
+    let totalSize = 0;
+    let uniqueSenders = 0;
+    let uniqueDomains = 0;
+    
+    let privacyMode = {{ 'true' if privacy else 'false' }};
+    let currentView = "sunburst";
+    let breadcrumbPath = [];
+    let selectedFolders = new Set(); // Empty = all folders
+    const expandedSenders = new Set();
+    const expandedSenderYears = new Set();
+    const expandedDomains = new Set();
+    const timelineState = { windowMonths: 24, offsetMonths: 0, selectedMonth: null };
+    const selectedIds = new Set();
+    const reviewState = { query: "", sort: "date-desc" };
+    let timelineInsightScope = [];
+    let sunburstDetailScope = null;
+
+    function senderYearKey(email, year) { return email + "::" + year; }
+    function selectionKey(m) {
+      return [m.id, m.folder || "", m.account || m.accountId || "", m.date || "", m.senderEmail || ""].join("\x1f");
+    }
+    function isSelectedMessage(m) { return selectedIds.has(selectionKey(m)); }
+    function isSelected(id) {
+      return messages.some(m => String(m.id) === String(id) && isSelectedMessage(m));
+    }
+    function removeSelectedMessage(m) { selectedIds.delete(selectionKey(m)); }
+    function buildBySenderMap() {
+      const map = {};
+      messages.forEach(m => {
+        if (!map[m.senderEmail]) map[m.senderEmail] = [];
+        map[m.senderEmail].push(m);
+      });
+      return map;
+    }
+    function toggleMessages(msgs) {
+      if (!msgs.length) return;
+      const keys = msgs.map(selectionKey);
+      const allSelected = keys.every(k => selectedIds.has(k));
+      keys.forEach((k, i) => {
+        if (allSelected) selectedIds.delete(k);
+        else selectedIds.add(k);
+      });
+      updateSelectionUi();
+      refreshCurrentView();
+    }
+    function getSenderMessages(email, year, month) {
+      const pool = buildBySenderMap()[email] || [];
+      return pool.filter(m => {
+        if (year != null && year !== "" && m.year !== Number(year)) return false;
+        if (month != null && month !== "" && m.month !== Number(month)) return false;
+        return true;
+      });
+    }
+    function messagesForAgeBucket(msgs, bucket) {
+      const now = Date.now();
+      return msgs.filter(m => {
+        if (m.read) return false;
+        const ageDays = Math.floor((now - new Date(m.date).getTime()) / 86400000);
+        if (bucket === "0-30") return ageDays <= 30;
+        if (bucket === "31-90") return ageDays >= 31 && ageDays <= 90;
+        if (bucket === "91-365") return ageDays >= 91 && ageDays <= 365;
+        if (bucket === "1y-plus") return ageDays >= 366;
+        return false;
+      });
+    }
+    function selectTimelineInsight(btn, rangeMsgs) {
+      const kind = btn.dataset.selectKind;
+      const value = btn.dataset.value;
+      const bucket = btn.dataset.bucket;
+      const accountId = btn.dataset.accountId;
+      let matches = [];
+      if (kind === "sender") matches = rangeMsgs.filter(m => m.senderEmail === value && !m.read);
+      else if (kind === "domain") matches = rangeMsgs.filter(m => m.domain === value);
+      else if (kind === "folder") matches = rangeMsgs.filter(m => (m.account || m.accountId) === accountId && (m.folder || "") === value);
+      else if (kind === "age") matches = messagesForAgeBucket(rangeMsgs, bucket || value);
+      toggleMessages(matches);
+    }
+    function selectSenderForReview(email, scopeMsgs) {
+      const pool = scopeMsgs || messages;
+      const matches = pool.filter(m => m.senderEmail === email);
+      if (!matches.length) return;
+      toggleMessages(matches);
+    }
+    function formatDate(dateValue) {
+      const d = new Date(dateValue);
+      if (Number.isNaN(d.getTime())) return "Unknown date";
+      return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+    }
+    function messageSize(m) { return Number(m.size) > 0 ? Number(m.size) : 0; }
+    function matchesReviewQuery(m, q) {
+      return (
+        (m.subject || "").toLowerCase().includes(q) ||
+        (m.senderName || "").toLowerCase().includes(q) ||
+        (m.senderEmail || "").toLowerCase().includes(q) ||
+        (m.domain || "").toLowerCase().includes(q) ||
+        (m.folder || "").toLowerCase().includes(q) ||
+        (m.account || "").toLowerCase().includes(q)
+      );
+    }
+    function getReviewedSelectedMessages() {
+      const q = reviewState.query.trim().toLowerCase();
+      let selected = messages.filter(m => isSelectedMessage(m));
+      if (q) selected = selected.filter(m => matchesReviewQuery(m, q));
+      const sort = reviewState.sort;
+      selected.sort((a, b) => {
+        if (sort === "date-asc") return new Date(a.date) - new Date(b.date);
+        if (sort === "size-desc") return messageSize(b) - messageSize(a);
+        if (sort === "sender-asc") return (a.senderEmail || "").localeCompare(b.senderEmail || "");
+        if (sort === "subject-asc") return (a.subject || "").localeCompare(b.subject || "");
+        return new Date(b.date) - new Date(a.date);
+      });
+      return selected;
+    }
+    function downloadFile(content, filename, mimeType) {
+      const blob = new Blob([content], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+    function exportSelectedCSV() {
+      const selected = getReviewedSelectedMessages();
+      if (!selected.length) {
+        alert("No selected messages to export.");
+        return;
+      }
+      const header = "Subject,Sender Name,Sender Email,Domain,Date,Size (bytes),Read,Folder,Account\n";
+      const rows = selected.map(m => [
+        '"' + (m.subject || "").replace(/"/g, '""') + '"',
+        '"' + (m.senderName || "").replace(/"/g, '""') + '"',
+        m.senderEmail || "",
+        m.domain || "",
+        m.date || "",
+        messageSize(m),
+        m.read ? "Yes" : "No",
+        '"' + (m.folder || "").replace(/"/g, '""') + '"',
+        '"' + (m.account || "").replace(/"/g, '""') + '"',
+      ].join(",")).join("\n");
+      downloadFile(header + rows, "inboxpie-selected-" + new Date().toISOString().slice(0, 10) + ".csv", "text/csv");
+    }
+    function renderSelectionReview() {
+      const selected = getReviewedSelectedMessages();
+      const table = document.getElementById("selectionReviewTable");
+      const totalBytes = selected.reduce((sum, m) => sum + messageSize(m), 0);
+      const unread = selected.filter(m => !m.read).length;
+      const accounts = new Set(selected.map(m => m.account || m.accountId));
+
+      document.getElementById("selectionReviewSummary").textContent =
+        selectedIds.size.toLocaleString() + " selected · " + unread.toLocaleString() + " unread · " +
+        formatBytes(totalBytes) + " known size · " + accounts.size + " account" + (accounts.size === 1 ? "" : "s");
+
+      const search = document.getElementById("selectionReviewSearch");
+      const sort = document.getElementById("selectionReviewSort");
+      search.value = reviewState.query;
+      sort.value = reviewState.sort;
+
+      if (selectedIds.size === 0) {
+        table.innerHTML = '<div class="selection-empty">No messages selected.</div>';
+        return;
+      }
+      if (selected.length === 0) {
+        table.innerHTML = '<div class="selection-empty">No selected messages match your search.</div>';
+        return;
+      }
+
+      const visible = selected.slice(0, 500);
+      table.innerHTML =
+        '<div class="selection-review-table-head"><span>Subject</span><span>Sender</span><span>Date</span><span>Size</span></div>' +
+        visible.map(m =>
+          '<div class="selection-review-row" data-id="' + escAttr(selectionKey(m)) + '">' +
+            '<div class="selection-subject">' +
+              '<span class="selection-subject-text">' + escHtml(m.subject || "(No Subject)") + '</span>' +
+              '<span>' + escHtml(displayFolderName(m.folder) || "Unknown folder") + " · " + escHtml(displayAccount(m.account || "")) + '</span>' +
+            '</div>' +
+            '<div class="selection-sender">' +
+              '<strong>' + escHtml(m.senderName || displayEmail(m.senderEmail)) + '</strong>' +
+              '<span>' + escHtml(displayEmail(m.senderEmail) || "") + '</span>' +
+            '</div>' +
+            '<div class="selection-date">' + escHtml(formatDate(m.date)) + '</div>' +
+            '<div class="selection-size">' + formatBytes(messageSize(m)) + '</div>' +
+          '</div>'
+        ).join("") +
+        (selected.length > visible.length
+          ? '<div class="selection-review-more">Showing first ' + visible.length.toLocaleString() + " of " + selected.length.toLocaleString() + " matches. Narrow with search to inspect more.</div>"
+          : "");
+    }
+    function openSelectionReviewModal() {
+      if (selectedIds.size === 0) return;
+      const modal = document.getElementById("selectionReviewModal");
+      modal.classList.add("open");
+      modal.setAttribute("aria-hidden", "false");
+      renderSelectionReview();
+    }
+    function closeSelectionReviewModal() {
+      const modal = document.getElementById("selectionReviewModal");
+      modal.classList.remove("open");
+      modal.setAttribute("aria-hidden", "true");
+    }
+    function clearAllSelection() {
+      selectedIds.clear();
+      reviewState.query = "";
+      closeSelectionReviewModal();
+      updateSelectionUi();
+      refreshCurrentView();
+    }
+    function updateSelectionUi() {
+      const count = selectedIds.size;
+      document.getElementById("statSelected").textContent = count.toLocaleString();
+      const bar = document.getElementById("selectionBar");
+      const reviewBtn = document.getElementById("reviewSelectedBtn");
+      if (count > 0) {
+        bar.classList.add("visible");
+        reviewBtn.textContent = "Review Selected (" + count.toLocaleString() + ")";
+      } else {
+        bar.classList.remove("visible");
+        reviewBtn.textContent = "Review Selected";
+      }
+    }
+    function initSelectionReview() {
+      document.getElementById("statCardSelected").addEventListener("click", openSelectionReviewModal);
+      document.getElementById("reviewSelectedBtn").addEventListener("click", openSelectionReviewModal);
+      document.getElementById("clearSelectionBtn").addEventListener("click", clearAllSelection);
+      document.getElementById("selectionReviewClose").addEventListener("click", closeSelectionReviewModal);
+      document.getElementById("selectionReviewClear").addEventListener("click", clearAllSelection);
+      document.getElementById("selectionReviewExport").addEventListener("click", exportSelectedCSV);
+      document.getElementById("selectionReviewSearch").addEventListener("input", e => {
+        reviewState.query = e.target.value;
+        renderSelectionReview();
+      });
+      document.getElementById("selectionReviewSort").addEventListener("change", e => {
+        reviewState.sort = e.target.value;
+        renderSelectionReview();
+      });
+      document.getElementById("selectionReviewModal").addEventListener("click", e => {
+        if (e.target.id === "selectionReviewModal") closeSelectionReviewModal();
+      });
+    }
+    
+    // ═══════════════════════════════════════════
+    //  COMPUTE ANALYTICS FROM MESSAGES
+    // ═══════════════════════════════════════════
+    function computeAnalytics() {
+      messages = selectedFolders.size === 0 
+        ? allMessages 
+        : allMessages.filter(m => selectedFolders.has(m.folder));
+      
+      totalEmails = messages.length;
+      totalUnread = messages.filter(m => !m.read).length;
+      totalSize = messages.reduce((sum, m) => sum + (m.size || 0), 0);
+      
+      // By sender with year/month breakdown
+      const senderMap = {};
+      messages.forEach(m => {
+        if (!senderMap[m.senderEmail]) {
+          senderMap[m.senderEmail] = { 
+            email: m.senderEmail, name: m.senderName, domain: m.domain,
+            count: 0, unread: 0, size: 0, byYear: {}
+          };
+        }
+        const s = senderMap[m.senderEmail];
+        s.count++;
+        if (!m.read) s.unread++;
+        s.size += m.size || 0;
+        
+        if (!s.byYear[m.year]) s.byYear[m.year] = { year: m.year, count: 0, unread: 0, months: {} };
+        s.byYear[m.year].count++;
+        if (!m.read) s.byYear[m.year].unread++;
+        
+        if (!s.byYear[m.year].months[m.month]) {
+          s.byYear[m.year].months[m.month] = { month: m.month, monthName: m.monthName, count: 0, unread: 0 };
+        }
+        s.byYear[m.year].months[m.month].count++;
+        if (!m.read) s.byYear[m.year].months[m.month].unread++;
+      });
+      
+      bySender = Object.values(senderMap)
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 50)
+        .map(s => ({
+          ...s,
+          byYear: Object.values(s.byYear)
+            .sort((a, b) => b.year - a.year)
+            .map(y => ({
+              ...y,
+              months: Object.values(y.months).sort((a, b) => b.month - a.month)
+            }))
+        }));
+      
+      uniqueSenders = Object.keys(senderMap).length;
+      
+      // By domain
+      const domainMap = {};
+      messages.forEach(m => {
+        if (!domainMap[m.domain]) {
+          domainMap[m.domain] = { domain: m.domain, count: 0, unread: 0, size: 0, senders: new Set() };
+        }
+        domainMap[m.domain].count++;
+        if (!m.read) domainMap[m.domain].unread++;
+        domainMap[m.domain].size += m.size || 0;
+        domainMap[m.domain].senders.add(m.senderEmail);
+      });
+      
+      byDomain = Object.values(domainMap)
+        .map(d => ({ ...d, senders: d.senders.size }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 30);
+      
+      uniqueDomains = Object.keys(domainMap).length;
+      
+      // By month
+      const monthMap = {};
+      messages.forEach(m => {
+        const key = m.year + "-" + String(m.month).padStart(2, "0");
+        if (!monthMap[key]) {
+          monthMap[key] = { month: key, label: m.monthName + " " + m.year, count: 0, unread: 0 };
+        }
+        monthMap[key].count++;
+        if (!m.read) monthMap[key].unread++;
+      });
+      byMonth = Object.values(monthMap).sort((a, b) => a.month.localeCompare(b.month));
+      
+      // Pie tree (year -> month -> domain)
+      pieTree = {};
+      messages.forEach(m => {
+        const year = String(m.year);
+        if (!pieTree[year]) pieTree[year] = {};
+        if (!pieTree[year][m.monthName]) pieTree[year][m.monthName] = {};
+        if (!pieTree[year][m.monthName][m.domain]) pieTree[year][m.monthName][m.domain] = 0;
+        pieTree[year][m.monthName][m.domain]++;
+      });
+      
+      // Size buckets
+      const MB = 1024 * 1024;
+      const buckets = [
+        { key: "25mb-plus", title: "> 25 MB", min: 25 * MB, max: Infinity, count: 0, size: 0 },
+        { key: "10-25mb", title: "10-25 MB", min: 10 * MB, max: 25 * MB, count: 0, size: 0 },
+        { key: "5-10mb", title: "5-10 MB", min: 5 * MB, max: 10 * MB, count: 0, size: 0 },
+        { key: "1-5mb", title: "1-5 MB", min: MB, max: 5 * MB, count: 0, size: 0 },
+        { key: "under-1mb", title: "< 1 MB", min: 1, max: MB, count: 0, size: 0 },
+      ];
+      messages.forEach(m => {
+        if (m.size > 0) {
+          const bucket = buckets.find(b => m.size >= b.min && m.size < b.max);
+          if (bucket) { bucket.count++; bucket.size += m.size; }
+        }
+      });
+      sizeBuckets = buckets.filter(b => b.count > 0);
+      
+      // Heavy senders/domains
+      heavySenders = bySender.filter(s => s.size > 0).sort((a, b) => b.size - a.size).slice(0, 10);
+      heavyDomains = byDomain.filter(d => d.size > 0).sort((a, b) => b.size - a.size).slice(0, 10);
+    }
+    
+    function updateStats() {
+      document.getElementById("statTotal").textContent = totalEmails.toLocaleString();
+      document.getElementById("statUnread").textContent = totalUnread.toLocaleString();
+      document.getElementById("statSenders").textContent = uniqueSenders.toLocaleString();
+      document.getElementById("statDomains").textContent = uniqueDomains.toLocaleString();
+      document.getElementById("statSize").textContent = formatBytes(totalSize);
+      updateSelectionUi();
+    }
+    
+    const PALETTE = ["#3b82f6","#8b5cf6","#ec4899","#14b8a6","#f97316","#06b6d4","#a855f7","#eab308","#ef4444","#22c55e","#6366f1","#f43f5e","#0ea5e9","#d946ef","#84cc16"];
+    const colorFor = i => PALETTE[i % PALETTE.length];
+
+    function cssVar(name) {
+      return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    }
+
+    function shortMonthLabel(label, monthKey) {
+      if (label && label.includes(" ")) {
+        const parts = label.split(" ");
+        return parts[0] + " '" + String(parts[parts.length - 1]).slice(-2);
+      }
+      if (monthKey && monthKey.includes("-")) {
+        const [year, month] = monthKey.split("-");
+        const date = new Date(Number(year), Number(month) - 1, 1);
+        return date.toLocaleString("default", { month: "short" }) + " '" + String(year).slice(-2);
+      }
+      return String(label || "").substring(0, 8);
+    }
+    
+    function maskEmail(email) {
+      if (!email || !email.includes("@")) return email;
+      const [local, domain] = email.split("@");
+      return (local.length <= 1 ? local + "***" : local[0] + "***") + "@" + maskDomain(domain);
+    }
+    function maskDomain(domain) {
+      if (!domain) return domain;
+      const parts = domain.split(".");
+      if (parts.length < 2) return domain[0] + "***";
+      return parts.slice(0, -1).join(".")[0] + "***." + parts[parts.length - 1];
+    }
+    const displayDomain = d => privacyMode ? maskDomain(d) : d;
+    const displayEmail = e => privacyMode ? maskEmail(e) : e;
+    function maskAccountText(text) {
+      return String(text || "").replace(/([a-zA-Z0-9._%+-]+)@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g, (_, local, domain) => maskEmail(local + "@" + domain));
+    }
+    function displayAccount(account) {
+      if (!account) return "";
+      return privacyMode ? maskAccountText(String(account)) : account;
+    }
+    function maskFolderName(name) {
+      if (!name || typeof name !== "string") return name || "";
+      const trimmed = name.trim();
+      if (!trimmed) return name;
+      if (trimmed.includes("@")) return maskEmail(trimmed);
+      if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(trimmed)) return maskDomain(trimmed);
+      return trimmed.length <= 1 ? trimmed + "***" : trimmed.charAt(0) + "***";
+    }
+    function displayFolderName(name, path) {
+      const leaf = name || (path ? path.split("/").pop() : "") || "";
+      return privacyMode && leaf ? maskFolderName(leaf) : leaf;
+    }
+    const escAttr = s => String(s || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+    
+    function formatBytes(bytes) {
+      const n = Number(bytes) || 0;
+      if (n < 1024) return n + " B";
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+      if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + " MB";
+      return (n / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+    }
+    const escHtml = s => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    
+    // Theme toggle
+    document.getElementById("themeToggle").addEventListener("click", () => {
+      const cur = document.documentElement.getAttribute("data-theme");
+      const next = cur === "dark" ? "light" : "dark";
+      document.documentElement.setAttribute("data-theme", next);
+      document.getElementById("themeToggle").textContent = next === "dark" ? "☀" : "☾";
+      localStorage.setItem("inboxpie-theme", next);
+      refreshCurrentView();
+    });
+    
+    // Load saved theme
+    const savedTheme = localStorage.getItem("inboxpie-theme");
+    if (savedTheme) {
+      document.documentElement.setAttribute("data-theme", savedTheme);
+      document.getElementById("themeToggle").textContent = savedTheme === "dark" ? "☀" : "☾";
+    }
+    
+    // Privacy toggle
+    document.getElementById("privacyToggle").addEventListener("click", () => {
+      privacyMode = !privacyMode;
+      document.getElementById("privacyToggle").classList.toggle("active", privacyMode);
+      refreshCurrentView();
+    });
+    
+    // Tab switching
+    document.querySelectorAll(".tab").forEach(tab => {
+      tab.addEventListener("click", () => {
+        document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+        document.querySelectorAll(".view-panel").forEach(p => p.classList.remove("active"));
+        tab.classList.add("active");
+        currentView = tab.dataset.view;
+        document.getElementById(currentView + "View").classList.add("active");
+        if (currentView === "sunburst") renderSunburst();
+        else if (currentView === "sender") renderSenderTable();
+        else if (currentView === "domain") renderDomainTable();
+        else if (currentView === "timeline") renderTimeline();
+        else if (currentView === "size") renderSizeView();
+      });
+    });
+    
+    // ═══════════════════════════════════════════
+    //  SUNBURST
+    // ═══════════════════════════════════════════
+    function calcTotal(obj, depth) {
+      if (depth === 3 || typeof obj === "number") return obj;
+      return Object.values(obj).reduce((sum, v) => sum + calcTotal(v, depth + 1), 0);
+    }
+    
+    function renderSunburst() {
+      const svg = document.getElementById("sunburstSvg");
+      const legend = document.getElementById("legendPanel");
+      const detail = document.getElementById("sunburstDetail");
+      svg.innerHTML = ""; detail.innerHTML = "";
+      
+      const cx = 350, cy = 350;
+      const rings = [
+        { innerR: 70, outerR: 140 },
+        { innerR: 145, outerR: 220 },
+        { innerR: 225, outerR: 300 }
+      ];
+      
+      let data = pieTree, total = calcTotal(pieTree, 0);
+      if (breadcrumbPath.length === 1) { data = pieTree[breadcrumbPath[0]] || {}; total = calcTotal(data, 1); }
+      else if (breadcrumbPath.length === 2) { data = pieTree[breadcrumbPath[0]]?.[breadcrumbPath[1]] || {}; total = calcTotal(data, 2); }
+      
+      if (total === 0) {
+        addSvgText(svg, cx, cy, "No data", { fill: cssVar("--text-muted"), fontSize: "14" });
+        return;
+      }
+
+      addSvgText(svg, cx, cy - 10, total.toLocaleString(), { fill: cssVar("--accent"), fontSize: "26", fontWeight: "700", fontFamily: "var(--font-mono)" });
+      addSvgText(svg, cx, cy + 16, "EMAILS", { fill: cssVar("--text-muted"), fontSize: "10", letterSpacing: "1.5" });
+      
+      const legendYears = [], legendDomains = {};
+      
+      if (breadcrumbPath.length === 0) {
+        const years = Object.keys(pieTree).sort().reverse();
+        let angle0 = 0;
+        years.forEach((year, yi) => {
+          const yearTotal = calcTotal(pieTree[year], 1);
+          const yearAngle = (yearTotal / total) * 360;
+          const color = colorFor(yi);
+          legendYears.push({ label: year, color, count: yearTotal });
+          drawArc(svg, cx, cy, rings[0].innerR, rings[0].outerR, angle0, angle0 + yearAngle, color, 0.9,
+            () => { breadcrumbPath = [year]; renderSunburst(); renderBreadcrumb(); },
+            e => showTooltip(e, year, yearTotal, total)
+          );
+          if (yearAngle > 15) {
+            const pt = polarToCartesian(cx, cy, (rings[0].innerR + rings[0].outerR) / 2, angle0 + yearAngle / 2);
+            addSvgText(svg, pt.x, pt.y + 4, year, { fill: "#fff", fontSize: "11", fontWeight: "600" });
+          }
+          const months = Object.keys(pieTree[year]);
+          const monthOrder = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+          months.sort((a, b) => monthOrder.indexOf(a) - monthOrder.indexOf(b));
+          let angle1 = angle0;
+          months.forEach((month, mi) => {
+            const monthTotal = calcTotal(pieTree[year][month], 2);
+            const monthAngle = (monthTotal / total) * 360;
+            const mColor = colorFor(yi * 4 + mi);
+            drawArc(svg, cx, cy, rings[1].innerR, rings[1].outerR, angle1, angle1 + monthAngle, mColor, 0.7,
+              () => { breadcrumbPath = [year, month]; renderSunburst(); renderBreadcrumb(); },
+              e => showTooltip(e, month + " " + year, monthTotal, total)
+            );
+            if (monthAngle > 18) {
+              const pt = polarToCartesian(cx, cy, (rings[1].innerR + rings[1].outerR) / 2, angle1 + monthAngle / 2);
+              addSvgText(svg, pt.x, pt.y + 4, month.substring(0, 3), { fill: "#fff", fontSize: "9", fontWeight: "600" });
+            }
+            const domains = Object.entries(pieTree[year][month]).sort((a, b) => b[1] - a[1]).slice(0, 15);
+            let angle2 = angle1;
+            domains.forEach(([domain, count], di) => {
+              const domainAngle = (count / total) * 360;
+              const dColor = colorFor(di + 3);
+              if (!legendDomains[domain]) legendDomains[domain] = { color: dColor, count: 0 };
+              legendDomains[domain].count += count;
+              drawArc(svg, cx, cy, rings[2].innerR, rings[2].outerR, angle2, angle2 + domainAngle, dColor, 0.55,
+                () => showDomainDetail(domain, year, month),
+                e => showTooltip(e, displayDomain(domain), count, total)
+              );
+              angle2 += domainAngle;
+            });
+            angle1 += monthAngle;
+          });
+          angle0 += yearAngle;
+        });
+      } else if (breadcrumbPath.length === 1) {
+        const year = breadcrumbPath[0];
+        const yearData = pieTree[year] || {};
+        const months = Object.keys(yearData);
+        const monthOrder = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+        months.sort((a, b) => monthOrder.indexOf(a) - monthOrder.indexOf(b));
+        let angle = 0;
+        months.forEach((month, mi) => {
+          const monthTotal = calcTotal(yearData[month], 2);
+          const monthAngle = (monthTotal / total) * 360;
+          const color = colorFor(mi);
+          legendYears.push({ label: month, color, count: monthTotal });
+          drawArc(svg, cx, cy, rings[0].innerR, rings[1].outerR, angle, angle + monthAngle, color, 0.8,
+            () => { breadcrumbPath = [year, month]; renderSunburst(); renderBreadcrumb(); },
+            e => showTooltip(e, month + " " + year, monthTotal, total)
+          );
+          if (monthAngle > 12) {
+            const pt = polarToCartesian(cx, cy, (rings[0].innerR + rings[1].outerR) / 2, angle + monthAngle / 2);
+            addSvgText(svg, pt.x, pt.y + 4, month, { fill: "#fff", fontSize: "11", fontWeight: "600" });
+          }
+          const domains = Object.entries(yearData[month] || {}).sort((a, b) => b[1] - a[1]).slice(0, 12);
+          let angle2 = angle;
+          domains.forEach(([domain, count], di) => {
+            const domainAngle = (count / total) * 360;
+            const dColor = colorFor(di + mi * 2);
+            if (!legendDomains[domain]) legendDomains[domain] = { color: dColor, count: 0 };
+            legendDomains[domain].count += count;
+            drawArc(svg, cx, cy, rings[2].innerR, rings[2].outerR, angle2, angle2 + domainAngle, dColor, 0.6,
+              () => showDomainDetail(domain, year, month),
+              e => showTooltip(e, displayDomain(domain), count, total)
+            );
+            angle2 += domainAngle;
+          });
+          angle += monthAngle;
+        });
+      } else if (breadcrumbPath.length === 2) {
+        const [year, month] = breadcrumbPath;
+        const monthData = pieTree[year]?.[month] || {};
+        const domains = Object.entries(monthData).sort((a, b) => b[1] - a[1]);
+        let angle = 0;
+        domains.forEach(([domain, count], di) => {
+          const domainAngle = (count / total) * 360;
+          const color = colorFor(di);
+          legendYears.push({ label: displayDomain(domain), color, count });
+          drawArc(svg, cx, cy, rings[0].innerR, rings[2].outerR, angle, angle + domainAngle, color, 0.75,
+            () => showDomainDetail(domain, year, month),
+            e => showTooltip(e, displayDomain(domain), count, total)
+          );
+          if (domainAngle > 10) {
+            const pt = polarToCartesian(cx, cy, (rings[0].innerR + rings[2].outerR) / 2, angle + domainAngle / 2);
+            addSvgText(svg, pt.x, pt.y + 4, displayDomain(domain).substring(0, 12), { fill: "#fff", fontSize: "10", fontWeight: "600" });
+          }
+          angle += domainAngle;
+        });
+      }
+      
+      svg.addEventListener("mouseleave", hideTooltip);
+      renderBreadcrumb();
+      renderLegend(legend, legendYears, legendDomains);
+    }
+    
+    function drawArc(svg, cx, cy, r1, r2, startAngle, endAngle, color, opacity, onClick, onHover) {
+      if (endAngle - startAngle < 0.5) return;
+      const gap = 0.8, sa = startAngle + gap / 2, ea = endAngle - gap / 2;
+      if (ea <= sa) return;
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", describeArc(cx, cy, r1, r2, sa, ea));
+      path.setAttribute("fill", color);
+      path.setAttribute("opacity", opacity);
+      path.setAttribute("stroke", cssVar("--svg-gap-stroke"));
+      path.setAttribute("stroke-width", "2");
+      path.style.cursor = onClick ? "pointer" : "default";
+      path.style.transition = "opacity 0.15s";
+      path.addEventListener("mouseenter", e => { path.setAttribute("opacity", Math.min(1, opacity + 0.25)); if (onHover) onHover(e); });
+      path.addEventListener("mousemove", e => { if (onHover) onHover(e); });
+      path.addEventListener("mouseleave", () => { path.setAttribute("opacity", opacity); });
+      if (onClick) path.addEventListener("click", onClick);
+      svg.appendChild(path);
+    }
+    
+    function describeArc(cx, cy, r1, r2, startAngle, endAngle) {
+      const s1 = polarToCartesian(cx, cy, r2, endAngle);
+      const s2 = polarToCartesian(cx, cy, r2, startAngle);
+      const s3 = polarToCartesian(cx, cy, r1, startAngle);
+      const s4 = polarToCartesian(cx, cy, r1, endAngle);
+      const large = endAngle - startAngle > 180 ? 1 : 0;
+      return `M ${s2.x} ${s2.y} A ${r2} ${r2} 0 ${large} 1 ${s1.x} ${s1.y} L ${s4.x} ${s4.y} A ${r1} ${r1} 0 ${large} 0 ${s3.x} ${s3.y} Z`;
+    }
+    
+    function polarToCartesian(cx, cy, r, angleDeg) {
+      const rad = ((angleDeg - 90) * Math.PI) / 180;
+      return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+    }
+    
+    function addSvgText(svg, x, y, text, opts) {
+      const el = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      el.setAttribute("x", x); el.setAttribute("y", y);
+      el.setAttribute("text-anchor", "middle");
+      el.setAttribute("fill", opts.fill || "#fff");
+      el.setAttribute("font-size", opts.fontSize || "12");
+      if (opts.fontWeight) el.setAttribute("font-weight", opts.fontWeight);
+      if (opts.fontFamily) el.setAttribute("font-family", opts.fontFamily);
+      if (opts.letterSpacing) el.setAttribute("letter-spacing", opts.letterSpacing);
+      el.textContent = text;
+      svg.appendChild(el);
+    }
+    
+    function showTooltip(e, label, count, total) {
+      const tt = document.getElementById("tooltip");
+      tt.querySelector(".tt-label").textContent = label;
+      tt.querySelector(".tt-count").textContent = count.toLocaleString() + " emails";
+      tt.querySelector(".tt-pct").textContent = ((count / total) * 100).toFixed(1) + "% of total";
+      tt.style.display = "block";
+      tt.style.left = (e.clientX + 15) + "px";
+      tt.style.top = (e.clientY - 10) + "px";
+    }
+    function hideTooltip() { document.getElementById("tooltip").style.display = "none"; }
+    
+    function renderBreadcrumb() {
+      const bc = document.getElementById("breadcrumb");
+      bc.innerHTML = '<span data-level="-1">All Mail</span>';
+      breadcrumbPath.forEach((item, i) => {
+        bc.innerHTML += '<span class="bc-sep">›</span><span data-level="' + i + '">' + escHtml(item) + '</span>';
+      });
+      bc.querySelectorAll("span[data-level]").forEach(el => {
+        el.addEventListener("click", () => {
+          breadcrumbPath = breadcrumbPath.slice(0, parseInt(el.dataset.level) + 1);
+          renderSunburst();
+        });
+      });
+    }
+    
+    function renderLegend(panel, years, domains) {
+      let html = '<div class="legend-title">Chart Legend</div>';
+      if (years.length > 0) {
+        const title = breadcrumbPath.length === 0 ? "Years" : breadcrumbPath.length === 1 ? "Months" : "Domains";
+        html += '<div class="legend-section"><div class="legend-section-title">' + title + '</div>';
+        years.slice(0, 15).forEach(y => {
+          html += '<div class="legend-item"><div class="legend-swatch" style="background:' + y.color + '"></div><span class="legend-label">' + escHtml(y.label) + '</span><span class="legend-count">' + y.count.toLocaleString() + '</span></div>';
+        });
+        html += '</div>';
+      }
+      if (breadcrumbPath.length < 2 && Object.keys(domains).length > 0) {
+        const topDomains = Object.entries(domains).sort((a, b) => b[1].count - a[1].count).slice(0, 12);
+        html += '<div class="legend-section"><div class="legend-section-title">Top Domains</div>';
+        topDomains.forEach(([name, d]) => {
+          html += '<div class="legend-item"><div class="legend-swatch" style="background:' + d.color + '"></div><span class="legend-label">' + escHtml(displayDomain(name)) + '</span><span class="legend-count">' + d.count.toLocaleString() + '</span></div>';
+        });
+        html += '</div>';
+      }
+      panel.innerHTML = html;
+    }
+    
+    function showDomainDetail(domain, year, month) {
+      const detail = document.getElementById("sunburstDetail");
+      const scopeMsgs = messages.filter(m =>
+        String(m.year) === String(year) && m.monthName === month && m.domain === domain
+      );
+      sunburstDetailScope = { domain, msgs: scopeMsgs };
+      const bySenderMap = {};
+      scopeMsgs.forEach(m => {
+        if (!bySenderMap[m.senderEmail]) bySenderMap[m.senderEmail] = { name: m.senderName, count: 0 };
+        bySenderMap[m.senderEmail].count++;
+      });
+      const sorted = Object.entries(bySenderMap).sort((a, b) => b[1].count - a[1].count);
+      detail.innerHTML =
+        '<h3 style="font-size:14px;margin-bottom:12px;color:var(--accent);">' + escHtml(displayDomain(domain)) + ' — ' + scopeMsgs.length.toLocaleString() + ' emails in ' + escHtml(month) + ' ' + escHtml(year) + '</h3>' +
+        '<table><thead><tr><th>Sender</th><th>Count</th><th>Select</th></tr></thead><tbody>' +
+        sorted.map(([email, data]) => {
+          const senderMsgs = scopeMsgs.filter(m => m.senderEmail === email);
+          const allSelected = senderMsgs.length > 0 && senderMsgs.every(m => isSelectedMessage(m));
+          return '<tr><td><strong>' + escHtml(data.name || displayEmail(email)) + '</strong><br><span style="font-size:11px;color:var(--text-muted);">' + escHtml(displayEmail(email)) + '</span></td>' +
+            '<td style="font-family:var(--font-mono);color:var(--accent);">' + data.count.toLocaleString() + '</td>' +
+            '<td><button type="button" class="btn btn-secondary" style="font-size:11px;padding:4px 10px;" data-select-email="' + escAttr(email) + '">' + (allSelected ? "Selected" : "Select") + '</button></td></tr>';
+        }).join("") +
+        '</tbody></table>';
+      detail.querySelectorAll("[data-select-email]").forEach(btn => {
+        btn.addEventListener("click", () => selectSenderForReview(btn.dataset.selectEmail, sunburstDetailScope.msgs));
+      });
+    }
+    
+    // ═══════════════════════════════════════════
+    //  SENDER TABLE WITH YEAR → MONTH ACCORDION
+    // ═══════════════════════════════════════════
+    function renderSenderTable() {
+      const container = document.getElementById("senderTable");
+      const search = document.getElementById("senderSearch");
+      const q = (search.value || "").toLowerCase();
+      let entries = bySender.filter(s => !q || s.email.toLowerCase().includes(q) || (s.name || "").toLowerCase().includes(q));
+      const maxCount = entries.length ? entries[0].count : 1;
+      
+      const bySenderMap = buildBySenderMap();
+
+      container.innerHTML = entries.slice(0, 50).map((s, i) => {
+        const pct = ((s.count / maxCount) * 100).toFixed(0);
+        const color = colorFor(i);
+        const expanded = expandedSenders.has(s.email);
+        const byYear = s.byYear || [];
+        const yMax = byYear.length ? Math.max(...byYear.map(y => y.count)) : 1;
+        
+        const yearRowsHtml = expanded ? byYear.map((y, yi) => {
+          const yearKey = senderYearKey(s.email, y.year);
+          const yearExpanded = expandedSenderYears.has(yearKey);
+          const ypct = ((y.count / yMax) * 100).toFixed(0);
+          const ycolor = colorFor(yi + i * 2);
+          const months = y.months || [];
+          const mMax = months.length ? Math.max(...months.map(m => m.count)) : 1;
+          
+          const monthRowsHtml = yearExpanded ? months.map((m, mi) => {
+            const mpct = ((m.count / mMax) * 100).toFixed(0);
+            const mcolor = colorFor(mi + yi * 2 + i);
+            const monthMsgs = getSenderMessages(s.email, y.year, m.month);
+            const monthSel = monthMsgs.length > 0 && monthMsgs.some(msg => isSelectedMessage(msg));
+            return '<div class="child-row sender-month-row' + (monthSel ? " selected" : "") + '" data-email="' + escAttr(s.email) + '" data-year="' + y.year + '" data-month="' + String(m.month).padStart(2, "0") + '">' +
+              '<div class="sr-check"></div>' +
+              '<div class="sr-info"><div class="sr-name">' + escHtml(m.monthName) + '</div><div class="sr-email">' + y.year + ' · ' + m.count + ' emails</div></div>' +
+              '<div class="sr-count" style="font-size:13px;">' + m.count.toLocaleString() + '</div>' +
+              '<div class="sr-bar-wrap"><div class="sr-bar" style="width:' + mpct + '%;background:' + mcolor + ';"></div></div>' +
+              '<div class="sr-unread">' + (m.unread ? m.unread + ' unread' : '') + '</div>' +
+            '</div>';
+          }).join("") : "";
+
+          const yearMsgs = getSenderMessages(s.email, y.year);
+          const yearSel = yearMsgs.length > 0 && yearMsgs.some(msg => isSelectedMessage(msg));
+          return '<div class="sender-year-group" data-email="' + escAttr(s.email) + '" data-year="' + y.year + '">' +
+            '<div class="child-row sender-year-row ' + (yearExpanded ? "expanded" : "") + (yearSel ? " selected" : "") + '" data-email="' + escAttr(s.email) + '" data-year="' + y.year + '">' +
+              '<div class="sr-check"></div>' +
+              '<div class="sr-info"><div class="sr-name">' + y.year + '</div><div class="sr-email">this sender · ' + y.count + ' emails</div></div>' +
+              '<div class="sr-count" style="font-size:13px;">' + y.count.toLocaleString() + '</div>' +
+              '<div class="sr-bar-wrap"><div class="sr-bar" style="width:' + ypct + '%;background:' + ycolor + ';"></div></div>' +
+              '<div class="sr-unread">' + (y.unread ? y.unread + ' unread' : '') + '</div>' +
+              '<div class="sr-expand" style="width:20px;">›</div>' +
+            '</div>' +
+            (yearExpanded ? '<div class="sender-month-list" style="margin-left:16px;margin-top:6px;">' + monthRowsHtml + '</div>' : '') +
+          '</div>';
+        }).join("") : "";
+        
+        const senderMsgs = getSenderMessages(s.email);
+        const senderSel = senderMsgs.length > 0 && senderMsgs.some(msg => isSelectedMessage(msg));
+        return '<div class="sender-group" data-email="' + escAttr(s.email) + '">' +
+          '<div class="sender-row sender-head ' + (expanded ? "expanded" : "") + (senderSel ? " selected" : "") + '">' +
+            '<div class="sr-check"></div>' +
+            '<div class="sr-info"><div class="sr-name">' + escHtml(s.name || displayEmail(s.email)) + '</div><div class="sr-email">' + escHtml(displayEmail(s.email)) + '</div></div>' +
+            '<div class="sr-count">' + s.count.toLocaleString() + '</div>' +
+            '<div class="sr-bar-wrap"><div class="sr-bar" style="width:' + pct + '%;background:' + color + ';"></div></div>' +
+            '<div class="sr-unread">' + (s.unread ? s.unread + " unread" : "") + '</div>' +
+            '<div class="sr-expand">›</div>' +
+          '</div>' +
+          '<div class="child-list ' + (expanded ? "visible" : "") + '">' + yearRowsHtml + '</div>' +
+        '</div>';
+      }).join("");
+      
+      container.querySelectorAll(".sender-group").forEach(group => {
+        const email = group.dataset.email;
+        const senderMsgs = bySenderMap[email] || [];
+        const head = group.querySelector(".sender-head");
+        const chev = head && head.querySelector(".sr-expand");
+
+        if (chev) {
+          chev.addEventListener("click", e => {
+            e.stopPropagation();
+            if (expandedSenders.has(email)) expandedSenders.delete(email);
+            else expandedSenders.add(email);
+            renderSenderTable();
+          });
+        }
+
+        if (head) {
+          head.addEventListener("click", e => {
+            if (e.target.closest(".sr-expand")) return;
+            if (!e.target.closest(".sr-check")) return;
+            e.stopPropagation();
+            toggleMessages(senderMsgs);
+          });
+        }
+
+        group.querySelectorAll(".sender-year-row").forEach(row => {
+          row.addEventListener("click", e => {
+            if (e.target.closest(".sr-expand")) {
+              e.stopPropagation();
+              const yearKey = senderYearKey(email, row.dataset.year);
+              if (expandedSenderYears.has(yearKey)) expandedSenderYears.delete(yearKey);
+              else expandedSenderYears.add(yearKey);
+              renderSenderTable();
+              return;
+            }
+            e.stopPropagation();
+            if (!e.target.closest(".sr-check")) return;
+            const y = Number(row.dataset.year);
+            const ymsgs = senderMsgs.filter(m => m.year === y);
+            toggleMessages(ymsgs);
+          });
+        });
+
+        group.querySelectorAll(".sender-month-row").forEach(row => {
+          row.addEventListener("click", e => {
+            e.stopPropagation();
+            if (!e.target.closest(".sr-check")) return;
+            const y = Number(row.dataset.year);
+            const mo = Number(row.dataset.month);
+            const mmsgs = senderMsgs.filter(m => m.year === y && m.month === mo);
+            toggleMessages(mmsgs);
+          });
+        });
+      });
+      
+      search.oninput = () => renderSenderTable();
+    }
+    
+    // ═══════════════════════════════════════════
+    //  DOMAIN TABLE WITH ACCORDION
+    // ═══════════════════════════════════════════
+    function renderDomainTable() {
+      const container = document.getElementById("domainTable");
+      const search = document.getElementById("domainSearch");
+      const q = (search.value || "").toLowerCase();
+      let entries = byDomain.filter(d => !q || d.domain.toLowerCase().includes(q));
+      const maxCount = entries.length ? entries[0].count : 1;
+      
+      container.innerHTML = entries.slice(0, 50).map((d, i) => {
+        const pct = ((d.count / maxCount) * 100).toFixed(0);
+        const color = colorFor(i);
+        const expanded = expandedDomains.has(d.domain);
+        const domainSenders = bySender.filter(s => s.domain === d.domain).slice(0, 8);
+        const domainMsgs = messages.filter(m => m.domain === d.domain);
+        const domainSel = domainMsgs.length > 0 && domainMsgs.some(m => isSelectedMessage(m));
+        return '<div class="domain-group" data-domain="' + escAttr(d.domain) + '">' +
+          '<div class="sender-row domain-head ' + (expanded ? "expanded" : "") + (domainSel ? " selected" : "") + '">' +
+            '<div class="sr-check"></div>' +
+            '<div class="sr-info"><div class="sr-name">' + escHtml(displayDomain(d.domain)) + '</div><div class="sr-email">' + (d.senders || 0) + ' senders</div></div>' +
+            '<div class="sr-count">' + d.count.toLocaleString() + '</div>' +
+            '<div class="sr-bar-wrap"><div class="sr-bar" style="width:' + pct + '%;background:' + color + ';"></div></div>' +
+            '<div class="sr-unread">' + (d.unread ? d.unread + " unread" : "") + '</div>' +
+            '<div class="sr-expand">›</div>' +
+          '</div>' +
+          '<div class="child-list ' + (expanded ? "visible" : "") + '">' +
+            domainSenders.map((s, si) => {
+              const senderMsgs = messages.filter(m => m.domain === d.domain && m.senderEmail === s.email);
+              const senderSel = senderMsgs.length > 0 && senderMsgs.some(m => isSelectedMessage(m));
+              return '<div class="child-row' + (senderSel ? " selected" : "") + '" data-domain="' + escAttr(d.domain) + '" data-email="' + escAttr(s.email) + '">' +
+                '<div class="sr-check"></div>' +
+                '<div class="sr-info"><div class="sr-name">' + escHtml(s.name || displayEmail(s.email)) + '</div><div class="sr-email">' + escHtml(displayEmail(s.email)) + '</div></div>' +
+                '<div class="sr-count" style="font-size:13px;">' + s.count.toLocaleString() + '</div>' +
+                '<div class="sr-bar-wrap"><div class="sr-bar" style="width:' + ((s.count / domainSenders[0].count) * 100).toFixed(0) + '%;background:' + colorFor(si + i * 2) + ';"></div></div>' +
+                '<div class="sr-unread">' + (s.unread ? s.unread : "") + '</div></div>';
+            }).join("") +
+          '</div>' +
+        '</div>';
+      }).join("");
+      
+      container.querySelectorAll(".domain-group").forEach(group => {
+        const domain = group.dataset.domain;
+        const head = group.querySelector(".domain-head");
+        head.addEventListener("click", e => {
+          if (e.target.closest(".sr-check")) {
+            e.stopPropagation();
+            toggleMessages(messages.filter(m => m.domain === domain));
+            return;
+          }
+          if (expandedDomains.has(domain)) expandedDomains.delete(domain);
+          else expandedDomains.add(domain);
+          renderDomainTable();
+        });
+      });
+      container.querySelectorAll(".domain-group .child-row").forEach(row => {
+        row.addEventListener("click", e => {
+          e.stopPropagation();
+          if (e.target.closest(".sr-check")) {
+            toggleMessages(messages.filter(m => m.domain === row.dataset.domain && m.senderEmail === row.dataset.email));
+          }
+        });
+      });
+      
+      search.oninput = () => renderDomainTable();
+    }
+    
+    // ═══════════════════════════════════════════
+    //  TIMELINE
+    // ═══════════════════════════════════════════
+    function monthKey(m) {
+      return m.year + "-" + String(m.month).padStart(2, "0");
+    }
+
+    function buildTimelineMonths() {
+      if (!messages.length) return [];
+      const byMonth = {};
+      messages.forEach(m => {
+        const key = monthKey(m);
+        if (!byMonth[key]) {
+          byMonth[key] = {
+            key,
+            year: m.year,
+            month: m.month,
+            date: new Date(m.year, m.month - 1, 1),
+            label: m.monthName + " " + m.year,
+            shortLabel: m.monthName + " '" + String(m.year).slice(-2),
+            messages: [],
+            count: 0,
+            unread: 0,
+          };
+        }
+        byMonth[key].messages.push(m);
+        byMonth[key].count++;
+        if (!m.read) byMonth[key].unread++;
+      });
+
+      const sorted = Object.values(byMonth).sort((a, b) => a.key.localeCompare(b.key));
+      const filled = [];
+      let cursor = new Date(sorted[0].date);
+      const end = new Date(sorted[sorted.length - 1].date);
+      while (cursor <= end) {
+        const key = cursor.getFullYear() + "-" + String(cursor.getMonth() + 1).padStart(2, "0");
+        filled.push(byMonth[key] || {
+          key,
+          year: cursor.getFullYear(),
+          month: cursor.getMonth() + 1,
+          date: new Date(cursor),
+          label: cursor.toLocaleString("default", { month: "short", year: "numeric" }),
+          shortLabel: cursor.toLocaleString("default", { month: "short" }) + " '" + String(cursor.getFullYear()).slice(-2),
+          messages: [],
+          count: 0,
+          unread: 0,
+        });
+        cursor.setMonth(cursor.getMonth() + 1);
+      }
+      return filled;
+    }
+
+    function getVisibleTimelineMonths(months) {
+      if (timelineState.windowMonths === null || timelineState.windowMonths >= months.length) return months;
+      const size = Math.max(1, Math.min(timelineState.windowMonths, months.length));
+      const end = Math.max(size, months.length - timelineState.offsetMonths);
+      const start = Math.max(0, end - size);
+      return months.slice(start, end);
+    }
+
+    function messagesForMonths(monthList) {
+      const keys = new Set(monthList.map(m => m.key));
+      return messages.filter(m => keys.has(monthKey(m)));
+    }
+
+    function handleTimelineAction(action, windowValue, totalMonths) {
+      timelineState.selectedMonth = null;
+      if (action === "window") {
+        timelineState.windowMonths = windowValue === "all" ? null : Number(windowValue);
+        timelineState.offsetMonths = 0;
+      } else if (action === "prev" && timelineState.windowMonths !== null) {
+        timelineState.offsetMonths = Math.min(
+          Math.max(0, totalMonths - timelineState.windowMonths),
+          timelineState.offsetMonths + timelineState.windowMonths
+        );
+      } else if (action === "next" && timelineState.windowMonths !== null) {
+        timelineState.offsetMonths = Math.max(0, timelineState.offsetMonths - timelineState.windowMonths);
+      } else if (action === "zoom-in") {
+        const current = timelineState.windowMonths || totalMonths;
+        timelineState.windowMonths = Math.max(3, Math.floor(current / 2));
+        timelineState.offsetMonths = 0;
+      } else if (action === "zoom-out") {
+        const current = timelineState.windowMonths || totalMonths;
+        timelineState.windowMonths = Math.min(totalMonths, current * 2);
+        if (timelineState.windowMonths >= totalMonths) timelineState.windowMonths = null;
+        timelineState.offsetMonths = 0;
+      } else if (action === "reset") {
+        timelineState.windowMonths = Math.min(24, totalMonths);
+        timelineState.offsetMonths = 0;
+      }
+      renderTimeline();
+    }
+
+    function groupTimeline(msgs, keyFn, metaFn) {
+      const byKey = {};
+      msgs.forEach(m => {
+        const key = keyFn(m);
+        if (!byKey[key]) byKey[key] = Object.assign({ key, count: 0, messages: [] }, metaFn(m));
+        byKey[key].count++;
+        byKey[key].messages.push(m);
+      });
+      return Object.values(byKey).sort((a, b) => b.count - a.count);
+    }
+
+    function buildAgeBuckets(msgs) {
+      const now = Date.now();
+      const buckets = [
+        { bucket: "0-30", title: "0-30 days", subtitle: "Recent unread", min: 0, max: 30, messages: [] },
+        { bucket: "31-90", title: "31-90 days", subtitle: "Needs review", min: 31, max: 90, messages: [] },
+        { bucket: "91-365", title: "91-365 days", subtitle: "Likely stale", min: 91, max: 365, messages: [] },
+        { bucket: "1y-plus", title: "1 year+", subtitle: "Old unread backlog", min: 366, max: Infinity, messages: [] },
+      ];
+      msgs.filter(m => !m.read).forEach(m => {
+        const ageDays = Math.floor((now - new Date(m.date).getTime()) / 86400000);
+        const bucket = buckets.find(b => ageDays >= b.min && ageDays <= b.max);
+        if (bucket) bucket.messages.push(m);
+      });
+      return buckets
+        .map(b => Object.assign({}, b, { value: b.bucket, count: b.messages.length }))
+        .filter(b => b.count > 0);
+    }
+
+    function renderInsightRow(row, kind) {
+      const unreadText = row.unreadCount !== undefined ? " · " + row.unreadCount.toLocaleString() + " unread" : "";
+      const pctText = row.unreadPct !== undefined ? " · " + row.unreadPct + "% unread" : "";
+      const allSelected = row.messages && row.messages.length > 0 && row.messages.every(m => isSelectedMessage(m));
+      const accountAttr = row.accountId ? ' data-account-id="' + escAttr(row.accountId) + '"' : "";
+      const bucketAttr = row.bucket ? ' data-bucket="' + escAttr(row.bucket) + '"' : "";
+      const value = row.value === undefined ? row.bucket : row.value;
+      return '<div class="insight-row' + (allSelected ? " selected" : "") + '">' +
+        '<div><strong>' + escHtml(row.title) + '</strong>' +
+        '<span>' + escHtml(row.subtitle || "") + unreadText + pctText + '</span></div>' +
+        '<div class="insight-row-meta"><span>' + row.count.toLocaleString() + '</span>' +
+        '<button type="button" class="btn btn-secondary" data-select-kind="' + escAttr(kind) + '" data-value="' + escAttr(value || "") + '"' + accountAttr + bucketAttr + '>' + (allSelected ? "Selected" : "Select") + '</button></div>' +
+        '</div>';
+    }
+
+    function renderInsightCard(title, subtitle, rows, kind) {
+      const body = rows.length
+        ? rows.map(row => renderInsightRow(row, kind)).join("")
+        : '<div class="insight-empty">No matching messages in this range.</div>';
+      return '<section class="insight-card">' +
+        '<div class="insight-card-head"><h3>' + escHtml(title) + '</h3><p>' + escHtml(subtitle) + '</p></div>' +
+        '<div class="insight-rows">' + body + '</div></section>';
+    }
+
+    function renderTimelineInsights(msgs, selectedMonthKey) {
+      const insights = document.getElementById("timelineInsights");
+      if (!insights) return;
+
+      const unread = msgs.filter(m => !m.read);
+      const total = msgs.length;
+      const unreadPct = total ? Math.round((unread.length / total) * 100) : 0;
+
+      const topUnreadSenders = groupTimeline(
+        msgs.filter(m => !m.read),
+        m => m.senderEmail,
+        m => ({ title: m.senderName || displayEmail(m.senderEmail), subtitle: displayEmail(m.senderEmail), value: m.senderEmail })
+      ).slice(0, 8);
+
+      const ageBuckets = buildAgeBuckets(msgs);
+
+      const noisyDomains = groupTimeline(
+        msgs,
+        m => m.domain,
+        m => ({ title: displayDomain(m.domain), subtitle: "domain volume", value: m.domain })
+      )
+        .map(row => {
+          const unreadCount = row.messages.filter(m => !m.read).length;
+          return Object.assign({}, row, {
+            unreadCount,
+            unreadPct: row.count ? Math.round((unreadCount / row.count) * 100) : 0,
+          });
+        })
+        .sort((a, b) => (b.unreadCount + b.count * 0.2) - (a.unreadCount + a.count * 0.2))
+        .slice(0, 8);
+
+      const folderHotspots = groupTimeline(
+        msgs,
+        m => (m.account || m.accountId || "") + "::" + (m.folder || ""),
+        m => ({
+          title: displayFolderName(m.folder) || "(Unknown folder)",
+          subtitle: displayAccount(m.account || m.accountId || ""),
+          value: m.folder || "",
+          accountId: m.account || m.accountId || "",
+        })
+      ).slice(0, 8);
+
+      insights.innerHTML =
+        '<div class="timeline-kpis">' +
+        '<div class="timeline-kpi"><span>' + total.toLocaleString() + '</span><label>Emails in range</label></div>' +
+        '<div class="timeline-kpi"><span>' + unread.length.toLocaleString() + '</span><label>Unread</label></div>' +
+        '<div class="timeline-kpi"><span>' + unreadPct + '%</span><label>Unread rate</label></div>' +
+        '<div class="timeline-kpi"><span>' + new Set(msgs.map(m => m.senderEmail)).size.toLocaleString() + '</span><label>Senders</label></div>' +
+        '</div>' +
+        '<div class="insight-grid">' +
+        renderInsightCard("Top Unread Senders", "Prioritize senders creating unread backlog.", topUnreadSenders, "sender") +
+        renderInsightCard("Old Unread Mail", "Find stale unread groups by age.", ageBuckets, "age") +
+        renderInsightCard("Noisy Domains", "High-volume domains with cleanup potential.", noisyDomains, "domain") +
+        renderInsightCard("Folder Hotspots", "Where inbox clutter is concentrated.", folderHotspots, "folder") +
+        '</div>' +
+        (selectedMonthKey
+          ? '<div class="timeline-note">Showing insights for ' + escHtml(selectedMonthKey) + '. Click the month again to return to the visible range.</div>'
+          : "");
+
+      timelineInsightScope = msgs;
+      insights.querySelectorAll("[data-select-kind]").forEach(btn => {
+        btn.addEventListener("click", () => selectTimelineInsight(btn, timelineInsightScope));
+      });
+    }
+
+    function renderTimeline() {
+      const chart = document.getElementById("timelineChart");
+      const controls = document.getElementById("timelineControls");
+      const insights = document.getElementById("timelineInsights");
+      const label = document.getElementById("timelineLabel");
+      const textMuted = cssVar("--text-muted");
+      const textPrimary = cssVar("--text-primary");
+      const border = cssVar("--border");
+      const accent = cssVar("--accent");
+
+      const months = buildTimelineMonths();
+      if (!months.length) {
+        if (controls) controls.innerHTML = "";
+        if (insights) insights.innerHTML = "";
+        if (label) label.textContent = "No timeline data";
+        chart.innerHTML = '<p style="color:' + textMuted + ';">No timeline data</p>';
+        return;
+      }
+
+      const visible = getVisibleTimelineMonths(months);
+      const selected = timelineState.selectedMonth && months.find(m => m.key === timelineState.selectedMonth);
+      const messagesInRange = selected ? selected.messages : messagesForMonths(visible);
+
+      if (label) {
+        label.textContent = selected
+          ? selected.label + " selected · " + selected.count.toLocaleString() + " emails"
+          : visible[0].label + " - " + visible[visible.length - 1].label + " · " + messagesInRange.length.toLocaleString() + " emails";
+      }
+
+      controls.innerHTML =
+        '<div class="timeline-control-group">' +
+        '<button class="btn btn-secondary ' + (timelineState.windowMonths === null ? "active" : "") + '" data-timeline-action="window" data-window="all">All</button>' +
+        '<button class="btn btn-secondary ' + (timelineState.windowMonths === 12 ? "active" : "") + '" data-timeline-action="window" data-window="12">12M</button>' +
+        '<button class="btn btn-secondary ' + (timelineState.windowMonths === 24 ? "active" : "") + '" data-timeline-action="window" data-window="24">24M</button>' +
+        '<button class="btn btn-secondary ' + (timelineState.windowMonths === 60 ? "active" : "") + '" data-timeline-action="window" data-window="60">5Y</button>' +
+        '</div>' +
+        '<div class="timeline-control-group">' +
+        '<button class="btn btn-secondary" data-timeline-action="prev">Previous</button>' +
+        '<button class="btn btn-secondary" data-timeline-action="next">Next</button>' +
+        '<button class="btn btn-secondary" data-timeline-action="zoom-in">Zoom In</button>' +
+        '<button class="btn btn-secondary" data-timeline-action="zoom-out">Zoom Out</button>' +
+        '<button class="btn btn-secondary" data-timeline-action="reset">Reset</button>' +
+        '</div>';
+
+      const maxVal = Math.max(1, ...visible.map(m => m.count));
+      const svgW = Math.max(760, visible.length * 34 + 70);
+      const svgH = 300;
+      const chartH = 210;
+      const barGap = 6;
+      const barW = Math.max(10, Math.min(34, (svgW - 70) / visible.length - barGap));
+      let bars = "";
+
+      visible.forEach((m, i) => {
+        const h = Math.max(2, (m.count / maxVal) * chartH);
+        const unreadH = m.count ? Math.max(1, (m.unread / m.count) * h) : 0;
+        const x = 48 + i * (barW + barGap);
+        const y = svgH - 48 - h;
+        const unreadY = svgH - 48 - unreadH;
+        const isSelected = timelineState.selectedMonth === m.key;
+        const color = colorFor(i % 12);
+        bars += '<g class="timeline-month' + (isSelected ? " selected" : "") + '" data-month="' + escAttr(m.key) + '">' +
+          '<rect x="' + x + '" y="' + y + '" width="' + barW + '" height="' + h + '" fill="' + color + '" opacity="' + (isSelected ? "0.95" : "0.68") + '" rx="4"></rect>' +
+          '<rect x="' + x + '" y="' + unreadY + '" width="' + barW + '" height="' + unreadH + '" fill="' + accent + '" opacity="0.9" rx="4"></rect>' +
+          '<title>' + escHtml(m.label) + ': ' + m.count.toLocaleString() + ' total, ' + m.unread.toLocaleString() + ' unread</title>' +
+          '<text x="' + (x + barW / 2) + '" y="' + (svgH - 30) + '" text-anchor="middle" fill="' + textMuted + '" font-size="8" transform="rotate(-45, ' + (x + barW / 2) + ', ' + (svgH - 30) + ')">' + escHtml(m.shortLabel) + '</text>' +
+          '</g>';
+      });
+
+      chart.innerHTML =
+        '<svg viewBox="0 0 ' + svgW + ' ' + svgH + '" width="' + svgW + '">' +
+        '<line x1="44" y1="' + (svgH - 48) + '" x2="' + (svgW - 10) + '" y2="' + (svgH - 48) + '" stroke="' + border + '" stroke-width="1"/>' +
+        '<text x="44" y="20" fill="' + textPrimary + '" font-size="12" font-weight="600">Monthly volume</text>' +
+        '<text x="44" y="38" fill="' + textMuted + '" font-size="11">Click a month to focus cleanup insights</text>' +
+        bars +
+        '</svg>';
+
+      renderTimelineInsights(messagesInRange, selected ? selected.key : null);
+
+      controls.querySelectorAll("[data-timeline-action]").forEach(btn => {
+        btn.addEventListener("click", () => handleTimelineAction(btn.dataset.timelineAction, btn.dataset.window, months.length));
+      });
+      chart.querySelectorAll(".timeline-month").forEach(el => {
+        el.addEventListener("click", () => {
+          const month = el.dataset.month;
+          timelineState.selectedMonth = timelineState.selectedMonth === month ? null : month;
+          renderTimeline();
+        });
+      });
+    }
+    
+    // ═══════════════════════════════════════════
+    //  SIZE VIEW
+    // ═══════════════════════════════════════════
+    function renderSizeView() {
+      const container = document.getElementById("sizeContent");
+      let html = "";
+      if (sizeBuckets.length) {
+        html += '<div class="insight-card"><div class="insight-card-head"><h3>Size Buckets</h3><p>Messages grouped by size</p></div><div class="insight-rows">' +
+          sizeBuckets.map(b => '<div class="insight-row"><div><strong>' + escHtml(b.title) + '</strong><span>' + b.count.toLocaleString() + ' messages</span></div><div class="insight-row-meta"><span>' + formatBytes(b.size) + '</span></div></div>').join("") +
+          '</div></div>';
+      }
+      if (heavySenders.length) {
+        html += '<div class="insight-card"><div class="insight-card-head"><h3>Heavy Senders</h3><p>Senders using the most storage</p></div><div class="insight-rows">' +
+          heavySenders.map(s => {
+            const senderMsgs = messages.filter(m => m.senderEmail === s.email);
+            const allSelected = senderMsgs.length > 0 && senderMsgs.every(m => isSelectedMessage(m));
+            return '<div class="insight-row' + (allSelected ? " selected" : "") + '"><div><strong>' + escHtml(displayEmail(s.email)) + '</strong><span>' + s.count.toLocaleString() + ' messages</span></div>' +
+              '<div class="insight-row-meta"><span>' + formatBytes(s.size) + '</span>' +
+              '<button type="button" class="btn btn-secondary" data-select-email="' + escAttr(s.email) + '">' + (allSelected ? "Selected" : "Select") + '</button></div></div>';
+          }).join("") +
+          '</div></div>';
+      }
+      if (heavyDomains.length) {
+        html += '<div class="insight-card"><div class="insight-card-head"><h3>Heavy Domains</h3><p>Domains using the most storage</p></div><div class="insight-rows">' +
+          heavyDomains.map(d => {
+            const domainMsgs = messages.filter(m => m.domain === d.domain);
+            const allSelected = domainMsgs.length > 0 && domainMsgs.every(m => isSelectedMessage(m));
+            return '<div class="insight-row' + (allSelected ? " selected" : "") + '"><div><strong>' + escHtml(displayDomain(d.domain)) + '</strong><span>' + d.count.toLocaleString() + ' messages</span></div>' +
+              '<div class="insight-row-meta"><span>' + formatBytes(d.size) + '</span>' +
+              '<button type="button" class="btn btn-secondary" data-select-domain="' + escAttr(d.domain) + '">' + (allSelected ? "Selected" : "Select") + '</button></div></div>';
+          }).join("") +
+          '</div></div>';
+      }
+      container.innerHTML = html || '<p style="color:var(--text-muted);">No size data available</p>';
+      container.querySelectorAll("[data-select-email]").forEach(btn => {
+        btn.addEventListener("click", () => selectSenderForReview(btn.dataset.selectEmail));
+      });
+      container.querySelectorAll("[data-select-domain]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const domain = btn.dataset.selectDomain;
+          toggleMessages(messages.filter(m => m.domain === domain));
+        });
+      });
+    }
+    
+    // ═══════════════════════════════════════════
+    //  FOLDER MULTI-SELECT
+    // ═══════════════════════════════════════════
+    function initFolderSelect() {
+      const container = document.getElementById("folderMultiselect");
+      const btn = document.getElementById("folderSelectBtn");
+      const dropdown = document.getElementById("folderDropdown");
+      const options = document.getElementById("folderOptions");
+      const label = document.getElementById("folderSelectLabel");
+      const selectAllBtn = document.getElementById("selectAllBtn");
+      const clearAllBtn = document.getElementById("clearAllBtn");
+      
+      // Build folder options
+      allFolders.forEach(f => {
+        const div = document.createElement("div");
+        div.className = "folder-option";
+        div.innerHTML = `
+          <input type="checkbox" id="folder-${CSS.escape(f.name)}" data-folder="${f.name.replace(/"/g, '&quot;')}" checked>
+          <span class="folder-option-label" title="${f.name}">${f.name}</span>
+          <span class="folder-option-count">${f.count.toLocaleString()}</span>
+        `;
+        options.appendChild(div);
+        
+        const checkbox = div.querySelector("input");
+        div.addEventListener("click", (e) => {
+          if (e.target !== checkbox) checkbox.checked = !checkbox.checked;
+          onFolderChange();
+        });
+      });
+      
+      // Toggle dropdown
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        container.classList.toggle("open");
+      });
+      
+      // Close on outside click
+      document.addEventListener("click", (e) => {
+        if (!container.contains(e.target)) {
+          container.classList.remove("open");
+        }
+      });
+      
+      // Select all
+      selectAllBtn.addEventListener("click", () => {
+        options.querySelectorAll("input[type='checkbox']").forEach(cb => cb.checked = true);
+        onFolderChange();
+      });
+      
+      // Clear all
+      clearAllBtn.addEventListener("click", () => {
+        options.querySelectorAll("input[type='checkbox']").forEach(cb => cb.checked = false);
+        onFolderChange();
+      });
+      
+      function onFolderChange() {
+        const checkboxes = options.querySelectorAll("input[type='checkbox']");
+        const checkedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
+        const totalCount = checkboxes.length;
+        
+        selectedFolders.clear();
+        if (checkedCount === totalCount || checkedCount === 0) {
+          // All or none selected = show all
+          label.textContent = "All Folders";
+        } else if (checkedCount === 1) {
+          const checked = Array.from(checkboxes).find(cb => cb.checked);
+          const folderName = checked.dataset.folder;
+          selectedFolders.add(folderName);
+          label.textContent = folderName;
+        } else {
+          checkboxes.forEach(cb => {
+            if (cb.checked) selectedFolders.add(cb.dataset.folder);
+          });
+          label.textContent = checkedCount + " folders selected";
+        }
+        
+        breadcrumbPath = [];
+        expandedSenders.clear();
+        expandedSenderYears.clear();
+        expandedDomains.clear();
+        timelineState.selectedMonth = null;
+        selectedIds.clear();
+        reviewState.query = "";
+        computeAnalytics();
+        updateStats();
+        refreshCurrentView();
+      }
+    }
+    
+    function refreshCurrentView() {
+      if (currentView === "sunburst") renderSunburst();
+      else if (currentView === "sender") renderSenderTable();
+      else if (currentView === "domain") renderDomainTable();
+      else if (currentView === "timeline") renderTimeline();
+      else if (currentView === "size") renderSizeView();
+    }
+    
+    // Init
+    document.getElementById("genDate").textContent = new Date().toLocaleDateString();
+    initFolderSelect();
+    initSelectionReview();
+    computeAnalytics();
+    updateStats();
+    renderSunburst();
+  })();
+  </script>
+</body>
+</html>
