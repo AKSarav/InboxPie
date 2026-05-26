@@ -11,7 +11,22 @@
 node_modules/
 dist/
 build/
+CLI/.venv/
+CLI/dist/
+CLI/build/
+CLI/.pytest_cache/
+CLI/*.egg-info/
+CLI/inboxpie-report/*.html
+CLI/src/inboxpie_cli.egg-info/
+CLI/*.csv
+CLI/*.json
+
 
 # Local environment files
 .env
 .env.*
+
+# python files
+*.pyc
+__pycache__/
+

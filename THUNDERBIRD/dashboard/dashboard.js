@@ -29,6 +29,11 @@
   let folderListLoaded = false;
   /** Last domain drill-down shown under PieView (for refresh on privacy toggle). */
   let sunburstDetailState = null;
+  
+  /** Filter folders for view rendering (subset of scanned data). Empty = show all. */
+  let viewFilterFolderKeys = new Set();
+  /** Folders present in current scan results (for filter dropdown). */
+  let scannedFolderList = [];
 
   const PALETTE = [
     "#3b82f6", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316",
@@ -70,12 +75,29 @@
       if (allMessages.length > 0) switchView(currentView);
     });
 
+    $("#resetBtn").addEventListener("click", () => {
+      if (allMessages.length > 0 || selectedIds.size > 0) {
+        const ok = confirm(
+          "Reset the dashboard? Scan results and selections will be cleared so you can choose folders and scan again."
+        );
+        if (!ok) return;
+      }
+      resetDashboard();
+    });
+
     // Privacy mask toggle
     $("#privacyToggle").addEventListener("click", () => {
       privacyMaskEnabled = !privacyMaskEnabled;
       localStorage.setItem("mail-audit-privacy-mask", privacyMaskEnabled);
       updatePrivacyToggle();
       updateAccountSelectDisplay();
+      const folderDropdown = $("#folderDropdown");
+      if (folderDropdown?.style.display === "block") {
+        if (isViewFilterMode()) renderViewFilterDropdown();
+        else renderScanFolderDropdown();
+      } else if (isViewFilterMode()) {
+        updateViewFilterLabel();
+      }
       const detailSnapshot = sunburstDetailState
         ? { domain: sunburstDetailState.domain, msgs: sunburstDetailState.msgs.slice() }
         : null;
@@ -237,6 +259,27 @@
     return maskAccountText(text);
   }
 
+  function maskFolderName(name) {
+    if (!name || typeof name !== "string") return name || "";
+    const trimmed = name.trim();
+    if (!trimmed) return name;
+    if (looksLikeEmail(trimmed)) return maskEmail(trimmed);
+    if (looksLikeDomain(trimmed)) return maskDomain(trimmed);
+    if (trimmed.length <= 1) return `${trimmed}***`;
+    return `${trimmed.charAt(0)}***`;
+  }
+
+  function maskFolderPath(path) {
+    if (!path || typeof path !== "string") return path || "";
+    return path.split("/").map((segment) => maskFolderName(segment)).join("/");
+  }
+
+  function displayFolderName(name, path) {
+    const leaf = name || (path ? path.split("/").pop() : "") || "";
+    if (!privacyMaskEnabled) return leaf;
+    return leaf ? maskFolderName(leaf) : "";
+  }
+
   function displaySenderName(name, email) {
     const n = name || "";
     if (!privacyMaskEnabled) return n || displayEmail(email);
@@ -331,8 +374,78 @@
     syncFolderSelectionsToList();
   }
 
-  function renderFolderDropdown() {
+  function isViewFilterMode() {
+    return allMessages.length > 0;
+  }
+
+  function getFolderCheckboxes() {
     const list = $("#folderDropdownList");
+    if (!list) return [];
+    if (isViewFilterMode()) {
+      return list.querySelectorAll('input[type="checkbox"][data-filterable="true"]');
+    }
+    return list.querySelectorAll('input[type="checkbox"]');
+  }
+
+  function syncSelectedFoldersFromDom() {
+    const checkboxes = $("#folderDropdownList")?.querySelectorAll('input[type="checkbox"]') || [];
+    selectedFolderKeys.clear();
+    checkboxes.forEach((cb) => {
+      if (cb.checked) selectedFolderKeys.add(cb.value);
+    });
+    saveFolderSelections();
+    updateFolderBadge();
+  }
+
+  function getScannedFolderKeys() {
+    return new Set(scannedFolderList.map((f) => folderKey(f.accountId, f.path)));
+  }
+
+  function getUnscannedFolderList() {
+    const scannedKeys = getScannedFolderKeys();
+    return scanFolderList.filter((f) => !scannedKeys.has(folderKey(f.accountId, f.path)));
+  }
+
+  async function ensureScanFolderListLoaded() {
+    if (!folderListLoaded) await loadScanFolders();
+  }
+
+  function appendFolderSectionHeader(list, title, note) {
+    const hdr = document.createElement("div");
+    hdr.className = "folder-dropdown-section";
+    hdr.textContent = title;
+    if (note) {
+      const noteEl = document.createElement("div");
+      noteEl.className = "folder-dropdown-section-note";
+      noteEl.textContent = note;
+      hdr.appendChild(noteEl);
+    }
+    list.appendChild(hdr);
+  }
+
+  function appendAccountHeader(list, accountName, showAccountGroups, lastAccountIdRef, accountId) {
+    if (!showAccountGroups || accountId === lastAccountIdRef.value) return;
+    lastAccountIdRef.value = accountId;
+    const hdr = document.createElement("div");
+    hdr.className = "folder-dropdown-account";
+    hdr.textContent = displayAccount(accountName);
+    list.appendChild(hdr);
+  }
+
+  function renderFolderDropdown() {
+    if (isViewFilterMode()) renderViewFilterDropdown();
+    else renderScanFolderDropdown();
+  }
+
+  function renderScanFolderDropdown() {
+    const list = $("#folderDropdownList");
+    const header = $("#folderDropdownHeader");
+    const footer = $("#folderDropdownFooter");
+    if (header) header.textContent = "Select folders to scan";
+    if (footer) {
+      footer.style.display = "none";
+      clearElement(footer);
+    }
     clearElement(list);
     if (!scanFolderList.length) {
       const empty = document.createElement("div");
@@ -362,15 +475,15 @@
       cb.type = "checkbox";
       cb.value = key;
       cb.checked = selectedFolderKeys.has(key);
-      cb.addEventListener("change", updateSelectedFolders);
 
       const span = document.createElement("span");
-      span.textContent = folder.name;
+      span.textContent = displayFolderName(folder.name, folder.path);
 
       label.appendChild(cb);
       label.appendChild(span);
       list.appendChild(label);
     });
+    updateFolderBadge();
   }
 
   async function refreshFolderDropdown() {
@@ -382,8 +495,7 @@
     list.appendChild(loading);
     try {
       await loadScanFolders();
-      renderFolderDropdown();
-      updateFolderBadge();
+      renderScanFolderDropdown();
     } catch (e) {
       clearElement(list);
       const err = document.createElement("div");
@@ -398,6 +510,7 @@
     updateFolderBadge();
 
     const dropdown = $("#folderDropdown");
+    const list = $("#folderDropdownList");
 
     $("#folderSelectBtn").addEventListener("click", async (e) => {
       e.stopPropagation();
@@ -407,7 +520,13 @@
         return;
       }
       dropdown.style.display = "block";
-      if (!folderListLoaded) await refreshFolderDropdown();
+      if (isViewFilterMode()) {
+        await renderViewFilterDropdown();
+      } else if (!folderListLoaded) {
+        await refreshFolderDropdown();
+      } else {
+        renderScanFolderDropdown();
+      }
     });
 
     document.addEventListener("click", (e) => {
@@ -416,23 +535,51 @@
       }
     });
 
-    $("#folderSelectAll").addEventListener("click", () => {
-      scanFolderList.forEach((folder) => {
-        selectedFolderKeys.add(folderKey(folder.accountId, folder.path));
-      });
-      renderFolderDropdown();
-      updateSelectedFolders();
+    list.addEventListener("change", (e) => {
+      if (e.target.type !== "checkbox") return;
+      if (isViewFilterMode()) applyViewFilterFromCheckboxes();
+      else updateSelectedFolders();
     });
 
-    $("#folderSelectNone").addEventListener("click", () => {
-      selectedFolderKeys.clear();
-      renderFolderDropdown();
-      updateSelectedFolders();
+    $("#folderSelectAll").addEventListener("click", (e) => {
+      e.preventDefault();
+      handleFolderSelectAll();
+    });
+
+    $("#folderSelectNone").addEventListener("click", (e) => {
+      e.preventDefault();
+      handleFolderSelectNone();
     });
   }
 
+  function handleFolderSelectAll() {
+    const checkboxes = getFolderCheckboxes();
+    checkboxes.forEach((cb) => { cb.checked = true; });
+    if (isViewFilterMode()) {
+      viewFilterFolderKeys.clear();
+      onViewFilterApply();
+    } else {
+      scanFolderList.forEach((folder) => {
+        selectedFolderKeys.add(folderKey(folder.accountId, folder.path));
+      });
+      updateSelectedFolders();
+    }
+  }
+
+  function handleFolderSelectNone() {
+    const checkboxes = getFolderCheckboxes();
+    checkboxes.forEach((cb) => { cb.checked = false; });
+    if (isViewFilterMode()) {
+      viewFilterFolderKeys.clear();
+      onViewFilterApply();
+    } else {
+      selectedFolderKeys.clear();
+      updateSelectedFolders();
+    }
+  }
+
   function updateSelectedFolders() {
-    const checkboxes = $("#folderDropdownList").querySelectorAll('input[type="checkbox"]');
+    const checkboxes = getFolderCheckboxes();
     selectedFolderKeys.clear();
     checkboxes.forEach((cb) => {
       if (cb.checked) selectedFolderKeys.add(cb.value);
@@ -443,8 +590,210 @@
 
   function updateFolderBadge() {
     const badge = $("#folderCountBadge");
+    const label = $("#folderSelectLabel");
+    if (label) label.textContent = "Folders";
+    if (!badge) return;
     badge.textContent = selectedFolderKeys.size;
     badge.style.display = selectedFolderKeys.size > 0 ? "inline-block" : "none";
+  }
+
+  /**
+   * Build scannedFolderList from allMessages after a scan.
+   */
+  function buildScannedFolderList() {
+    const folderMap = {};
+    allMessages.forEach((m) => {
+      const key = folderKey(m.accountId, m.folder);
+      if (!folderMap[key]) {
+        folderMap[key] = {
+          accountId: m.accountId,
+          accountName: m.account || m.accountId,
+          path: m.folder,
+          name: m.folder ? m.folder.split("/").pop() : "(Unknown)",
+          count: 0,
+        };
+      }
+      folderMap[key].count++;
+    });
+    scannedFolderList = Object.values(folderMap).sort((a, b) => b.count - a.count);
+  }
+
+  async function renderViewFilterDropdown() {
+    const list = $("#folderDropdownList");
+    const header = $("#folderDropdownHeader");
+    const footer = $("#folderDropdownFooter");
+    if (!list) return;
+
+    if (header) header.textContent = "Filter scanned folders";
+    clearElement(list);
+    if (footer) {
+      footer.style.display = "none";
+      clearElement(footer);
+    }
+
+    if (!scannedFolderList.length) {
+      const empty = document.createElement("div");
+      empty.className = "folder-dropdown-empty";
+      empty.textContent = "No scanned folders available";
+      list.appendChild(empty);
+      return;
+    }
+
+    try {
+      await ensureScanFolderListLoaded();
+    } catch (e) {
+      const err = document.createElement("div");
+      err.className = "folder-dropdown-empty";
+      err.textContent = `Could not load folder list: ${e.message}`;
+      list.appendChild(err);
+      return;
+    }
+
+    const showAccountGroups = accountSelect.value === "all";
+    const unscannedFolders = getUnscannedFolderList();
+
+    appendFolderSectionHeader(
+      list,
+      "Scanned folders",
+      "Toggle folders included in the current report"
+    );
+
+    let lastAccountId = { value: null };
+    scannedFolderList.forEach((folder) => {
+      appendAccountHeader(list, folder.accountName, showAccountGroups, lastAccountId, folder.accountId);
+
+      const key = folderKey(folder.accountId, folder.path);
+      const label = document.createElement("label");
+      label.className = "folder-option";
+
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.value = key;
+      cb.dataset.folderName = folder.name;
+      cb.dataset.filterable = "true";
+      cb.checked = viewFilterFolderKeys.size === 0 || viewFilterFolderKeys.has(key);
+
+      const nameSpan = document.createElement("span");
+      nameSpan.textContent = displayFolderName(folder.name, folder.path);
+      nameSpan.style.flex = "1";
+
+      const countSpan = document.createElement("span");
+      countSpan.textContent = folder.count.toLocaleString();
+      countSpan.style.fontSize = "11px";
+      countSpan.style.color = "var(--text-muted)";
+      countSpan.style.fontFamily = "var(--font-mono)";
+
+      label.appendChild(cb);
+      label.appendChild(nameSpan);
+      label.appendChild(countSpan);
+      list.appendChild(label);
+    });
+
+    if (unscannedFolders.length > 0) {
+      appendFolderSectionHeader(
+        list,
+        "Not scanned",
+        "These folders were not included in the current scan"
+      );
+
+      lastAccountId = { value: null };
+      unscannedFolders.forEach((folder) => {
+        appendAccountHeader(list, folder.accountName, showAccountGroups, lastAccountId, folder.accountId);
+
+        const row = document.createElement("div");
+        row.className = "folder-option folder-option-unscanned";
+        row.style.paddingLeft = `${14 + folder.depth * 16}px`;
+
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = displayFolderName(folder.name, folder.path);
+
+        row.appendChild(nameSpan);
+        list.appendChild(row);
+      });
+
+      if (footer) {
+        footer.style.display = "block";
+        const note = document.createElement("p");
+        note.textContent = `${unscannedFolders.length.toLocaleString()} folder${unscannedFolders.length === 1 ? "" : "s"} not included in this scan. Reset the dashboard to choose folders and scan again.`;
+        const resetBtn = document.createElement("button");
+        resetBtn.type = "button";
+        resetBtn.className = "btn btn-secondary btn-small";
+        resetBtn.textContent = "Reset & choose folders";
+        resetBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const ok = confirm(
+            "Reset the dashboard? Scan results will be cleared so you can choose folders and scan again."
+          );
+          if (!ok) return;
+          $("#folderDropdown").style.display = "none";
+          resetDashboard();
+        });
+        footer.appendChild(note);
+        footer.appendChild(resetBtn);
+      }
+    }
+
+    updateViewFilterLabel();
+  }
+
+  function applyViewFilterFromCheckboxes() {
+    const checkboxes = getFolderCheckboxes();
+    const checkedCount = Array.from(checkboxes).filter((cb) => cb.checked).length;
+    const totalCount = checkboxes.length;
+
+    viewFilterFolderKeys.clear();
+    if (checkedCount !== totalCount && checkedCount !== 0) {
+      checkboxes.forEach((cb) => {
+        if (cb.checked) viewFilterFolderKeys.add(cb.value);
+      });
+    }
+
+    onViewFilterApply();
+  }
+
+  function onViewFilterApply() {
+    expandedDomains.clear();
+    expandedSenders.clear();
+    expandedSenderYears.clear();
+    sunburstDetailState = null;
+    timelineState.selectedMonth = null;
+
+    updateViewFilterLabel();
+    updateStats();
+    switchView(currentView);
+  }
+
+  function updateViewFilterLabel() {
+    const label = $("#folderSelectLabel");
+    const badge = $("#folderCountBadge");
+    const checkboxes = getFolderCheckboxes();
+    const checkedCount = Array.from(checkboxes).filter((cb) => cb.checked).length;
+    const totalCount = checkboxes.length;
+
+    if (label) {
+      if (viewFilterFolderKeys.size === 0 || checkedCount === totalCount || checkedCount === 0) {
+        label.textContent = "All scanned";
+      } else if (viewFilterFolderKeys.size === 1) {
+        const checked = Array.from(checkboxes).find((cb) => cb.checked);
+        label.textContent = displayFolderName(checked?.dataset.folderName) || "1 folder";
+      } else {
+        label.textContent = `${viewFilterFolderKeys.size} folders selected`;
+      }
+    }
+
+    if (badge) {
+      const unscannedCount = getUnscannedFolderList().length;
+      if (viewFilterFolderKeys.size === 0) {
+        badge.textContent = String(scannedFolderList.length);
+        badge.title = unscannedCount
+          ? `Showing all ${scannedFolderList.length} scanned folder(s). ${unscannedCount} not scanned.`
+          : "Showing all scanned folders";
+      } else {
+        badge.textContent = String(viewFilterFolderKeys.size);
+        badge.title = `Filtering to ${viewFilterFolderKeys.size} scanned folder(s)`;
+      }
+      badge.style.display = "inline-block";
+    }
   }
 
   // ══════════════════════════════════════════
@@ -464,10 +813,34 @@
     currentView = "sunburst";
     sunburstDetailState = null;
     folderListLoaded = false;
+    viewFilterFolderKeys.clear();
+    scannedFolderList = [];
+    scanFolderList = [];
+    selectedFolderKeys.clear();
+    saveFolderSelections();
+
+    const folderHeader = $("#folderDropdownHeader");
+    const folderLabel = $("#folderSelectLabel");
+    if (folderHeader) folderHeader.textContent = "Select folders to scan";
+    if (folderLabel) folderLabel.textContent = "Folders";
+    updateFolderBadge();
 
     const folderDropdown = $("#folderDropdown");
-    if (folderDropdown && folderDropdown.style.display === "block") {
-      refreshFolderDropdown();
+    if (folderDropdown) folderDropdown.style.display = "none";
+
+    const folderList = $("#folderDropdownList");
+    if (folderList) {
+      clearElement(folderList);
+      const empty = document.createElement("div");
+      empty.className = "folder-dropdown-empty";
+      empty.textContent = "Open to load folders…";
+      folderList.appendChild(empty);
+    }
+
+    const folderFooter = $("#folderDropdownFooter");
+    if (folderFooter) {
+      folderFooter.style.display = "none";
+      clearElement(folderFooter);
     }
 
     $("#selectionReviewModal").style.display = "none";
@@ -515,6 +888,10 @@
   //  SCAN
   // ══════════════════════════════════════════
   async function startScan() {
+    if (folderListLoaded && !isViewFilterMode()) {
+      syncSelectedFoldersFromDom();
+    }
+
     if (selectedFolderKeys.size === 0) {
       if (!folderListLoaded) {
         try {
@@ -554,12 +931,17 @@
       $("#progressFill").style.width = "100%";
       $("#progressText").textContent = `Done — ${allMessages.length.toLocaleString()} messages loaded.`;
 
+      // Build scanned folder list for filtering
+      buildScannedFolderList();
+      viewFilterFolderKeys.clear(); // Reset filter to show all
+
       setTimeout(() => {
         $("#progressArea").style.display = "none";
         $("#statsBar").style.display = "grid";
         $("#viewTabs").style.display = "flex";
         $("#exportBar").style.display = "flex";
         updateStats();
+        renderViewFilterDropdown();
         switchView("sunburst");
       }, 600);
     } catch (e) {
@@ -573,9 +955,10 @@
   }
 
   function updateStats() {
-    $("#statTotal").textContent = allMessages.length.toLocaleString();
-    $("#statSenders").textContent = new Set(allMessages.map((m) => m.senderEmail)).size.toLocaleString();
-    $("#statUnread").textContent = allMessages.filter((m) => !m.read).length.toLocaleString();
+    const msgs = getFilteredMessages();
+    $("#statTotal").textContent = msgs.length.toLocaleString();
+    $("#statSenders").textContent = new Set(msgs.map((m) => m.senderEmail)).size.toLocaleString();
+    $("#statUnread").textContent = msgs.filter((m) => !m.read).length.toLocaleString();
     $("#statSelected").textContent = selectedIds.size.toLocaleString();
     updateBulkButtons();
   }
@@ -628,7 +1011,8 @@
     const textLabel = cssVar("--text-label");
     const gapStroke = cssVar("--svg-gap-stroke");
 
-    const msgs = filterFn ? allMessages.filter(filterFn) : allMessages;
+    const baseMessages = getFilteredMessages();
+    const msgs = filterFn ? baseMessages.filter(filterFn) : baseMessages;
     const total = msgs.length;
     if (total === 0) {
       clearElement(svg);
@@ -838,7 +1222,7 @@
   }
 
   function selectSenderForReview(email, scopeMsgs = null) {
-    const pool = scopeMsgs || allMessages;
+    const pool = scopeMsgs || getFilteredMessages();
     const matches = pool.filter((m) => m.senderEmail === email);
     if (!matches.length) return;
     const allSelected = matches.every((m) => selectedIds.has(m.id));
@@ -1235,7 +1619,7 @@
       group.querySelectorAll('.sender-row[data-role="sender"]').forEach((row) => {
         row.addEventListener("click", () => {
           const email = row.dataset.email;
-          const list = allMessages.filter((m) => m.domain === domain && m.senderEmail === email);
+          const list = getFilteredMessages().filter((m) => m.domain === domain && m.senderEmail === email);
           if (!list.length) return;
           const allSelected = list.every((m) => selectedIds.has(m.id));
           list.forEach((m) => {
@@ -1259,13 +1643,14 @@
     const summary = $("#sizeSummaryLabel");
     if (!container) return;
 
-    const knownMessages = allMessages.filter((m) => messageSize(m) > 0);
+    const filteredMsgs = getFilteredMessages();
+    const knownMessages = filteredMsgs.filter((m) => messageSize(m) > 0);
     const totalBytes = knownMessages.reduce((sum, m) => sum + messageSize(m), 0);
-    const unknownCount = allMessages.length - knownMessages.length;
+    const unknownCount = filteredMsgs.length - knownMessages.length;
     const largest = knownMessages.slice().sort((a, b) => messageSize(b) - messageSize(a));
     const topLargest = largest.slice(0, 12).map((m) => ({
       title: m.subject || "(No Subject)",
-      subtitle: `${m.senderName || displayEmail(m.senderEmail)} · ${m.folder || "Unknown folder"} · ${formatDate(m.date)}`,
+      subtitle: `${m.senderName || displayEmail(m.senderEmail)} · ${displayFolderName("", m.folder) || "Unknown folder"} · ${formatDate(m.date)}`,
       count: messageSize(m),
       value: String(m.id),
       messages: [m],
@@ -1496,23 +1881,27 @@
       btn.addEventListener("click", () => handleTimelineAction(btn.dataset.timelineAction, btn.dataset.window, months.length));
     });
     container.querySelectorAll(".timeline-month").forEach((el) => {
-      el.addEventListener("click", () => {
+      el.addEventListener("click", (event) => {
+        event.stopPropagation();
         const month = el.dataset.month;
         timelineState.selectedMonth = timelineState.selectedMonth === month ? null : month;
         renderTimeline();
       });
     });
-    insights.querySelectorAll("[data-select-kind]").forEach((btn) => {
-      btn.addEventListener("click", () => selectTimelineInsight(btn, messagesInRange));
-    });
+    if (insights) {
+      insights.querySelectorAll("[data-select-kind]").forEach((btn) => {
+        btn.addEventListener("click", () => selectTimelineInsight(btn, messagesInRange));
+      });
+    }
 
     updateBulkButtons();
   }
 
   function buildTimelineMonths() {
-    if (!allMessages.length) return [];
+    const filteredMsgs = getFilteredMessages();
+    if (!filteredMsgs.length) return [];
     const byMonth = {};
-    allMessages.forEach((m) => {
+    filteredMsgs.forEach((m) => {
       const key = monthKey(m);
       if (!byMonth[key]) {
         byMonth[key] = {
@@ -1589,7 +1978,7 @@
 
   function messagesForMonths(months) {
     const keys = new Set(months.map((m) => m.key));
-    return allMessages.filter((m) => keys.has(monthKey(m)));
+    return getFilteredMessages().filter((m) => keys.has(monthKey(m)));
   }
 
   function monthKey(m) {
@@ -1624,7 +2013,7 @@
       .slice(0, 8);
 
     const folderHotspots = groupTimeline(messages, (m) => `${m.accountId}::${m.folder}`, (m) => ({
-      title: m.folder || "(Unknown folder)",
+      title: displayFolderName("", m.folder) || "(Unknown folder)",
       subtitle: displayAccount(m.account || m.accountId),
       value: m.folder || "",
       accountId: m.accountId,
@@ -1847,7 +2236,7 @@
         <div class="selection-review-row" data-id="${escAttr(String(m.id))}">
           <div class="selection-subject">
             <button type="button" class="selection-open-link" data-open-message="${escAttr(String(m.id))}" title="Open in Thunderbird">${escHtml(m.subject || "(No Subject)")}</button>
-            <span>${escHtml(m.folder || "Unknown folder")} · ${escHtml(displayAccount(m.account || ""))}</span>
+            <span>${escHtml(displayFolderName("", m.folder) || "Unknown folder")} · ${escHtml(displayAccount(m.account || ""))}</span>
           </div>
           <div class="selection-sender">
             <strong>${escHtml(m.senderName || displayEmail(m.senderEmail))}</strong>
@@ -2021,7 +2410,9 @@
         let n = 0;
         folders.forEach((f) => {
           const opt = document.createElement("option");
-          opt.textContent = displayAccount(f.displayPath);
+          opt.textContent = privacyMaskEnabled
+            ? `${displayAccount(acctName)} — ${maskFolderPath(f.path)}`
+            : f.displayPath;
           opt.dataset.accountId = f.accountId;
           opt.dataset.folderPath = f.path;
           og.appendChild(opt);
@@ -2116,15 +2507,16 @@
   //  EXPORT
   // ══════════════════════════════════════════
   function exportCSV() {
+    const msgs = getFilteredMessages();
     const header = "Sender Email,Sender Name,Domain,Subject,Date,Year,Month,Read,Folder,Account\n";
-    const rows = allMessages.map((m) =>
+    const rows = msgs.map((m) =>
       [m.senderEmail, m.senderName, m.domain, `"${(m.subject || '').replace(/"/g, '""')}"`, m.date, m.year, m.monthName, m.read, m.folder, m.account].join(",")
     ).join("\n");
     downloadFile(header + rows, "mail-audit-report.csv", "text/csv");
   }
 
   function exportJSON() {
-    const bySender = groupBy("senderEmail");
+    const bySender = groupBy("senderEmail"); // Already uses filtered messages
     const report = Object.entries(bySender).map(([email, msgs]) => ({
       email,
       name: msgs[0].senderName,
@@ -2176,7 +2568,8 @@
   // ══════════════════════════════════════════
   function groupBy(key) {
     const g = {};
-    allMessages.forEach((m) => { const k = m[key]; if (!g[k]) g[k] = []; g[k].push(m); });
+    const msgs = getFilteredMessages();
+    msgs.forEach((m) => { const k = m[key]; if (!g[k]) g[k] = []; g[k].push(m); });
     return g;
   }
 
@@ -2206,6 +2599,18 @@
 
   function senderYearKey(email, year) {
     return `${email}::${year}`;
+  }
+
+  /**
+   * Get messages filtered by viewFilterFolderKeys.
+   * If viewFilterFolderKeys is empty, returns all messages.
+   */
+  function getFilteredMessages() {
+    if (viewFilterFolderKeys.size === 0) return allMessages;
+    return allMessages.filter((m) => {
+      const key = folderKey(m.accountId, m.folder);
+      return viewFilterFolderKeys.has(key);
+    });
   }
 
   function clearElement(el) {
