@@ -17,23 +17,34 @@ InboxPie CLI reads message metadata needed to generate reports:
 
 ## Scan Modes
 
-### `--mode emlx` (default)
+InboxPie CLI supports three scan modes. The default is **`auto`**.
 
-Walks `.emlx` files under `~/Library/Mail/V*/`. For each file, it reads:
-- The RFC 5322 headers (From, Subject, Date)
-- The XML plist footer (read/flagged flags)
+### Default: `--mode auto`
 
-It does **not** parse or store the message body.
+1. Opens Apple Mail's **Envelope Index** SQLite database in read-only mode.
+2. If the index cannot be read (permissions, missing file, schema mismatch), falls back to walking `.emlx` files.
+
+This keeps scans fast in the common case while remaining resilient when the index is unavailable.
 
 ### `--mode index`
 
 Opens Apple Mail's `Envelope Index` SQLite database in **read-only** mode. It queries:
+
 - `messages` table (dates, flags, foreign keys)
 - `subjects` table (subject text)
 - `addresses` table (sender email and name)
 - `mailboxes` table (folder URLs)
 
 No writes are made to the database.
+
+### `--mode emlx`
+
+Walks `.emlx` files under `~/Library/Mail/V*/`. For each file, it reads:
+
+- The RFC 5322 headers (From, Subject, Date)
+- The XML plist footer (read/flagged flags)
+
+It does **not** parse or store the message body. Individual malformed files are skipped so one bad message does not stop the scan.
 
 ## Data Storage
 
@@ -53,7 +64,7 @@ The `--privacy` flag masks email addresses and domains in terminal and HTML outp
 
 ## Full Disk Access
 
-On modern macOS, accessing `~/Library/Mail/` requires Full Disk Access for your terminal app. This is a system-level permission, not something InboxPie controls.
+On modern macOS, accessing `~/Library/Mail/` requires Full Disk Access for the application hosting your terminal (Terminal, Cursor, VS Code, iTerm, etc.) — not for the `inboxpie` command itself. macOS applies that permission to the entire host app: any command run in the same terminal inherits the access until you revoke it in System Settings.
 
 ## Contact
 

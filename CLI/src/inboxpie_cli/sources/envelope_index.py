@@ -130,8 +130,8 @@ def scan_envelope_index(mail_root: Path, folders: set[str] | None = None) -> lis
         msg = str(exc).lower()
         if "not authorized" in msg or "authorization denied" in msg or "permission denied" in msg:
             raise PermissionError(
-                "Apple Mail Envelope Index access denied. Grant Full Disk Access to your terminal/Python app "
-                "in System Settings > Privacy & Security > Full Disk Access."
+                "Apple Mail Envelope Index access denied. "
+                "Run `inboxpie privacy-settings` for setup help."
             ) from exc
         raise
 
