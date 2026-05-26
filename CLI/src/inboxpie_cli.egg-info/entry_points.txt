@@ -1,2 +1,0 @@
-[console_scripts]
-inboxpie = inboxpie_cli.cli:app
