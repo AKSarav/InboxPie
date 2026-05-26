@@ -1,6 +1,6 @@
 
 
-# InboxPie
+# InboxPie - Visualize and clean your inbox. Private, local, open source.
 
 **See your inbox clearly. Clean up with confidence. Keep everything on your machine.**
 
@@ -63,21 +63,27 @@ inboxpie scan --source apple-mail --output all --report-dir ./reports
 ```
 
 
-## Where features live (and why)
 
-We split detail by product so each README stays focused:
+## Feature matrix
 
-| Topic | Root (here) | [THUNDERBIRD/README.md](THUNDERBIRD/README.md) | [CLI/README.md](CLI/README.md) |
-|---|---|---|---|
-| Vision & product choice | ✓ | — | — |
-| PieView, Timeline, drill-down views | Mention only | Full feature list + usage | HTML report parity |
-| Review modal, Move to Trash/Folder | Mention only | Full workflow | — (read-only) |
-| Scan modes (`emlx` / Envelope Index) | — | — | Full reference |
-| CSV / JSON / terminal output | Mention only | Export selected rows | Full reference |
-| Permissions & add-on submission | — | ✓ | — |
-| Full Disk Access (macOS) | — | — | ✓ |
+| Feature | Thunderbird | CLI (Apple Mail) |
+|---|---|---|
+| PieView (year → month → domain sunburst) | ✓ | ✓ (HTML report) |
+| By Sender (year / month drill-down) | ✓ | ✓ (HTML report) |
+| By Domain | ✓ | ✓ (HTML report) |
+| By Size | ✓ | ✓ (HTML report) |
+| Timeline (zoom, month focus, insight cards) | ✓ | ✓ (HTML report) |
+| Select messages for review | ✓ | ✓ (HTML report) |
+| Review selected (search, sort, export CSV) | ✓ | ✓ (read-only) |
+| Open message in mail client | ✓ | — |
+| Move to Trash / Move to Folder | ✓ | — |
+| Privacy Mode (mask emails on screen) | ✓ | ✓ |
+| Folder selection (scan or filter) | ✓ | ✓ |
+| Multi-account mailboxes | ✓ | ✓ |
+| Terminal / JSON / CSV scan exports | — | ✓ |
+| Scan modes (Envelope Index + `.emlx` fallback) | — | ✓ |
 
-If you are deciding **whether** InboxPie fits you, stay here. If you are using **one product**, open its README next.
+Setup and usage details: [THUNDERBIRD/README.md](THUNDERBIRD/README.md) · [CLI/README.md](CLI/README.md)
 
 
 

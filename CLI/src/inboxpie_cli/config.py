@@ -1,7 +1,7 @@
 from pathlib import Path
 
 DEFAULT_SOURCE = "apple-mail"
-DEFAULT_MODE = "emlx"
+DEFAULT_MODE = "auto"
 DEFAULT_MAIL_ROOT = Path.home() / "Library" / "Mail"
 DEFAULT_REPORT_DIR = Path.cwd() / "inboxpie-report"
 DEFAULT_CSV_FILENAME = "mail-audit-report.csv"

@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
   <title>InboxPie Report</title>
   <style>
     :root, [data-theme="dark"] {
@@ -19,6 +20,7 @@
       --accent-rgb: 147, 197, 253;
       --accent-text: #0c0f14;
       --accent-dim: rgba(147, 197, 253, 0.15);
+      --selection: #93c5fd;
       --svg-gap-stroke: #0c0f14;
       --tooltip-shadow: rgba(0,0,0,0.5);
       --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -38,6 +40,7 @@
       --accent-rgb: 37, 99, 235;
       --accent-text: #ffffff;
       --accent-dim: rgba(37, 99, 235, 0.1);
+      --selection: #2563eb;
       --svg-gap-stroke: #ffffff;
       --tooltip-shadow: rgba(0,0,0,0.12);
     }
@@ -64,8 +67,26 @@
       position: sticky; top: 0; z-index: 20;
     }
     .header-left { display: flex; align-items: center; gap: 10px; }
-    .logo-icon { width: 36px; height: 36px; object-fit: contain; display: block; }
-    #header h1 { font-size: 16px; font-weight: 700; letter-spacing: -0.02em; }
+    .logo-wrap {
+      display: inline-flex; align-items: center; justify-content: center;
+      flex-shrink: 0; line-height: 0;
+    }
+    .logo-icon {
+      width: 36px; height: 36px; object-fit: contain; display: block;
+      filter: none;
+      opacity: 1;
+      mix-blend-mode: normal;
+    }
+    /* Logo is a full-color PNG — never dim or filter it; use a light surface on dark UI */
+    [data-theme="dark"] .logo-wrap {
+      background: #ffffff;
+      border-radius: 8px;
+      padding: 2px;
+    }
+    #header h1 {
+      font-size: 16px; font-weight: 700; letter-spacing: -0.02em;
+      color: var(--text-primary);
+    }
     .header-right { display: flex; align-items: center; gap: 10px; }
     
     .icon-btn {
@@ -130,17 +151,32 @@
     
     /* Stats Bar */
     .stats-bar {
-      display: grid; grid-template-columns: repeat(5, 1fr);
+      display: grid; grid-template-columns: repeat(6, 1fr);
       gap: 12px; padding: 16px 24px; border-bottom: 1px solid var(--border);
     }
-    @media (max-width: 768px) { .stats-bar { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 900px) { .stats-bar { grid-template-columns: repeat(3, 1fr); } }
+    @media (max-width: 520px) { .stats-bar { grid-template-columns: repeat(2, 1fr); } }
     .stat-card {
       display: flex; flex-direction: column; align-items: center; gap: 4px;
       background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.035), transparent), var(--bg-card);
       border-radius: 8px; padding: 14px 16px; border: 1px solid var(--border);
     }
+    .stat-card-selected {
+      border-color: rgba(var(--accent-rgb), 0.25);
+      background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.08), transparent), var(--bg-card);
+    }
+    .stat-card-selected .stat-number { color: var(--accent); }
+    .stat-card-clickable { cursor: pointer; transition: transform 0.15s, box-shadow 0.15s; }
+    .stat-card-clickable:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
     .stat-number { font-size: 24px; font-weight: 700; font-family: var(--font-mono); color: var(--text-primary); letter-spacing: -0.03em; }
     .stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 4px; }
+    .selection-bar {
+      display: none; align-items: center; gap: 10px; flex-wrap: wrap;
+      padding: 10px 24px; border-bottom: 1px solid var(--border);
+      background: rgba(var(--accent-rgb), 0.06);
+    }
+    .selection-bar.visible { display: flex; }
+    .selection-bar span { font-size: 12px; color: var(--text-secondary); }
     
     /* Tabs */
     .view-tabs { display: flex; gap: 0; padding: 0 24px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); }
@@ -218,12 +254,23 @@
     }
     
     .sender-row {
-      display: grid; grid-template-columns: 1fr 80px 120px 80px 30px;
+      display: grid; grid-template-columns: 28px 1fr 80px 120px 80px 30px;
       align-items: center; gap: 10px; padding: 10px 14px;
       background: var(--bg-card); border-radius: 8px;
       transition: all 0.15s; cursor: pointer;
     }
     .sender-row:hover { background: var(--bg-hover); }
+    .sender-row.selected { background: var(--accent-dim); }
+    .sr-check {
+      width: 18px; height: 18px; border: 2px solid var(--border); border-radius: 4px;
+      display: flex; align-items: center; justify-content: center; transition: all 0.15s; flex-shrink: 0;
+    }
+    .sender-row.selected .sr-check, .sender-year-row.selected .sr-check, .sender-month-row.selected .sr-check {
+      border-color: var(--selection); background: var(--selection);
+    }
+    .sender-row.selected .sr-check::after, .sender-year-row.selected .sr-check::after, .sender-month-row.selected .sr-check::after {
+      content: "✓"; color: white; font-size: 12px; font-weight: bold;
+    }
     .sender-head, .domain-head {
       margin: -8px -8px 0 -8px; padding: 10px 14px !important;
       border-radius: 10px 10px 0 0; background: var(--bg-card);
@@ -248,21 +295,24 @@
       width: 2px; background: linear-gradient(to bottom, var(--accent), rgba(var(--accent-rgb), 0.2)); border-radius: 1px;
     }
     .child-row {
-      display: grid; grid-template-columns: 1fr 80px 120px 80px;
+      display: grid; grid-template-columns: 28px 1fr 80px 120px 80px;
       align-items: center; gap: 10px; padding: 8px 12px;
       background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px;
       font-size: 12px;
     }
     .child-row:hover { background: var(--bg-hover); border-color: var(--accent); }
+    .child-row.selected { background: var(--accent-dim); }
     
     .sender-year-row, .sender-month-row {
       cursor: pointer; transition: all 0.15s;
     }
-    .sender-year-row { grid-template-columns: 1fr 70px 100px 70px 20px; }
+    .sender-year-row { grid-template-columns: 28px 1fr 70px 100px 70px 20px; }
     .sender-year-row .sr-expand { transition: transform 0.15s; }
     .sender-year-row.expanded .sr-expand { transform: rotate(90deg); }
     .sender-month-list { display: flex; flex-direction: column; gap: 4px; }
-    .sender-month-row { grid-template-columns: 1fr 70px 100px 70px; }
+    .sender-month-row { grid-template-columns: 28px 1fr 70px 100px 70px; }
+    .insight-row.selected { background: var(--accent-dim); }
+    .insight-row-meta .btn { padding: 5px 10px; font-size: 11px; white-space: nowrap; }
     
     /* Timeline */
     .timeline-dashboard { display: flex; flex-direction: column; gap: 16px; }
@@ -340,13 +390,64 @@
     ::-webkit-scrollbar-track { background: var(--bg-primary); }
     ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
     ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+    /* Selection review modal */
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+      display: none; align-items: center; justify-content: center; z-index: 2000; padding: 20px;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal-box {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.4); width: 100%; max-width: 980px; max-height: 90vh;
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .selection-review-head {
+      display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
+      padding: 18px 20px; border-bottom: 1px solid var(--border);
+    }
+    .selection-review-head h3 { margin: 0 0 6px; font-size: 16px; color: var(--text-primary); }
+    .selection-review-head p { margin: 0; font-size: 12px; color: var(--text-muted); }
+    .selection-review-controls {
+      display: flex; gap: 10px; flex-wrap: wrap; padding: 12px 20px;
+      border-bottom: 1px solid var(--border); background: var(--bg-secondary);
+    }
+    .selection-review-controls .search-input { flex: 1; min-width: 200px; width: auto; }
+    .selection-review-table { overflow: auto; flex: 1; min-height: 200px; }
+    .selection-review-table-head,
+    .selection-review-row {
+      display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1.2fr) 100px 80px;
+      gap: 12px; align-items: center; padding: 10px 20px; border-bottom: 1px solid var(--border);
+    }
+    .selection-review-table-head {
+      font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--text-muted); background: var(--bg-secondary); position: sticky; top: 0; z-index: 1;
+    }
+    .selection-review-row:hover { background: var(--bg-hover); }
+    .selection-subject strong, .selection-subject .selection-subject-text {
+      display: block; font-size: 12px; font-weight: 500; color: var(--text-primary);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .selection-subject span { display: block; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .selection-sender strong { display: block; font-size: 12px; color: var(--text-primary); }
+    .selection-sender span { display: block; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .selection-date, .selection-size { font-size: 12px; color: var(--text-secondary); font-family: var(--font-mono); }
+    .selection-review-more, .selection-empty { padding: 18px 20px; font-size: 12px; color: var(--text-muted); }
+    .selection-review-actions {
+      display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap;
+      padding: 14px 20px; border-top: 1px solid var(--border); background: var(--bg-secondary);
+    }
+    .btn-primary { background: var(--accent); color: #fff; border: none; }
+    .btn-primary:hover { filter: brightness(1.1); }
   </style>
 </head>
 <body>
   <div id="app">
     <header id="header">
       <div class="header-left">
-        <img src="InboxPieLogo.png" alt="InboxPie Logo" class="logo-icon" width="36" height="36">
+        <span class="logo-wrap" aria-hidden="true">
+          <img src="InboxPieLogo.png" alt="" class="logo-icon" width="36" height="36">
+        </span>
         <h1>InboxPie</h1>
       </div>
       <div class="header-right">
@@ -391,6 +492,16 @@
         <div class="stat-number" id="statSize">{{ total_size }}</div>
         <div class="stat-label">Total Size</div>
       </div>
+      <div class="stat-card stat-card-selected stat-card-clickable" id="statCardSelected" title="Click to review selected emails">
+        <div class="stat-number" id="statSelected">0</div>
+        <div class="stat-label">Selected</div>
+      </div>
+    </div>
+
+    <div id="selectionBar" class="selection-bar">
+      <span>Messages selected for review</span>
+      <button type="button" class="btn btn-primary" id="reviewSelectedBtn">Review Selected</button>
+      <button type="button" class="btn btn-secondary" id="clearSelectionBtn">Clear Selection</button>
     </div>
     
     <div class="view-tabs">
@@ -465,6 +576,33 @@
       Generated by <a href="https://github.com/AKSarav/InboxPie">InboxPie CLI</a> · <span id="genDate"></span>
     </footer>
   </div>
+
+  <div id="selectionReviewModal" class="modal-overlay" aria-hidden="true">
+    <div class="modal-box">
+      <div class="selection-review-head">
+        <div>
+          <h3>Review selected emails</h3>
+          <p id="selectionReviewSummary"></p>
+        </div>
+        <button type="button" id="selectionReviewClose" class="btn btn-secondary">Close</button>
+      </div>
+      <div class="selection-review-controls">
+        <input type="text" id="selectionReviewSearch" class="search-input" placeholder="Search subject, sender, folder…">
+        <select id="selectionReviewSort" class="search-input" style="width:auto;min-width:160px;">
+          <option value="date-desc">Newest first</option>
+          <option value="date-asc">Oldest first</option>
+          <option value="size-desc">Largest first</option>
+          <option value="sender-asc">Sender A→Z</option>
+          <option value="subject-asc">Subject A→Z</option>
+        </select>
+      </div>
+      <div id="selectionReviewTable" class="selection-review-table"></div>
+      <div class="selection-review-actions">
+        <button type="button" id="selectionReviewExport" class="btn btn-secondary">Export CSV</button>
+        <button type="button" id="selectionReviewClear" class="btn btn-secondary">Clear Selection</button>
+      </div>
+    </div>
+  </div>
   
   <script>
   (function() {
@@ -497,8 +635,233 @@
     const expandedSenderYears = new Set();
     const expandedDomains = new Set();
     const timelineState = { windowMonths: 24, offsetMonths: 0, selectedMonth: null };
-    
+    const selectedIds = new Set();
+    const reviewState = { query: "", sort: "date-desc" };
+    let timelineInsightScope = [];
+    let sunburstDetailScope = null;
+
     function senderYearKey(email, year) { return email + "::" + year; }
+    function selectionKey(m) {
+      return [m.id, m.folder || "", m.account || m.accountId || "", m.date || "", m.senderEmail || ""].join("\x1f");
+    }
+    function isSelectedMessage(m) { return selectedIds.has(selectionKey(m)); }
+    function isSelected(id) {
+      return messages.some(m => String(m.id) === String(id) && isSelectedMessage(m));
+    }
+    function removeSelectedMessage(m) { selectedIds.delete(selectionKey(m)); }
+    function buildBySenderMap() {
+      const map = {};
+      messages.forEach(m => {
+        if (!map[m.senderEmail]) map[m.senderEmail] = [];
+        map[m.senderEmail].push(m);
+      });
+      return map;
+    }
+    function toggleMessages(msgs) {
+      if (!msgs.length) return;
+      const keys = msgs.map(selectionKey);
+      const allSelected = keys.every(k => selectedIds.has(k));
+      keys.forEach((k, i) => {
+        if (allSelected) selectedIds.delete(k);
+        else selectedIds.add(k);
+      });
+      updateSelectionUi();
+      refreshCurrentView();
+    }
+    function getSenderMessages(email, year, month) {
+      const pool = buildBySenderMap()[email] || [];
+      return pool.filter(m => {
+        if (year != null && year !== "" && m.year !== Number(year)) return false;
+        if (month != null && month !== "" && m.month !== Number(month)) return false;
+        return true;
+      });
+    }
+    function messagesForAgeBucket(msgs, bucket) {
+      const now = Date.now();
+      return msgs.filter(m => {
+        if (m.read) return false;
+        const ageDays = Math.floor((now - new Date(m.date).getTime()) / 86400000);
+        if (bucket === "0-30") return ageDays <= 30;
+        if (bucket === "31-90") return ageDays >= 31 && ageDays <= 90;
+        if (bucket === "91-365") return ageDays >= 91 && ageDays <= 365;
+        if (bucket === "1y-plus") return ageDays >= 366;
+        return false;
+      });
+    }
+    function selectTimelineInsight(btn, rangeMsgs) {
+      const kind = btn.dataset.selectKind;
+      const value = btn.dataset.value;
+      const bucket = btn.dataset.bucket;
+      const accountId = btn.dataset.accountId;
+      let matches = [];
+      if (kind === "sender") matches = rangeMsgs.filter(m => m.senderEmail === value && !m.read);
+      else if (kind === "domain") matches = rangeMsgs.filter(m => m.domain === value);
+      else if (kind === "folder") matches = rangeMsgs.filter(m => (m.account || m.accountId) === accountId && (m.folder || "") === value);
+      else if (kind === "age") matches = messagesForAgeBucket(rangeMsgs, bucket || value);
+      toggleMessages(matches);
+    }
+    function selectSenderForReview(email, scopeMsgs) {
+      const pool = scopeMsgs || messages;
+      const matches = pool.filter(m => m.senderEmail === email);
+      if (!matches.length) return;
+      toggleMessages(matches);
+    }
+    function formatDate(dateValue) {
+      const d = new Date(dateValue);
+      if (Number.isNaN(d.getTime())) return "Unknown date";
+      return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+    }
+    function messageSize(m) { return Number(m.size) > 0 ? Number(m.size) : 0; }
+    function matchesReviewQuery(m, q) {
+      return (
+        (m.subject || "").toLowerCase().includes(q) ||
+        (m.senderName || "").toLowerCase().includes(q) ||
+        (m.senderEmail || "").toLowerCase().includes(q) ||
+        (m.domain || "").toLowerCase().includes(q) ||
+        (m.folder || "").toLowerCase().includes(q) ||
+        (m.account || "").toLowerCase().includes(q)
+      );
+    }
+    function getReviewedSelectedMessages() {
+      const q = reviewState.query.trim().toLowerCase();
+      let selected = messages.filter(m => isSelectedMessage(m));
+      if (q) selected = selected.filter(m => matchesReviewQuery(m, q));
+      const sort = reviewState.sort;
+      selected.sort((a, b) => {
+        if (sort === "date-asc") return new Date(a.date) - new Date(b.date);
+        if (sort === "size-desc") return messageSize(b) - messageSize(a);
+        if (sort === "sender-asc") return (a.senderEmail || "").localeCompare(b.senderEmail || "");
+        if (sort === "subject-asc") return (a.subject || "").localeCompare(b.subject || "");
+        return new Date(b.date) - new Date(a.date);
+      });
+      return selected;
+    }
+    function downloadFile(content, filename, mimeType) {
+      const blob = new Blob([content], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+    function exportSelectedCSV() {
+      const selected = getReviewedSelectedMessages();
+      if (!selected.length) {
+        alert("No selected messages to export.");
+        return;
+      }
+      const header = "Subject,Sender Name,Sender Email,Domain,Date,Size (bytes),Read,Folder,Account\n";
+      const rows = selected.map(m => [
+        '"' + (m.subject || "").replace(/"/g, '""') + '"',
+        '"' + (m.senderName || "").replace(/"/g, '""') + '"',
+        m.senderEmail || "",
+        m.domain || "",
+        m.date || "",
+        messageSize(m),
+        m.read ? "Yes" : "No",
+        '"' + (m.folder || "").replace(/"/g, '""') + '"',
+        '"' + (m.account || "").replace(/"/g, '""') + '"',
+      ].join(",")).join("\n");
+      downloadFile(header + rows, "inboxpie-selected-" + new Date().toISOString().slice(0, 10) + ".csv", "text/csv");
+    }
+    function renderSelectionReview() {
+      const selected = getReviewedSelectedMessages();
+      const table = document.getElementById("selectionReviewTable");
+      const totalBytes = selected.reduce((sum, m) => sum + messageSize(m), 0);
+      const unread = selected.filter(m => !m.read).length;
+      const accounts = new Set(selected.map(m => m.account || m.accountId));
+
+      document.getElementById("selectionReviewSummary").textContent =
+        selectedIds.size.toLocaleString() + " selected · " + unread.toLocaleString() + " unread · " +
+        formatBytes(totalBytes) + " known size · " + accounts.size + " account" + (accounts.size === 1 ? "" : "s");
+
+      const search = document.getElementById("selectionReviewSearch");
+      const sort = document.getElementById("selectionReviewSort");
+      search.value = reviewState.query;
+      sort.value = reviewState.sort;
+
+      if (selectedIds.size === 0) {
+        table.innerHTML = '<div class="selection-empty">No messages selected.</div>';
+        return;
+      }
+      if (selected.length === 0) {
+        table.innerHTML = '<div class="selection-empty">No selected messages match your search.</div>';
+        return;
+      }
+
+      const visible = selected.slice(0, 500);
+      table.innerHTML =
+        '<div class="selection-review-table-head"><span>Subject</span><span>Sender</span><span>Date</span><span>Size</span></div>' +
+        visible.map(m =>
+          '<div class="selection-review-row" data-id="' + escAttr(selectionKey(m)) + '">' +
+            '<div class="selection-subject">' +
+              '<span class="selection-subject-text">' + escHtml(m.subject || "(No Subject)") + '</span>' +
+              '<span>' + escHtml(displayFolderName(m.folder) || "Unknown folder") + " · " + escHtml(displayAccount(m.account || "")) + '</span>' +
+            '</div>' +
+            '<div class="selection-sender">' +
+              '<strong>' + escHtml(m.senderName || displayEmail(m.senderEmail)) + '</strong>' +
+              '<span>' + escHtml(displayEmail(m.senderEmail) || "") + '</span>' +
+            '</div>' +
+            '<div class="selection-date">' + escHtml(formatDate(m.date)) + '</div>' +
+            '<div class="selection-size">' + formatBytes(messageSize(m)) + '</div>' +
+          '</div>'
+        ).join("") +
+        (selected.length > visible.length
+          ? '<div class="selection-review-more">Showing first ' + visible.length.toLocaleString() + " of " + selected.length.toLocaleString() + " matches. Narrow with search to inspect more.</div>"
+          : "");
+    }
+    function openSelectionReviewModal() {
+      if (selectedIds.size === 0) return;
+      const modal = document.getElementById("selectionReviewModal");
+      modal.classList.add("open");
+      modal.setAttribute("aria-hidden", "false");
+      renderSelectionReview();
+    }
+    function closeSelectionReviewModal() {
+      const modal = document.getElementById("selectionReviewModal");
+      modal.classList.remove("open");
+      modal.setAttribute("aria-hidden", "true");
+    }
+    function clearAllSelection() {
+      selectedIds.clear();
+      reviewState.query = "";
+      closeSelectionReviewModal();
+      updateSelectionUi();
+      refreshCurrentView();
+    }
+    function updateSelectionUi() {
+      const count = selectedIds.size;
+      document.getElementById("statSelected").textContent = count.toLocaleString();
+      const bar = document.getElementById("selectionBar");
+      const reviewBtn = document.getElementById("reviewSelectedBtn");
+      if (count > 0) {
+        bar.classList.add("visible");
+        reviewBtn.textContent = "Review Selected (" + count.toLocaleString() + ")";
+      } else {
+        bar.classList.remove("visible");
+        reviewBtn.textContent = "Review Selected";
+      }
+    }
+    function initSelectionReview() {
+      document.getElementById("statCardSelected").addEventListener("click", openSelectionReviewModal);
+      document.getElementById("reviewSelectedBtn").addEventListener("click", openSelectionReviewModal);
+      document.getElementById("clearSelectionBtn").addEventListener("click", clearAllSelection);
+      document.getElementById("selectionReviewClose").addEventListener("click", closeSelectionReviewModal);
+      document.getElementById("selectionReviewClear").addEventListener("click", clearAllSelection);
+      document.getElementById("selectionReviewExport").addEventListener("click", exportSelectedCSV);
+      document.getElementById("selectionReviewSearch").addEventListener("input", e => {
+        reviewState.query = e.target.value;
+        renderSelectionReview();
+      });
+      document.getElementById("selectionReviewSort").addEventListener("change", e => {
+        reviewState.sort = e.target.value;
+        renderSelectionReview();
+      });
+      document.getElementById("selectionReviewModal").addEventListener("click", e => {
+        if (e.target.id === "selectionReviewModal") closeSelectionReviewModal();
+      });
+    }
     
     // ═══════════════════════════════════════════
     //  COMPUTE ANALYTICS FROM MESSAGES
@@ -621,6 +984,7 @@
       document.getElementById("statSenders").textContent = uniqueSenders.toLocaleString();
       document.getElementById("statDomains").textContent = uniqueDomains.toLocaleString();
       document.getElementById("statSize").textContent = formatBytes(totalSize);
+      updateSelectionUi();
     }
     
     const PALETTE = ["#3b82f6","#8b5cf6","#ec4899","#14b8a6","#f97316","#06b6d4","#a855f7","#eab308","#ef4444","#22c55e","#6366f1","#f43f5e","#0ea5e9","#d946ef","#84cc16"];
@@ -965,12 +1329,30 @@
     
     function showDomainDetail(domain, year, month) {
       const detail = document.getElementById("sunburstDetail");
-      const count = pieTree[year]?.[month]?.[domain] || 0;
-      const senders = bySender.filter(s => s.domain === domain).slice(0, 10);
-      detail.innerHTML = '<h3 style="font-size:14px;margin-bottom:12px;color:var(--accent);">' + escHtml(displayDomain(domain)) + ' — ' + count.toLocaleString() + ' emails in ' + month + ' ' + year + '</h3>' +
-        '<table><thead><tr><th>Sender</th><th>Total Count</th></tr></thead><tbody>' +
-        senders.map(s => '<tr><td><strong>' + escHtml(s.name || displayEmail(s.email)) + '</strong><br><span style="font-size:11px;color:var(--text-muted);">' + escHtml(displayEmail(s.email)) + '</span></td><td style="font-family:var(--font-mono);color:var(--accent);">' + s.count.toLocaleString() + '</td></tr>').join("") +
+      const scopeMsgs = messages.filter(m =>
+        String(m.year) === String(year) && m.monthName === month && m.domain === domain
+      );
+      sunburstDetailScope = { domain, msgs: scopeMsgs };
+      const bySenderMap = {};
+      scopeMsgs.forEach(m => {
+        if (!bySenderMap[m.senderEmail]) bySenderMap[m.senderEmail] = { name: m.senderName, count: 0 };
+        bySenderMap[m.senderEmail].count++;
+      });
+      const sorted = Object.entries(bySenderMap).sort((a, b) => b[1].count - a[1].count);
+      detail.innerHTML =
+        '<h3 style="font-size:14px;margin-bottom:12px;color:var(--accent);">' + escHtml(displayDomain(domain)) + ' — ' + scopeMsgs.length.toLocaleString() + ' emails in ' + escHtml(month) + ' ' + escHtml(year) + '</h3>' +
+        '<table><thead><tr><th>Sender</th><th>Count</th><th>Select</th></tr></thead><tbody>' +
+        sorted.map(([email, data]) => {
+          const senderMsgs = scopeMsgs.filter(m => m.senderEmail === email);
+          const allSelected = senderMsgs.length > 0 && senderMsgs.every(m => isSelectedMessage(m));
+          return '<tr><td><strong>' + escHtml(data.name || displayEmail(email)) + '</strong><br><span style="font-size:11px;color:var(--text-muted);">' + escHtml(displayEmail(email)) + '</span></td>' +
+            '<td style="font-family:var(--font-mono);color:var(--accent);">' + data.count.toLocaleString() + '</td>' +
+            '<td><button type="button" class="btn btn-secondary" style="font-size:11px;padding:4px 10px;" data-select-email="' + escAttr(email) + '">' + (allSelected ? "Selected" : "Select") + '</button></td></tr>';
+        }).join("") +
         '</tbody></table>';
+      detail.querySelectorAll("[data-select-email]").forEach(btn => {
+        btn.addEventListener("click", () => selectSenderForReview(btn.dataset.selectEmail, sunburstDetailScope.msgs));
+      });
     }
     
     // ═══════════════════════════════════════════
@@ -983,6 +1365,8 @@
       let entries = bySender.filter(s => !q || s.email.toLowerCase().includes(q) || (s.name || "").toLowerCase().includes(q));
       const maxCount = entries.length ? entries[0].count : 1;
       
+      const bySenderMap = buildBySenderMap();
+
       container.innerHTML = entries.slice(0, 50).map((s, i) => {
         const pct = ((s.count / maxCount) * 100).toFixed(0);
         const color = colorFor(i);
@@ -1001,16 +1385,22 @@
           const monthRowsHtml = yearExpanded ? months.map((m, mi) => {
             const mpct = ((m.count / mMax) * 100).toFixed(0);
             const mcolor = colorFor(mi + yi * 2 + i);
-            return '<div class="child-row sender-month-row">' +
+            const monthMsgs = getSenderMessages(s.email, y.year, m.month);
+            const monthSel = monthMsgs.length > 0 && monthMsgs.some(msg => isSelectedMessage(msg));
+            return '<div class="child-row sender-month-row' + (monthSel ? " selected" : "") + '" data-email="' + escAttr(s.email) + '" data-year="' + y.year + '" data-month="' + String(m.month).padStart(2, "0") + '">' +
+              '<div class="sr-check"></div>' +
               '<div class="sr-info"><div class="sr-name">' + escHtml(m.monthName) + '</div><div class="sr-email">' + y.year + ' · ' + m.count + ' emails</div></div>' +
               '<div class="sr-count" style="font-size:13px;">' + m.count.toLocaleString() + '</div>' +
               '<div class="sr-bar-wrap"><div class="sr-bar" style="width:' + mpct + '%;background:' + mcolor + ';"></div></div>' +
               '<div class="sr-unread">' + (m.unread ? m.unread + ' unread' : '') + '</div>' +
             '</div>';
           }).join("") : "";
-          
-          return '<div class="sender-year-group" data-email="' + escHtml(s.email) + '" data-year="' + y.year + '">' +
-            '<div class="child-row sender-year-row ' + (yearExpanded ? "expanded" : "") + '">' +
+
+          const yearMsgs = getSenderMessages(s.email, y.year);
+          const yearSel = yearMsgs.length > 0 && yearMsgs.some(msg => isSelectedMessage(msg));
+          return '<div class="sender-year-group" data-email="' + escAttr(s.email) + '" data-year="' + y.year + '">' +
+            '<div class="child-row sender-year-row ' + (yearExpanded ? "expanded" : "") + (yearSel ? " selected" : "") + '" data-email="' + escAttr(s.email) + '" data-year="' + y.year + '">' +
+              '<div class="sr-check"></div>' +
               '<div class="sr-info"><div class="sr-name">' + y.year + '</div><div class="sr-email">this sender · ' + y.count + ' emails</div></div>' +
               '<div class="sr-count" style="font-size:13px;">' + y.count.toLocaleString() + '</div>' +
               '<div class="sr-bar-wrap"><div class="sr-bar" style="width:' + ypct + '%;background:' + ycolor + ';"></div></div>' +
@@ -1021,8 +1411,11 @@
           '</div>';
         }).join("") : "";
         
-        return '<div class="sender-group" data-email="' + escHtml(s.email) + '">' +
-          '<div class="sender-row sender-head ' + (expanded ? "expanded" : "") + '">' +
+        const senderMsgs = getSenderMessages(s.email);
+        const senderSel = senderMsgs.length > 0 && senderMsgs.some(msg => isSelectedMessage(msg));
+        return '<div class="sender-group" data-email="' + escAttr(s.email) + '">' +
+          '<div class="sender-row sender-head ' + (expanded ? "expanded" : "") + (senderSel ? " selected" : "") + '">' +
+            '<div class="sr-check"></div>' +
             '<div class="sr-info"><div class="sr-name">' + escHtml(s.name || displayEmail(s.email)) + '</div><div class="sr-email">' + escHtml(displayEmail(s.email)) + '</div></div>' +
             '<div class="sr-count">' + s.count.toLocaleString() + '</div>' +
             '<div class="sr-bar-wrap"><div class="sr-bar" style="width:' + pct + '%;background:' + color + ';"></div></div>' +
@@ -1033,36 +1426,57 @@
         '</div>';
       }).join("");
       
-      // Sender head click - toggle year list
       container.querySelectorAll(".sender-group").forEach(group => {
         const email = group.dataset.email;
+        const senderMsgs = bySenderMap[email] || [];
         const head = group.querySelector(".sender-head");
-        head.addEventListener("click", e => {
-          if (e.target.closest(".sr-expand")) {
+        const chev = head && head.querySelector(".sr-expand");
+
+        if (chev) {
+          chev.addEventListener("click", e => {
+            e.stopPropagation();
             if (expandedSenders.has(email)) expandedSenders.delete(email);
             else expandedSenders.add(email);
             renderSenderTable();
-          }
+          });
+        }
+
+        if (head) {
+          head.addEventListener("click", e => {
+            if (e.target.closest(".sr-expand")) return;
+            if (!e.target.closest(".sr-check")) return;
+            e.stopPropagation();
+            toggleMessages(senderMsgs);
+          });
+        }
+
+        group.querySelectorAll(".sender-year-row").forEach(row => {
+          row.addEventListener("click", e => {
+            if (e.target.closest(".sr-expand")) {
+              e.stopPropagation();
+              const yearKey = senderYearKey(email, row.dataset.year);
+              if (expandedSenderYears.has(yearKey)) expandedSenderYears.delete(yearKey);
+              else expandedSenderYears.add(yearKey);
+              renderSenderTable();
+              return;
+            }
+            e.stopPropagation();
+            if (!e.target.closest(".sr-check")) return;
+            const y = Number(row.dataset.year);
+            const ymsgs = senderMsgs.filter(m => m.year === y);
+            toggleMessages(ymsgs);
+          });
         });
-        head.querySelector(".sr-expand").addEventListener("click", e => {
-          e.stopPropagation();
-          if (expandedSenders.has(email)) expandedSenders.delete(email);
-          else expandedSenders.add(email);
-          renderSenderTable();
-        });
-      });
-      
-      // Year row click - toggle month list
-      container.querySelectorAll(".sender-year-group").forEach(group => {
-        const email = group.dataset.email;
-        const year = group.dataset.year;
-        const yearKey = senderYearKey(email, year);
-        const yearRow = group.querySelector(".sender-year-row");
-        yearRow.addEventListener("click", e => {
-          e.stopPropagation();
-          if (expandedSenderYears.has(yearKey)) expandedSenderYears.delete(yearKey);
-          else expandedSenderYears.add(yearKey);
-          renderSenderTable();
+
+        group.querySelectorAll(".sender-month-row").forEach(row => {
+          row.addEventListener("click", e => {
+            e.stopPropagation();
+            if (!e.target.closest(".sr-check")) return;
+            const y = Number(row.dataset.year);
+            const mo = Number(row.dataset.month);
+            const mmsgs = senderMsgs.filter(m => m.year === y && m.month === mo);
+            toggleMessages(mmsgs);
+          });
         });
       });
       
@@ -1084,8 +1498,11 @@
         const color = colorFor(i);
         const expanded = expandedDomains.has(d.domain);
         const domainSenders = bySender.filter(s => s.domain === d.domain).slice(0, 8);
-        return '<div class="domain-group" data-domain="' + escHtml(d.domain) + '">' +
-          '<div class="sender-row domain-head ' + (expanded ? "expanded" : "") + '">' +
+        const domainMsgs = messages.filter(m => m.domain === d.domain);
+        const domainSel = domainMsgs.length > 0 && domainMsgs.some(m => isSelectedMessage(m));
+        return '<div class="domain-group" data-domain="' + escAttr(d.domain) + '">' +
+          '<div class="sender-row domain-head ' + (expanded ? "expanded" : "") + (domainSel ? " selected" : "") + '">' +
+            '<div class="sr-check"></div>' +
             '<div class="sr-info"><div class="sr-name">' + escHtml(displayDomain(d.domain)) + '</div><div class="sr-email">' + (d.senders || 0) + ' senders</div></div>' +
             '<div class="sr-count">' + d.count.toLocaleString() + '</div>' +
             '<div class="sr-bar-wrap"><div class="sr-bar" style="width:' + pct + '%;background:' + color + ';"></div></div>' +
@@ -1093,7 +1510,16 @@
             '<div class="sr-expand">›</div>' +
           '</div>' +
           '<div class="child-list ' + (expanded ? "visible" : "") + '">' +
-            domainSenders.map((s, si) => '<div class="child-row"><div class="sr-info"><div class="sr-name">' + escHtml(s.name || displayEmail(s.email)) + '</div><div class="sr-email">' + escHtml(displayEmail(s.email)) + '</div></div><div class="sr-count" style="font-size:13px;">' + s.count.toLocaleString() + '</div><div class="sr-bar-wrap"><div class="sr-bar" style="width:' + ((s.count / domainSenders[0].count) * 100).toFixed(0) + '%;background:' + colorFor(si + i * 2) + ';"></div></div><div class="sr-unread">' + (s.unread ? s.unread : "") + '</div></div>').join("") +
+            domainSenders.map((s, si) => {
+              const senderMsgs = messages.filter(m => m.domain === d.domain && m.senderEmail === s.email);
+              const senderSel = senderMsgs.length > 0 && senderMsgs.some(m => isSelectedMessage(m));
+              return '<div class="child-row' + (senderSel ? " selected" : "") + '" data-domain="' + escAttr(d.domain) + '" data-email="' + escAttr(s.email) + '">' +
+                '<div class="sr-check"></div>' +
+                '<div class="sr-info"><div class="sr-name">' + escHtml(s.name || displayEmail(s.email)) + '</div><div class="sr-email">' + escHtml(displayEmail(s.email)) + '</div></div>' +
+                '<div class="sr-count" style="font-size:13px;">' + s.count.toLocaleString() + '</div>' +
+                '<div class="sr-bar-wrap"><div class="sr-bar" style="width:' + ((s.count / domainSenders[0].count) * 100).toFixed(0) + '%;background:' + colorFor(si + i * 2) + ';"></div></div>' +
+                '<div class="sr-unread">' + (s.unread ? s.unread : "") + '</div></div>';
+            }).join("") +
           '</div>' +
         '</div>';
       }).join("");
@@ -1101,10 +1527,23 @@
       container.querySelectorAll(".domain-group").forEach(group => {
         const domain = group.dataset.domain;
         const head = group.querySelector(".domain-head");
-        head.addEventListener("click", () => {
+        head.addEventListener("click", e => {
+          if (e.target.closest(".sr-check")) {
+            e.stopPropagation();
+            toggleMessages(messages.filter(m => m.domain === domain));
+            return;
+          }
           if (expandedDomains.has(domain)) expandedDomains.delete(domain);
           else expandedDomains.add(domain);
           renderDomainTable();
+        });
+      });
+      container.querySelectorAll(".domain-group .child-row").forEach(row => {
+        row.addEventListener("click", e => {
+          e.stopPropagation();
+          if (e.target.closest(".sr-check")) {
+            toggleMessages(messages.filter(m => m.domain === row.dataset.domain && m.senderEmail === row.dataset.email));
+          }
         });
       });
       
@@ -1233,19 +1672,24 @@
         .filter(b => b.count > 0);
     }
 
-    function renderInsightRow(row) {
+    function renderInsightRow(row, kind) {
       const unreadText = row.unreadCount !== undefined ? " · " + row.unreadCount.toLocaleString() + " unread" : "";
       const pctText = row.unreadPct !== undefined ? " · " + row.unreadPct + "% unread" : "";
-      return '<div class="insight-row">' +
+      const allSelected = row.messages && row.messages.length > 0 && row.messages.every(m => isSelectedMessage(m));
+      const accountAttr = row.accountId ? ' data-account-id="' + escAttr(row.accountId) + '"' : "";
+      const bucketAttr = row.bucket ? ' data-bucket="' + escAttr(row.bucket) + '"' : "";
+      const value = row.value === undefined ? row.bucket : row.value;
+      return '<div class="insight-row' + (allSelected ? " selected" : "") + '">' +
         '<div><strong>' + escHtml(row.title) + '</strong>' +
         '<span>' + escHtml(row.subtitle || "") + unreadText + pctText + '</span></div>' +
-        '<div class="insight-row-meta"><span>' + row.count.toLocaleString() + '</span></div>' +
+        '<div class="insight-row-meta"><span>' + row.count.toLocaleString() + '</span>' +
+        '<button type="button" class="btn btn-secondary" data-select-kind="' + escAttr(kind) + '" data-value="' + escAttr(value || "") + '"' + accountAttr + bucketAttr + '>' + (allSelected ? "Selected" : "Select") + '</button></div>' +
         '</div>';
     }
 
-    function renderInsightCard(title, subtitle, rows) {
+    function renderInsightCard(title, subtitle, rows, kind) {
       const body = rows.length
-        ? rows.map(renderInsightRow).join("")
+        ? rows.map(row => renderInsightRow(row, kind)).join("")
         : '<div class="insight-empty">No matching messages in this range.</div>';
       return '<section class="insight-card">' +
         '<div class="insight-card-head"><h3>' + escHtml(title) + '</h3><p>' + escHtml(subtitle) + '</p></div>' +
@@ -1285,11 +1729,12 @@
 
       const folderHotspots = groupTimeline(
         msgs,
-        m => (m.account || "") + "::" + (m.folder || ""),
+        m => (m.account || m.accountId || "") + "::" + (m.folder || ""),
         m => ({
           title: displayFolderName(m.folder) || "(Unknown folder)",
-          subtitle: displayAccount(m.account || ""),
+          subtitle: displayAccount(m.account || m.accountId || ""),
           value: m.folder || "",
+          accountId: m.account || m.accountId || "",
         })
       ).slice(0, 8);
 
@@ -1301,14 +1746,19 @@
         '<div class="timeline-kpi"><span>' + new Set(msgs.map(m => m.senderEmail)).size.toLocaleString() + '</span><label>Senders</label></div>' +
         '</div>' +
         '<div class="insight-grid">' +
-        renderInsightCard("Top Unread Senders", "Prioritize senders creating unread backlog.", topUnreadSenders) +
-        renderInsightCard("Old Unread Mail", "Find stale unread groups by age.", ageBuckets) +
-        renderInsightCard("Noisy Domains", "High-volume domains with cleanup potential.", noisyDomains) +
-        renderInsightCard("Folder Hotspots", "Where inbox clutter is concentrated.", folderHotspots) +
+        renderInsightCard("Top Unread Senders", "Prioritize senders creating unread backlog.", topUnreadSenders, "sender") +
+        renderInsightCard("Old Unread Mail", "Find stale unread groups by age.", ageBuckets, "age") +
+        renderInsightCard("Noisy Domains", "High-volume domains with cleanup potential.", noisyDomains, "domain") +
+        renderInsightCard("Folder Hotspots", "Where inbox clutter is concentrated.", folderHotspots, "folder") +
         '</div>' +
         (selectedMonthKey
           ? '<div class="timeline-note">Showing insights for ' + escHtml(selectedMonthKey) + '. Click the month again to return to the visible range.</div>'
           : "");
+
+      timelineInsightScope = msgs;
+      insights.querySelectorAll("[data-select-kind]").forEach(btn => {
+        btn.addEventListener("click", () => selectTimelineInsight(btn, timelineInsightScope));
+      });
     }
 
     function renderTimeline() {
@@ -1414,15 +1864,36 @@
       }
       if (heavySenders.length) {
         html += '<div class="insight-card"><div class="insight-card-head"><h3>Heavy Senders</h3><p>Senders using the most storage</p></div><div class="insight-rows">' +
-          heavySenders.map(s => '<div class="insight-row"><div><strong>' + escHtml(displayEmail(s.email)) + '</strong><span>' + s.count.toLocaleString() + ' messages</span></div><div class="insight-row-meta"><span>' + formatBytes(s.size) + '</span></div></div>').join("") +
+          heavySenders.map(s => {
+            const senderMsgs = messages.filter(m => m.senderEmail === s.email);
+            const allSelected = senderMsgs.length > 0 && senderMsgs.every(m => isSelectedMessage(m));
+            return '<div class="insight-row' + (allSelected ? " selected" : "") + '"><div><strong>' + escHtml(displayEmail(s.email)) + '</strong><span>' + s.count.toLocaleString() + ' messages</span></div>' +
+              '<div class="insight-row-meta"><span>' + formatBytes(s.size) + '</span>' +
+              '<button type="button" class="btn btn-secondary" data-select-email="' + escAttr(s.email) + '">' + (allSelected ? "Selected" : "Select") + '</button></div></div>';
+          }).join("") +
           '</div></div>';
       }
       if (heavyDomains.length) {
         html += '<div class="insight-card"><div class="insight-card-head"><h3>Heavy Domains</h3><p>Domains using the most storage</p></div><div class="insight-rows">' +
-          heavyDomains.map(d => '<div class="insight-row"><div><strong>' + escHtml(displayDomain(d.domain)) + '</strong><span>' + d.count.toLocaleString() + ' messages</span></div><div class="insight-row-meta"><span>' + formatBytes(d.size) + '</span></div></div>').join("") +
+          heavyDomains.map(d => {
+            const domainMsgs = messages.filter(m => m.domain === d.domain);
+            const allSelected = domainMsgs.length > 0 && domainMsgs.every(m => isSelectedMessage(m));
+            return '<div class="insight-row' + (allSelected ? " selected" : "") + '"><div><strong>' + escHtml(displayDomain(d.domain)) + '</strong><span>' + d.count.toLocaleString() + ' messages</span></div>' +
+              '<div class="insight-row-meta"><span>' + formatBytes(d.size) + '</span>' +
+              '<button type="button" class="btn btn-secondary" data-select-domain="' + escAttr(d.domain) + '">' + (allSelected ? "Selected" : "Select") + '</button></div></div>';
+          }).join("") +
           '</div></div>';
       }
       container.innerHTML = html || '<p style="color:var(--text-muted);">No size data available</p>';
+      container.querySelectorAll("[data-select-email]").forEach(btn => {
+        btn.addEventListener("click", () => selectSenderForReview(btn.dataset.selectEmail));
+      });
+      container.querySelectorAll("[data-select-domain]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const domain = btn.dataset.selectDomain;
+          toggleMessages(messages.filter(m => m.domain === domain));
+        });
+      });
     }
     
     // ═══════════════════════════════════════════
@@ -1506,6 +1977,8 @@
         expandedSenderYears.clear();
         expandedDomains.clear();
         timelineState.selectedMonth = null;
+        selectedIds.clear();
+        reviewState.query = "";
         computeAnalytics();
         updateStats();
         refreshCurrentView();
@@ -1523,6 +1996,7 @@
     // Init
     document.getElementById("genDate").textContent = new Date().toLocaleDateString();
     initFolderSelect();
+    initSelectionReview();
     computeAnalytics();
     updateStats();
     renderSunburst();
