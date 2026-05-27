@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "inboxpie-cli"
-version = "0.1.0"
-description = "InboxPie CLI — scan Apple Mail locally and generate inbox analytics reports"
+name = "inboxpie"
+version = "1.0.2"
+description = "InboxPie — Visualize and clean your inbox. Private, local, open source"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
@@ -24,10 +24,15 @@ dependencies = [
   "typer>=0.12",
   "rich>=13.7",
   "jinja2>=3.1",
+  
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = [
+  "pytest>=8.0",
+  "twine>=6.2.0",
+  "build"
+  ]
 
 [project.scripts]
 inboxpie = "inboxpie_cli.cli:app"

@@ -1,8 +1,18 @@
-# InboxPie CLI
+# InboxPie CLI - Visualize and clean your inbox. Private, local, open source.
 
-`inboxpie-cli` is a local-first Python command-line tool for macOS that scans Apple Mail metadata and generates audit analytics compatible with InboxPie.
+The CLI version of InboxPie is a local-first Python command-line tool for macOS that scans Apple Mail metadata and generates audit analytics compatible with the Thunderbird extension.
 
-## Install
+Thunderbird users can use the [InboxPie Thunderbird extension](https://github.com/AKSarav/InboxPie/tree/main/THUNDERBIRD) to visualize and clean their inbox.
+
+> We are currently in progress to bring InboxPie to other mailboxes like O365 and other Clients in the near future. If you are interested in helping us with this, please contribute to the project
+
+## Install from PyPI
+
+```bash
+pip install inboxpie
+```
+
+## Install from Github repo
 
 ```bash
 cd CLI
@@ -34,7 +44,7 @@ If a scan fails for permissions, `inboxpie scan` prints which app to enable and 
 - **`auto` / `index`**: need FDA for the Envelope Index.
 - **`emlx`**: also needs FDA to walk `~/Library/Mail/` on recent macOS versions.
 
-**Security:** FDA applies to the **whole host app**, not only inboxpie. Any command run in that same terminal can read protected folders until you revoke access. Use a terminal you trust, toggle FDA off when finished, or (later) use a signed InboxPie app so permission is scoped to InboxPie only.
+**Security:** FDA applies to the **whole host app**, not only inboxpie. Any command run in that same terminal can read protected folders until you revoke access. Use a terminal you trust, toggle FDA off when finished
 
 ## Scan strategy
 
