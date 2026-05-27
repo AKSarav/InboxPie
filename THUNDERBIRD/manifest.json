@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "name": "InboxPie",
   "version": "1.0.2",
-  "description": "Visualize your inbox with interactive sunburst pie charts. See your email patterns by year, month, domain, and sender — then clean up with confidence.",
+  "description": "Privacy-first email insights and cleanup. Explore patterns by year, month, domain, and sender — review locally, then act with confidence.",
   "author": "AKSarav",
   "browser_specific_settings": {
     "gecko": {

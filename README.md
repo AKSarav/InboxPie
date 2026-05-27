@@ -29,7 +29,7 @@ Both tools read **metadata only** (sender, subject, date, folder, read status, s
 
 → Full docs: [THUNDERBIRD/README.md](THUNDERBIRD/README.md) · [CLI/README.md](CLI/README.md)
 
-
+> We are currently in progress to bring InboxPie to other mailboxes like O365 and other Clients in the near future. If you are interested in helping us with this, please contribute to the project.
 
 ## Shared principles
 
