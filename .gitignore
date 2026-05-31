@@ -18,6 +18,7 @@ CLI/.pytest_cache/
 CLI/*.egg-info/
 CLI/inboxpie-report/*.html
 CLI/src/inboxpie_cli.egg-info/
+CLI/src/inboxpie.egg-info/
 CLI/*.csv
 CLI/*.json
 
@@ -30,3 +31,4 @@ CLI/*.json
 *.pyc
 __pycache__/
 
+mail-audit-report.json
