@@ -6,6 +6,15 @@ Thunderbird users can use the [InboxPie Thunderbird extension](https://github.co
 
 > We are currently in progress to bring InboxPie to other mailboxes like O365 and other Clients in the near future. If you are interested in helping us with this, please contribute to the project
 
+## Install via Homebrew
+
+```bash
+brew tap AKSarav/crafts
+brew install inboxpie
+```
+
+Requires [Homebrew](https://brew.sh). macOS only.
+
 ## Install from PyPI
 
 ```bash

@@ -58,7 +58,13 @@ Detailed privacy policies: [THUNDERBIRD/PRIVACY.md](THUNDERBIRD/PRIVACY.md) · [
 **CLI (Apple Mail)** — install, scan, generate reports.
 
 ```bash
+# Homebrew (recommended on macOS)
+brew tap AKSarav/crafts
+brew install inboxpie
+
+# Or from source
 cd CLI && python3 -m venv .venv && source .venv/bin/activate && pip install -e .
+
 inboxpie scan --source apple-mail --output all --report-dir ./reports
 ```
 

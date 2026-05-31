@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "inboxpie"
-version = "1.0.2"
+version = "1.0.3"
 description = "InboxPie — Visualize and clean your inbox. Private, local, open source"
 readme = "README.md"
 license = { text = "MIT" }
