@@ -16,15 +16,19 @@ def scan_apple_mail(
     mail_root: Path,
     folders: set[str] | None = None,
     mode: ScanMode = "auto",
+    include_body: bool = False,
 ) -> tuple[list, ScanEngine]:
     """Scan Apple Mail using the requested mode.
 
     ``auto`` (default) reads the Envelope Index first for speed and parity with
     Mail.app, then falls back to walking ``.emlx`` files when the index is
     unavailable or its schema is not recognized.
+
+    ``include_body=True`` forces emlx mode (the only path that can read body
+    text) and populates ``body_preview`` on each ``MessageRecord``.
     """
-    if mode == "emlx":
-        return scan_emlx(mail_root=mail_root, folders=folders), "emlx"
+    if include_body or mode == "emlx":
+        return scan_emlx(mail_root=mail_root, folders=folders, include_body=include_body), "emlx"
 
     if mode == "index":
         return scan_envelope_index(mail_root=mail_root, folders=folders), "index"
