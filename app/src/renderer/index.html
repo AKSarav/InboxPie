@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>InboxPie — Email Analytics & Cleanup</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- ══════════════════════════════════════════
+       SCREEN 1: ONBOARDING (first launch only)
+       ══════════════════════════════════════════ -->
+  <div id="onboardingScreen" class="screen">
+    <div class="onboarding-content">
+      <div class="onboarding-logo-wrap">
+        <svg class="onboarding-rings" viewBox="0 0 240 240" aria-hidden="true">
+          <circle cx="120" cy="120" r="100" fill="none" stroke="var(--border)" stroke-width="1" stroke-dasharray="5,8"/>
+          <circle cx="120" cy="120" r="72"  fill="none" stroke="var(--text-muted)" stroke-width="1" stroke-dasharray="3,6" opacity="0.6"/>
+          <circle cx="120" cy="120" r="44"  fill="none" stroke="var(--text-muted)" stroke-width="1" stroke-dasharray="2,5" opacity="0.4"/>
+        </svg>
+        <img src="assets/InboxPieLogo.png" alt="InboxPie" class="onboarding-logo" width="80" height="80">
+      </div>
+      <h1 class="onboarding-title">InboxPie</h1>
+      <p class="onboarding-tagline">Email Analytics &amp; Intelligence</p>
+      <div class="onboarding-loader">
+        <div class="onboarding-loader-fill"></div>
+      </div>
+      <p class="onboarding-note">Local only &middot; metadata only &middot; nothing leaves your machine</p>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       SCREEN 2: ACCOUNT SELECTION (2 steps)
+       ══════════════════════════════════════════ -->
+  <div id="accountScreen" class="screen">
+    <div class="account-picker-wrap">
+      <div class="account-picker">
+
+        <!-- ── Header (always visible) ── -->
+        <div class="account-picker-header">
+          <img src="assets/InboxPieLogo.png" alt="InboxPie" width="52" height="52" class="account-picker-logo">
+          <h2 class="account-picker-title" id="accountPickerTitle">Connect your email</h2>
+          <p class="account-picker-sub" id="accountPickerSub">Choose your email app to get started</p>
+        </div>
+
+        <!-- ── Step 1: Choose mail client ── -->
+        <div id="providerStep" class="provider-step">
+
+          <div class="provider-list">
+
+            <!-- Apple Mail -->
+            <button id="appleMailProvider" class="provider-row" type="button">
+              <div class="provider-row-icon">
+                <svg viewBox="0 0 56 56" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+                  <defs>
+                    <linearGradient id="amBg" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#62cafc"/>
+                      <stop offset="100%" stop-color="#0479f5"/>
+                    </linearGradient>
+                  </defs>
+                  <rect width="56" height="56" rx="13" fill="url(#amBg)"/>
+                  <!-- envelope body -->
+                  <rect x="9" y="17" width="38" height="26" rx="3" fill="white"/>
+                  <!-- envelope flap chevron -->
+                  <path d="M9 20 L28 33 L47 20" fill="none" stroke="#3da8f5" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </div>
+              <div class="provider-row-text">
+                <span class="provider-row-name">Apple Mail</span>
+                <span class="provider-row-desc">Scan your local macOS mailbox</span>
+              </div>
+              <svg class="provider-row-arrow" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M7 4l6 6-6 6"/>
+              </svg>
+            </button>
+
+            <div class="provider-divider" role="separator"></div>
+
+            <!-- Thunderbird (coming soon) -->
+            <button class="provider-row provider-row-disabled" type="button" disabled>
+              <div class="provider-row-icon provider-row-icon-dim">
+                <img src="assets/thunderbird-logo.png" alt="Thunderbird" width="56" height="56" style="border-radius:13px; display:block;">
+              </div>
+              <div class="provider-row-text">
+                <span class="provider-row-name">Thunderbird</span>
+                <span class="provider-row-desc">Cross-platform email client</span>
+              </div>
+              <span class="provider-soon-pill">Coming Soon</span>
+            </button>
+
+          </div>
+
+          <div class="provider-step-footer">
+            <p class="account-privacy-note">
+              <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 1L2 4v4c0 3.3 2.4 6.4 6 7 3.6-.6 6-3.7 6-7V4L8 1z"/></svg>
+              Desktop app &middot; metadata only &middot; nothing leaves your machine
+            </p>
+          </div>
+        </div>
+
+        <!-- ── Step 2: Choose account within Apple Mail ── -->
+        <div id="accountStep" style="display:none">
+          <div class="account-step-nav">
+            <button id="backToProviders" class="btn-back" type="button">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3L4 8l6 5"/></svg>
+              Back
+            </button>
+            <div class="account-step-provider">
+              <svg class="account-step-provider-icon" viewBox="0 0 20 20" aria-hidden="true">
+                <defs>
+                  <linearGradient id="amGrad2" x1="0%" y1="0%" x2="0%" y2="100%">
+                    <stop offset="0%" style="stop-color:#5ac8fa"/>
+                    <stop offset="100%" style="stop-color:#007aff"/>
+                  </linearGradient>
+                </defs>
+                <rect width="20" height="20" rx="4" fill="url(#amGrad2)"/>
+                <rect x="3" y="6" width="14" height="9" rx="1" fill="white" opacity="0.95"/>
+                <path d="M3 7.5 L10 12 L17 7.5" fill="none" stroke="url(#amGrad2)" stroke-width="1.2" stroke-linecap="round"/>
+              </svg>
+              Apple Mail
+            </div>
+            <!-- Mask toggle: emails hidden by default -->
+            <button id="accountMaskToggle" class="account-mask-btn" type="button" title="Emails are masked for privacy. Click to reveal.">
+              <svg id="maskIconOff" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                <circle cx="12" cy="12" r="3"/>
+                <line x1="1" y1="1" x2="23" y2="23"/>
+              </svg>
+              <svg id="maskIconOn" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="display:none">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                <circle cx="12" cy="12" r="3"/>
+              </svg>
+            </button>
+          </div>
+
+          <div id="accountCardList" class="account-card-list">
+            <div class="account-loading">
+              <svg class="account-loading-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+              </svg>
+              Loading accounts&hellip;
+            </div>
+          </div>
+
+          <div class="account-picker-footer">
+            <button id="accountContinueBtn" class="btn btn-primary btn-full" disabled>
+              Select Folders
+              <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 10h10M12 7l3 3-3 3"/></svg>
+            </button>
+            <p class="account-privacy-note">
+              <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 1L2 4v4c0 3.3 2.4 6.4 6 7 3.6-.6 6-3.7 6-7V4L8 1z"/></svg>
+              Desktop app &middot; metadata only &middot; nothing leaves your machine
+            </p>
+          </div>
+        </div>
+
+        <!-- ── Step 3: Select folders to scan ── -->
+        <div id="folderStep" style="display:none">
+          <div class="account-step-nav">
+            <button id="backToAccounts" class="btn-back" type="button">
+              <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3L4 8l6 5"/></svg>
+              Back
+            </button>
+            <span class="folder-step-title">Select Folders</span>
+            <span id="folderStepAccountChip" class="folder-step-account-chip"></span>
+            <div class="folder-step-quick">
+              <button id="folderSelectAll"   class="folder-quick-btn" type="button">All</button>
+              <button id="folderSelectInbox" class="folder-quick-btn" type="button">Inbox</button>
+              <button id="folderSelectNone"  class="folder-quick-btn" type="button">None</button>
+            </div>
+          </div>
+
+          <div id="folderCheckList" class="folder-check-list">
+            <div class="account-loading">
+              <svg class="account-loading-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+              </svg>
+              Loading folders&hellip;
+            </div>
+          </div>
+
+          <div class="account-picker-footer">
+            <!-- Privacy note: left side in full-screen mode -->
+            <p class="account-privacy-note">
+              <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 1L2 4v4c0 3.3 2.4 6.4 6 7 3.6-.6 6-3.7 6-7V4L8 1z"/></svg>
+              Desktop app &middot; nothing leaves your machine &middot; reading mode in Settings
+            </p>
+            <!-- Scan CTA: right side, icon on the RIGHT of the label -->
+            <button id="startScanBtn" class="btn btn-primary" disabled>
+              <span id="startScanLabel">Start Scan</span>
+              <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="9" cy="9" r="6"/>
+                <line x1="15" y1="15" x2="19" y2="19"/>
+                <line x1="9" y1="6" x2="9" y2="12"/>
+                <line x1="6" y1="9" x2="12" y2="9"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       SCREEN 3: APP SHELL (left nav + content)
+       ══════════════════════════════════════════ -->
+  <div id="appShell" class="screen app-shell">
+
+    <!-- ── LEFT NAVIGATION ── -->
+    <nav id="leftNav" class="left-nav">
+
+      <div class="nav-brand">
+        <img src="assets/InboxPieLogo.png" alt="InboxPie" class="nav-brand-logo" width="26" height="26">
+        <span class="nav-brand-name">InboxPie</span>
+      </div>
+
+      <!-- Analytics: shown after first scan -->
+      <div class="nav-section" id="navAnalytics" style="display:none">
+        <div class="nav-section-label">Analytics</div>
+        <button class="tab nav-item" data-view="sunburst">
+          <svg class="nav-item-icon" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="10" cy="10" r="7"/><path d="M10 3v7l5 5"/>
+          </svg>
+          PieView
+        </button>
+        <button class="tab nav-item" data-view="sender">
+          <svg class="nav-item-icon" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="10" cy="7" r="3"/><path d="M4.5 17c.8-3.2 2.7-5 5.5-5s4.7 1.8 5.5 5"/>
+          </svg>
+          By Sender
+        </button>
+        <button class="tab nav-item" data-view="domain">
+          <svg class="nav-item-icon" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="10" cy="10" r="7"/><path d="M3 10h14M10 3c2 2.2 3 4.5 3 7s-1 4.8-3 7M10 3c-2 2.2-3 4.5-3 7s1 4.8 3 7"/>
+          </svg>
+          By Domain
+        </button>
+        <button class="tab nav-item" data-view="size">
+          <svg class="nav-item-icon" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 6.5c0-1.7 2.7-3 6-3s6 1.3 6 3-2.7 3-6 3-6-1.3-6-3z"/><path d="M4 6.5v7c0 1.7 2.7 3 6 3s6-1.3 6-3v-7M4 10c0 1.7 2.7 3 6 3s6-1.3 6-3"/>
+          </svg>
+          By Size
+        </button>
+        <button class="tab nav-item" data-view="timeline">
+          <svg class="nav-item-icon" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2"/>
+          </svg>
+          Timeline
+        </button>
+      </div>
+
+      <!-- Intelligence: SmartSearch + KnowledgeMap — shown after scan -->
+      <div class="nav-section" id="navIntelligence" style="display:none">
+        <div class="nav-section-label">Intelligence <span class="nav-beta-tag">Beta</span></div>
+        <button class="tab nav-item" data-view="smartsearch">
+          <svg class="nav-item-icon" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="8.5" cy="8.5" r="5.5"/><path d="M15.5 15.5l-3.8-3.8"/>
+            <path d="M6.5 8.5h4M8.5 6.5v4"/>
+          </svg>
+          SmartSearch
+        </button>
+        <button class="tab nav-item" data-view="knowledgemap">
+          <svg class="nav-item-icon" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10 2a5 5 0 013.9 8.1V11.5a1 1 0 01-1 1H7.1a1 1 0 01-1-1V10.1A5 5 0 0110 2z"/>
+            <path d="M8 12.5v1a2 2 0 004 0v-1"/>
+            <path d="M6.5 7.5h1M12.5 7.5h1M8 5.5h4"/>
+          </svg>
+          Intelligence
+        </button>
+      </div>
+
+      <div class="nav-spacer"></div>
+
+      <!-- Settings — always accessible -->
+      <div class="nav-section" id="navAISettings">
+        <div class="nav-section-label">App</div>
+        <button class="tab nav-item" data-view="aisettings" id="navAISettingsBtn">
+          <svg class="nav-item-icon" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="10" cy="10" r="3"/>
+            <path d="M10 2.5v1.2M10 16.3v1.2M2.5 10h1.2M16.3 10h1.2M4.7 4.7l.85.85M14.45 14.45l.85.85M4.7 15.3l.85-.85M14.45 5.55l.85-.85"/>
+          </svg>
+          Settings
+        </button>
+      </div>
+
+      <!-- Nav footer utility buttons -->
+      <div class="nav-footer">
+        <button id="privacyToggle" class="privacy-toggle nav-footer-btn" title="Toggle email masking for privacy">
+          <svg class="privacy-icon privacy-icon-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.75"/></svg>
+          <svg class="privacy-icon privacy-icon-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12c2-3 5.5-5 9-5s7 2 9 5" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/><path d="M3 12c2 3 5.5 5 9 5s7-2 9-5" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/></svg>
+        </button>
+        <button id="themeToggle" class="theme-toggle nav-footer-btn" title="Toggle theme">&#9728;</button>
+        <button id="resetBtn" class="theme-toggle nav-footer-btn" title="Reset dashboard and start over">
+          <svg class="reset-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M3 12a9 9 0 1 0 2.1-5.7" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>
+            <path d="M3 4v5h5" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
+    </nav>
+
+    <!-- ── CONTENT AREA ── -->
+    <div id="app" class="content-area">
+
+      <!-- Slim content header: scan controls -->
+      <div id="headerRevealBar" class="header-reveal-bar" style="display:none;">
+        <button id="headerRevealBtn" class="header-reveal-btn" title="Show scan controls">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6l4 4 4-4"/></svg>
+          Scan Controls
+        </button>
+      </div>
+      <header id="header" class="content-header">
+        <div class="header-left">
+          <div class="folder-select-wrap">
+            <button type="button" id="folderSelectBtn" class="btn btn-secondary folder-select-btn">
+              <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><path d="M2 4h5l2 2h9v10H2V4z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+              <span id="folderSelectLabel">Folders</span>
+              <span id="folderCountBadge" class="folder-count-badge" style="display:none;">0</span>
+            </button>
+            <div id="folderDropdown" class="folder-dropdown" style="display:none;">
+              <div id="folderDropdownHeader" class="folder-dropdown-header">Select folders to scan</div>
+              <div id="folderDropdownList" class="folder-dropdown-list">
+                <div class="folder-dropdown-empty">Open to load folders…</div>
+              </div>
+              <div class="folder-dropdown-actions">
+                <button type="button" class="btn btn-secondary btn-small" id="folderSelectAll">All</button>
+                <button type="button" class="btn btn-secondary btn-small" id="folderSelectNone">None</button>
+              </div>
+              <div id="folderDropdownFooter" class="folder-dropdown-footer" style="display:none;"></div>
+            </div>
+          </div>
+          <select id="accountSelect">
+            <option value="all">All Accounts</option>
+          </select>
+        </div>
+        <div class="header-right">
+          <button id="scanBtn" class="btn btn-primary">
+            <span class="btn-text">Scan Mailbox</span>
+            <span class="btn-loader" style="display:none;">Scanning&hellip;</span>
+          </button>
+          <button id="headerCollapseBtn" class="header-collapse-btn" title="Collapse scan controls">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 10l4-4 4 4"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- Stats Bar -->
+      <div id="statsBar" class="stats-bar" style="display:none;">
+        <div class="stat-card">
+          <div class="stat-icon" aria-hidden="true">
+            <svg viewBox="0 0 20 20"><path d="M3.5 6.5h13v8h-13z"></path><path d="m3.5 6.5 6.5 5 6.5-5"></path></svg>
+          </div>
+          <div><div class="stat-number" id="statTotal">0</div><div class="stat-label">Total Emails</div></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon" aria-hidden="true">
+            <svg viewBox="0 0 20 20"><circle cx="10" cy="7" r="3"></circle><path d="M4.5 17c.8-3.2 2.7-5 5.5-5s4.7 1.8 5.5 5"></path></svg>
+          </div>
+          <div><div class="stat-number" id="statSenders">0</div><div class="stat-label">Unique Senders</div></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon" aria-hidden="true">
+            <svg viewBox="0 0 20 20"><path d="M4 5h12v10H4z"></path><path d="M4 8h12"></path><path d="M7 11h4"></path></svg>
+          </div>
+          <div><div class="stat-number" id="statUnread">0</div><div class="stat-label">Unread</div></div>
+        </div>
+        <div class="stat-card stat-card-selected stat-card-clickable" id="statCardSelected" title="Click to review selected emails">
+          <div class="stat-icon" aria-hidden="true">
+            <svg viewBox="0 0 20 20"><path d="M4 10.5 8 14l8-8"></path></svg>
+          </div>
+          <div><div class="stat-number" id="statSelected">0</div><div class="stat-label">Selected for Action</div></div>
+        </div>
+      </div>
+
+      <div id="progressArea" style="display:none;">
+        <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+        <div class="progress-text" id="progressText">Scanning...</div>
+      </div>
+
+      <div id="exportBar" class="export-bar" style="display:none;">
+        <button id="exportCsvBtn" class="btn btn-secondary">&#8595; Export CSV</button>
+        <button id="exportJsonBtn" class="btn btn-secondary">&#8595; Export JSON</button>
+      </div>
+
+      <!-- viewTabs: empty sentinel used by dashboard.js for show/hide signaling.
+           The actual .tab buttons live in #leftNav above. -->
+      <div id="viewTabs" class="view-tabs-sentinel"></div>
+
+      <main id="mainContent">
+        <div id="landingState" class="landing">
+          <div class="landing-visual">
+            <svg viewBox="0 0 200 200" width="160" height="160">
+              <circle cx="100" cy="100" r="80" fill="none" stroke="var(--border)" stroke-width="1" stroke-dasharray="4,6"/>
+              <circle cx="100" cy="100" r="55" fill="none" stroke="var(--text-muted)" stroke-width="1" stroke-dasharray="3,5"/>
+              <circle cx="100" cy="100" r="30" fill="none" stroke="var(--text-muted)" stroke-width="1" stroke-dasharray="2,4"/>
+              <circle cx="100" cy="100" r="8" fill="var(--accent)" opacity="0.8"/>
+            </svg>
+          </div>
+          <p class="landing-text">Scan Apple Mail locally to generate<br>a sunburst report of all your emails.</p>
+          <p class="landing-text" style="font-size:12px;margin-top:8px;color:var(--text-muted);">
+            Desktop app &middot; metadata only &middot; nothing leaves your machine
+          </p>
+        </div>
+
+        <div id="sunburstView" class="view-panel" style="display:none;">
+          <div class="sunburst-layout">
+            <div>
+              <div class="sunburst-container">
+                <svg id="sunburstSvg" viewBox="0 0 800 800"></svg>
+                <div id="sunburstTooltip" class="sunburst-tooltip" style="display:none;"></div>
+              </div>
+              <div id="sunburstBreadcrumb" class="breadcrumb"></div>
+            </div>
+            <div id="legendPanel" class="legend-panel"></div>
+          </div>
+          <div id="sunburstDetail" class="detail-panel"></div>
+        </div>
+
+        <div id="senderView" class="view-panel" style="display:none;">
+          <div class="table-controls">
+            <input type="text" id="senderSearch" class="search-input" placeholder="Search senders…">
+            <select id="senderSort">
+              <option value="count-desc">Most emails first</option>
+              <option value="count-asc">Fewest emails first</option>
+              <option value="name-asc">Name A→Z</option>
+              <option value="date-desc">Most recent first</option>
+            </select>
+            <div id="senderBulkButtons" class="bulk-buttons-group" style="display:none;">
+              <button type="button" class="btn btn-primary" data-action="bulk-review">
+                Review Selected (<span class="bulk-delete-count">0</span>)
+              </button>
+            </div>
+          </div>
+          <div id="senderTable" class="sender-table"></div>
+        </div>
+
+        <div id="domainView" class="view-panel" style="display:none;">
+          <div class="table-controls">
+            <input type="text" id="domainSearch" class="search-input" placeholder="Search domains…">
+            <div id="domainBulkButtons" class="bulk-buttons-group" style="display:none;">
+              <button type="button" class="btn btn-primary" data-action="bulk-review">
+                Review Selected (<span class="bulk-delete-count">0</span>)
+              </button>
+            </div>
+          </div>
+          <div id="domainTable" class="sender-table"></div>
+        </div>
+
+        <div id="sizeView" class="view-panel" style="display:none;">
+          <div class="size-dashboard">
+            <div class="timeline-header">
+              <div>
+                <h2>Storage Cleanup</h2>
+                <p id="sizeSummaryLabel">Find the messages using the most mailbox space.</p>
+              </div>
+              <div id="sizeBulkButtons" class="bulk-buttons-group" style="display:none;">
+                <button type="button" class="btn btn-primary" data-action="bulk-review">
+                  Review Selected (<span class="bulk-delete-count">0</span>)
+                </button>
+              </div>
+            </div>
+            <div id="sizeInsights" class="timeline-insights"></div>
+          </div>
+        </div>
+
+        <div id="timelineView" class="view-panel" style="display:none;">
+          <div class="timeline-dashboard">
+            <div class="timeline-header">
+              <div>
+                <h2>Inbox Timeline</h2>
+                <p id="timelineRangeLabel">All scanned mail</p>
+              </div>
+              <div id="timelineBulkButtons" class="bulk-buttons-group" style="display:none;">
+                <button type="button" class="btn btn-primary" data-action="bulk-review">
+                  Review Selected (<span class="bulk-delete-count">0</span>)
+                </button>
+              </div>
+            </div>
+            <div id="timelineControls" class="timeline-controls"></div>
+            <div id="timelineChart" class="timeline-chart"></div>
+            <div id="timelineInsights" class="timeline-insights"></div>
+          </div>
+        </div>
+
+        <!-- ── Intelligence panels ── -->
+        <div id="smartsearchView" class="view-panel view-panel-intelligence" style="display:none;"></div>
+        <div id="knowledgemapView" class="view-panel view-panel-intelligence" style="display:none;"></div>
+        <div id="aisettingsView" class="view-panel view-panel-intelligence" style="display:none;"></div>
+
+      </main>
+    </div><!-- /.content-area -->
+  </div><!-- /#appShell -->
+
+  <!-- ══════════════════════════════════════════
+       MODALS (always present in DOM)
+       ══════════════════════════════════════════ -->
+  <div id="selectionReviewModal" class="modal-overlay" style="display:none;">
+    <div class="modal-box selection-review-modal">
+      <div class="selection-review-head">
+        <div>
+          <h3>Review selected emails</h3>
+          <p id="selectionReviewSummary"></p>
+        </div>
+        <button type="button" id="selectionReviewClose" class="btn btn-secondary">Close</button>
+      </div>
+      <div class="selection-review-controls">
+        <input type="text" id="selectionReviewSearch" class="search-input" placeholder="Search subject, sender, folder…">
+        <select id="selectionReviewSort">
+          <option value="date-desc">Newest first</option>
+          <option value="date-asc">Oldest first</option>
+          <option value="size-desc">Largest first</option>
+          <option value="sender-asc">Sender A→Z</option>
+          <option value="subject-asc">Subject A→Z</option>
+        </select>
+        <button type="button" id="selectionReviewUnselectMatches" class="btn btn-secondary">Unselect Matches</button>
+      </div>
+      <div id="selectionReviewTable" class="selection-review-table"></div>
+      <div class="modal-actions selection-review-actions">
+        <button type="button" id="selectionReviewExport" class="btn btn-secondary">Export CSV</button>
+        <button type="button" id="selectionReviewClear" class="btn btn-secondary">Clear Selection</button>
+        <button type="button" id="selectionReviewFolder" class="btn btn-secondary">Move to Folder</button>
+        <button type="button" id="selectionReviewTrash" class="btn btn-danger">Move to Trash</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="deleteModal" class="modal-overlay" style="display:none;">
+    <div class="modal-box">
+      <h3>&#9888; Confirm Move to Trash</h3>
+      <p id="deleteModalText"></p>
+      <p><span class="badge-safe">SAFE</span> Messages will be moved to Trash — not permanently deleted. You can recover them from your Trash folder.</p>
+      <div class="modal-actions">
+        <button id="modalCancel" class="btn btn-secondary">Cancel</button>
+        <button id="modalConfirm" class="btn btn-danger">Move to Trash</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="folderModal" class="modal-overlay" style="display:none;">
+    <div class="modal-box modal-box-wide">
+      <h3>Move to folder</h3>
+      <p id="folderModalText"></p>
+      <label class="folder-modal-label" for="folderModalSelect">Destination</label>
+      <select id="folderModalSelect" class="folder-modal-select" size="12"></select>
+      <div class="modal-actions">
+        <button type="button" id="folderModalCancel" class="btn btn-secondary">Cancel</button>
+        <button type="button" id="folderModalConfirm" class="btn btn-primary">Move here</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="shell.js"></script>
+  <script src="dashboard.js"></script>
+  <script src="intelligence.js"></script>
+</body>
+</html>

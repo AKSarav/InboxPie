@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>InboxPie — Private, on-device email intelligence</title>
+  <meta name="description" content="InboxPie turns your inbox into clear, visual insight — and an AI you can actually trust. 100% on your device. No cloud, no telemetry, never reads your data without you." />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- backdrop glow -->
+  <div class="bg-orbs" aria-hidden="true">
+    <span class="orb orb-1"></span>
+    <span class="orb orb-2"></span>
+    <span class="orb orb-3"></span>
+  </div>
+
+  <!-- ── Header ─────────────────────────────────────────── -->
+  <header class="nav">
+    <a class="brand" href="#top">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="26" height="26">
+          <circle cx="16" cy="16" r="13" fill="none" stroke="url(#g)" stroke-width="3" stroke-dasharray="20 8" stroke-linecap="round"/>
+          <circle cx="16" cy="16" r="5" fill="url(#g)"/>
+          <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#6f8bff"/><stop offset="1" stop-color="#b06bff"/>
+          </linearGradient></defs>
+        </svg>
+      </span>
+      InboxPie
+    </a>
+    <nav class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#privacy">Privacy</a>
+      <a href="#products">Apps</a>
+      <a href="#how">How it works</a>
+    </nav>
+    <a class="btn btn-ghost nav-cta" href="https://github.com/" target="_blank" rel="noopener">
+      <svg viewBox="0 0 16 16" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M8 .2A8 8 0 0 0 5.5 15.8c.4.1.5-.2.5-.4v-1.5c-2 .5-2.5-.9-2.5-.9-.3-.9-.8-1.1-.8-1.1-.7-.5 0-.5 0-.5.8.1 1.2.8 1.2.8.7 1.2 1.9.9 2.3.7.1-.5.3-.9.5-1.1-1.6-.2-3.3-.8-3.3-3.6 0-.8.3-1.5.8-2 0-.2-.4-1 .1-2 0 0 .6-.2 2 .8a7 7 0 0 1 3.6 0c1.4-1 2-.8 2-.8.5 1 .1 1.8.1 2 .5.5.8 1.2.8 2 0 2.8-1.7 3.4-3.3 3.6.3.2.5.7.5 1.4v2c0 .2.1.5.5.4A8 8 0 0 0 8 .2Z"/></svg>
+      GitHub
+    </a>
+  </header>
+
+  <!-- ── Hero ───────────────────────────────────────────── -->
+  <main id="top">
+    <section class="hero">
+      <div class="hero-copy">
+        <span class="pill"><span class="pill-dot"></span> 100% on-device · open source</span>
+        <h1>Your inbox, finally <span class="grad">understood.</span></h1>
+        <p class="lede">
+          InboxPie turns thousands of emails into clear, beautiful insight — and an AI assistant
+          you can actually trust. Everything runs on <strong>your machine</strong>. No cloud, no
+          telemetry, nothing leaves your device.
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="#products">Get InboxPie</a>
+          <a class="btn btn-ghost" href="#how">See how it works</a>
+        </div>
+        <ul class="trust">
+          <li>✓ No data leaves your device</li>
+          <li>✓ Metadata-only by default</li>
+          <li>✓ Local or bring-your-own-key AI</li>
+        </ul>
+      </div>
+
+      <!-- CSS-drawn product visual -->
+      <div class="hero-visual" aria-hidden="true">
+        <div class="glass card-pie">
+          <div class="card-head"><span>PieView · this year</span><span class="chip">12,480 emails</span></div>
+          <div class="donut"></div>
+          <div class="legend">
+            <span><i style="background:#6f8bff"></i>Finance</span>
+            <span><i style="background:#b06bff"></i>Shopping</span>
+            <span><i style="background:#36d399"></i>Travel</span>
+            <span><i style="background:#f59e0b"></i>Work</span>
+          </div>
+        </div>
+        <div class="glass card-chat">
+          <div class="chat-q">How much did I invest last year?</div>
+          <div class="chat-a">
+            <span class="kpi">₹3,65,485</span>
+            <span class="kpi-sub">across 9 transactions · read from your emails, on-device</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Stat bar ─────────────────────────────────────── -->
+    <section class="stripe">
+      <div><b>0</b><span>bytes sent to the cloud</span></div>
+      <div><b>3</b><span>apps: CLI · Thunderbird · Desktop</span></div>
+      <div><b>∞</b><span>emails analysed locally</span></div>
+      <div><b>You</b><span>own your data &amp; your keys</span></div>
+    </section>
+
+    <!-- ── Features ─────────────────────────────────────── -->
+    <section id="features" class="section">
+      <h2 class="section-title">Everything to make sense of your mail</h2>
+      <p class="section-sub">Visual analytics and a private AI layer — built for people with real, messy inboxes.</p>
+
+      <div class="grid">
+        <article class="glass feature">
+          <div class="f-ico ico-search">🔍</div>
+          <h3>SmartSearch <span class="beta">Beta</span></h3>
+          <p>Ask in plain language — “list my purchases last year and their value.” A local agent searches by meaning, reads the details, and answers with figures, not just a list.</p>
+        </article>
+        <article class="glass feature">
+          <div class="f-ico ico-map">🗺️</div>
+          <h3>Knowledge Map</h3>
+          <p>Your inbox grouped into categories you control — Finance, Investments, Travel… Define your own keywords and the map reshapes to your taxonomy.</p>
+        </article>
+        <article class="glass feature">
+          <div class="f-ico ico-pie">🥧</div>
+          <h3>PieView &amp; insights</h3>
+          <p>A drill-down sunburst plus sender, domain, size and timeline views — see who fills your inbox, what's bloating it, and where it all comes from.</p>
+        </article>
+        <article class="glass feature">
+          <div class="f-ico ico-broom">🧹</div>
+          <h3>Bulk cleanup</h3>
+          <p>Select by sender or domain and move or trash in one sweep. Reclaim space from newsletters and noise without endless scrolling.</p>
+        </article>
+        <article class="glass feature">
+          <div class="f-ico ico-cpu">🖥️</div>
+          <h3>Local AI, or your key</h3>
+          <p>Run fully offline with Ollama (gpt-oss, Llama, Qwen) — or plug in your own OpenAI / Anthropic / Google key. Your account, your call.</p>
+        </article>
+        <article class="glass feature">
+          <div class="f-ico ico-lock">🔒</div>
+          <h3>Private by design</h3>
+          <p>Reads metadata by default; full-content indexing is opt-in and stays on-device. No servers, no tracking, nothing phones home.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ── Privacy ──────────────────────────────────────── -->
+    <section id="privacy" class="section privacy">
+      <div class="glass privacy-card">
+        <div class="privacy-badge">🛡️</div>
+        <h2>Privacy isn't a setting. It's the architecture.</h2>
+        <p>
+          InboxPie never collects, stores, or transmits your email to any InboxPie server — because
+          there are no InboxPie servers. The semantic index is built and queried on your own machine.
+          When you opt into cloud AI, data flows <em>device → your own API account</em>, exactly as if
+          you'd pasted it yourself. You can see every step in the live “Thinking” panel.
+        </p>
+        <div class="privacy-points">
+          <span>No telemetry</span><span>No accounts</span><span>No cloud index</span>
+          <span>Open source</span><span>Your keys, encrypted locally</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Products ─────────────────────────────────────── -->
+    <section id="products" class="section">
+      <h2 class="section-title">One engine, three ways to use it</h2>
+      <p class="section-sub">Pick the surface that fits how you work.</p>
+      <div class="grid grid-3">
+        <article class="glass product">
+          <div class="p-tag">macOS · Windows</div>
+          <h3>Desktop App</h3>
+          <p>The full experience — visual dashboards, SmartSearch, and the Knowledge Map in a native app backed by the local scan engine.</p>
+          <a class="btn btn-primary btn-block" href="#">Download</a>
+        </article>
+        <article class="glass product">
+          <div class="p-tag">Thunderbird 115+</div>
+          <h3>Extension</h3>
+          <p>An interactive dashboard right inside Thunderbird, with selection plus bulk move &amp; trash on your live mailbox.</p>
+          <a class="btn btn-ghost btn-block" href="#">Add to Thunderbird</a>
+        </article>
+        <article class="glass product">
+          <div class="p-tag">Python 3.10+</div>
+          <h3>CLI</h3>
+          <p>Scan Apple Mail from the terminal and export HTML, CSV, JSON or terminal reports. Scriptable and automation-friendly.</p>
+          <a class="btn btn-ghost btn-block" href="#">pip install inboxpie</a>
+        </article>
+      </div>
+    </section>
+
+    <!-- ── How it works ─────────────────────────────────── -->
+    <section id="how" class="section">
+      <h2 class="section-title">Up and running in three steps</h2>
+      <div class="steps">
+        <div class="step"><span class="step-n">1</span><h4>Scan</h4><p>Point InboxPie at your mailbox. It reads metadata locally and builds a private index — no upload.</p></div>
+        <div class="step"><span class="step-n">2</span><h4>Explore</h4><p>See the breakdown in PieView, drill into senders and domains, and bulk-clean the noise.</p></div>
+        <div class="step"><span class="step-n">3</span><h4>Ask</h4><p>Pick a model and folders, then ask anything. Watch it search, find, and answer — on your machine.</p></div>
+      </div>
+      <div class="cta-final">
+        <h2>Make your inbox make sense.</h2>
+        <a class="btn btn-primary btn-lg" href="#products">Get InboxPie</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">🥧</span> InboxPie</div>
+    <p>Private, on-device email intelligence. Your inbox stays yours.</p>
+    <div class="foot-links">
+      <a href="#features">Features</a><a href="#privacy">Privacy</a>
+      <a href="#products">Apps</a><a href="https://github.com/" target="_blank" rel="noopener">GitHub</a>
+    </div>
+    <small>© <span id="yr"></span> InboxPie · Built privacy-first.</small>
+  </footer>
+
+  <script>document.getElementById('yr').textContent = new Date().getFullYear();</script>
+</body>
+</html>

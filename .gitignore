@@ -11,6 +11,10 @@
 node_modules/
 dist/
 build/
+app/node_modules/
+app/out/
+app/release/
+app/dist/
 CLI/.venv/
 CLI/dist/
 CLI/build/
