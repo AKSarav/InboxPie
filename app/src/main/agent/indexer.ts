@@ -20,7 +20,8 @@ export interface IndexProgress {
   folder?: string;
 }
 
-const BATCH_SIZE = 32;
+// bge-large takes ~200-500ms per embedding; keep chunks tiny so the event loop breathes.
+const BATCH_SIZE = 4;
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -130,6 +131,10 @@ export async function buildVectorIndex(
     }
 
     onProgress({ done: start + chunk.length, total, indexed: alreadyIndexed.size + indexed, errors, folder });
+
+    // Rest between chunks: gives Electron's IPC queue and renderer a guaranteed
+    // ~15 ms breath so the UI stays responsive during a long reindex.
+    await new Promise((r) => setTimeout(r, 15));
   }
 
   return { indexed, errors, indexedIds, errorIds };

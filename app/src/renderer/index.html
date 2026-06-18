@@ -8,6 +8,13 @@
 </head>
 <body>
 
+  <!-- ambient background orbs (matches inboxpie.com aesthetic) -->
+  <div class="bg-orbs" aria-hidden="true">
+    <span class="orb orb-1"></span>
+    <span class="orb orb-2"></span>
+    <span class="orb orb-3"></span>
+  </div>
+
   <!-- ══════════════════════════════════════════
        SCREEN 1: ONBOARDING (first launch only)
        ══════════════════════════════════════════ -->
@@ -27,6 +34,108 @@
         <div class="onboarding-loader-fill"></div>
       </div>
       <p class="onboarding-note">Local only &middot; metadata only &middot; nothing leaves your machine</p>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════
+       SCREEN 1b: FIRST-RUN SETUP
+       Shown when app_ready is not "yes".
+       Tracks: embedding download + python check.
+       ══════════════════════════════════════════ -->
+  <div id="setupScreen" class="screen">
+    <div class="setup-shell">
+
+      <!-- Header -->
+      <div class="setup-header">
+        <div class="setup-logo-wrap">
+          <svg class="setup-rings" viewBox="0 0 160 160" aria-hidden="true">
+            <circle cx="80" cy="80" r="68" fill="none" stroke="var(--border)" stroke-width="1" stroke-dasharray="4,7" opacity="0.5"/>
+            <circle cx="80" cy="80" r="46" fill="none" stroke="var(--text-muted)" stroke-width="1" stroke-dasharray="3,6" opacity="0.3"/>
+          </svg>
+          <img src="assets/InboxPieLogo.png" alt="InboxPie" class="setup-logo" width="56" height="56">
+        </div>
+        <h1 class="setup-title">Setting up InboxPie</h1>
+        <p class="setup-subtitle">Preparing your private email intelligence — this only happens once</p>
+      </div>
+
+      <!-- Task cards -->
+      <div class="setup-tasks" id="setupTasks">
+        <!-- Task: Embedding model -->
+        <div class="setup-task" id="setupTaskEmbedding" data-task="embedding">
+          <div class="setup-task-icon" id="setupIconEmbedding">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10 2a4.5 4.5 0 013.5 7.3V11a1 1 0 01-1 1H7.5a1 1 0 01-1-1v-1.7A4.5 4.5 0 0110 2z"/>
+              <path d="M8 12v1a2 2 0 004 0v-1"/>
+            </svg>
+          </div>
+          <div class="setup-task-body">
+            <div class="setup-task-header-row">
+              <span class="setup-task-name">AI Embedding Model</span>
+              <span class="setup-task-badge" id="setupBadgeEmbedding">Pending</span>
+            </div>
+            <p class="setup-task-desc" id="setupDescEmbedding">Downloading bge-base-en-v1.5 (~110 MB) — powers semantic email search</p>
+            <div class="setup-task-bar-wrap" id="setupBarEmbedding" style="display:none">
+              <div class="setup-task-bar">
+                <div class="setup-task-bar-fill" id="setupBarFillEmbedding"></div>
+              </div>
+              <span class="setup-task-pct" id="setupPctEmbedding">0%</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Task: Python CLI -->
+        <div class="setup-task" id="setupTaskPython" data-task="python">
+          <div class="setup-task-icon" id="setupIconPython">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="14" height="14" rx="2"/>
+              <path d="M7 7l3 3-3 3M11 13h3"/>
+            </svg>
+          </div>
+          <div class="setup-task-body">
+            <div class="setup-task-header-row">
+              <span class="setup-task-name">Python &amp; CLI Scanner</span>
+              <span class="setup-task-badge" id="setupBadgePython">Checking…</span>
+            </div>
+            <p class="setup-task-desc" id="setupDescPython">Verifying Python 3 and the inboxpie_cli scan engine</p>
+          </div>
+        </div>
+
+        <!-- Task: Permissions -->
+        <div class="setup-task" id="setupTaskPerms" data-task="perms">
+          <div class="setup-task-icon" id="setupIconPerms">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="5" y="9" width="10" height="8" rx="1.5"/>
+              <path d="M7 9V7a3 3 0 016 0v2"/>
+              <circle cx="10" cy="13" r="1" fill="currentColor" stroke="none"/>
+            </svg>
+          </div>
+          <div class="setup-task-body">
+            <div class="setup-task-header-row">
+              <span class="setup-task-name">Full Disk Access</span>
+              <span class="setup-task-badge" id="setupBadgePerms">Checking…</span>
+            </div>
+            <p class="setup-task-desc" id="setupDescPerms">Required to read Apple Mail data on your Mac</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div class="setup-footer" id="setupFooter">
+        <div class="setup-overall-bar-wrap" id="setupOverallWrap">
+          <div class="setup-overall-bar">
+            <div class="setup-overall-fill" id="setupOverallFill" style="width:0%"></div>
+          </div>
+          <span class="setup-overall-label" id="setupOverallLabel">Preparing…</span>
+        </div>
+        <button id="setupEnterBtn" class="setup-enter-btn" style="display:none">
+          Enter InboxPie
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 8h10M9 4l4 4-4 4"/>
+          </svg>
+        </button>
+        <p class="setup-skip-note" id="setupSkipNote">You can <button class="setup-skip-link" id="setupSkipBtn">skip and enter the app</button> — AI search won't work until the model finishes downloading.</p>
+      </div>
+
     </div>
   </div>
 
@@ -214,36 +323,44 @@
       <div class="nav-brand">
         <img src="assets/InboxPieLogo.png" alt="InboxPie" class="nav-brand-logo" width="26" height="26">
         <span class="nav-brand-name">InboxPie</span>
+        <button id="sidebarToggleBtn" class="sidebar-toggle-btn" title="Toggle sidebar">
+          <svg class="toggle-icon-collapse" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="13 4 7 10 13 16"></polyline>
+          </svg>
+          <svg class="toggle-icon-expand" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:none;">
+            <polyline points="7 4 13 10 7 16"></polyline>
+          </svg>
+        </button>
       </div>
 
       <!-- Analytics: shown after first scan -->
       <div class="nav-section" id="navAnalytics" style="display:none">
         <div class="nav-section-label">Analytics</div>
-        <button class="tab nav-item" data-view="sunburst">
+        <button class="tab nav-item" data-view="sunburst" data-label="PieView">
           <svg class="nav-item-icon" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="10" cy="10" r="7"/><path d="M10 3v7l5 5"/>
           </svg>
           PieView
         </button>
-        <button class="tab nav-item" data-view="sender">
+        <button class="tab nav-item" data-view="sender" data-label="By Sender">
           <svg class="nav-item-icon" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="10" cy="7" r="3"/><path d="M4.5 17c.8-3.2 2.7-5 5.5-5s4.7 1.8 5.5 5"/>
           </svg>
           By Sender
         </button>
-        <button class="tab nav-item" data-view="domain">
+        <button class="tab nav-item" data-view="domain" data-label="By Domain">
           <svg class="nav-item-icon" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="10" cy="10" r="7"/><path d="M3 10h14M10 3c2 2.2 3 4.5 3 7s-1 4.8-3 7M10 3c-2 2.2-3 4.5-3 7s1 4.8 3 7"/>
           </svg>
           By Domain
         </button>
-        <button class="tab nav-item" data-view="size">
+        <button class="tab nav-item" data-view="size" data-label="By Size">
           <svg class="nav-item-icon" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
             <path d="M4 6.5c0-1.7 2.7-3 6-3s6 1.3 6 3-2.7 3-6 3-6-1.3-6-3z"/><path d="M4 6.5v7c0 1.7 2.7 3 6 3s6-1.3 6-3v-7M4 10c0 1.7 2.7 3 6 3s6-1.3 6-3"/>
           </svg>
           By Size
         </button>
-        <button class="tab nav-item" data-view="timeline">
+        <button class="tab nav-item" data-view="timeline" data-label="Timeline">
           <svg class="nav-item-icon" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2"/>
           </svg>
@@ -254,14 +371,14 @@
       <!-- Intelligence: SmartSearch + KnowledgeMap — shown after scan -->
       <div class="nav-section" id="navIntelligence" style="display:none">
         <div class="nav-section-label">Intelligence <span class="nav-beta-tag">Beta</span></div>
-        <button class="tab nav-item" data-view="smartsearch">
+        <button class="tab nav-item" data-view="smartsearch" data-label="SmartSearch">
           <svg class="nav-item-icon" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="8.5" cy="8.5" r="5.5"/><path d="M15.5 15.5l-3.8-3.8"/>
             <path d="M6.5 8.5h4M8.5 6.5v4"/>
           </svg>
           SmartSearch
         </button>
-        <button class="tab nav-item" data-view="knowledgemap">
+        <button class="tab nav-item" data-view="knowledgemap" data-label="Intelligence">
           <svg class="nav-item-icon" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
             <path d="M10 2a5 5 0 013.9 8.1V11.5a1 1 0 01-1 1H7.1a1 1 0 01-1-1V10.1A5 5 0 0110 2z"/>
             <path d="M8 12.5v1a2 2 0 004 0v-1"/>
@@ -276,7 +393,7 @@
       <!-- Settings — always accessible -->
       <div class="nav-section" id="navAISettings">
         <div class="nav-section-label">App</div>
-        <button class="tab nav-item" data-view="aisettings" id="navAISettingsBtn">
+        <button class="tab nav-item" data-view="aisettings" data-label="Settings" id="navAISettingsBtn">
           <svg class="nav-item-icon" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="10" cy="10" r="3"/>
             <path d="M10 2.5v1.2M10 16.3v1.2M2.5 10h1.2M16.3 10h1.2M4.7 4.7l.85.85M14.45 14.45l.85.85M4.7 15.3l.85-.85M14.45 5.55l.85-.85"/>
@@ -549,6 +666,59 @@
         <button type="button" id="folderModalConfirm" class="btn btn-primary">Move here</button>
       </div>
     </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════
+       INDEXING OVERLAY
+       Floats above every screen (z-index 9999) while
+       vector indexing is running. Dismissable by user;
+       auto-hides on completion with a brief Done flash.
+       ════════════════════════════════════════════ -->
+  <div id="indexingOverlay" class="indexing-overlay" style="display:none" aria-live="polite">
+    <div class="indexing-card">
+      <div class="indexing-icon-wrap">
+        <svg class="indexing-spin" viewBox="0 0 56 56" fill="none" aria-hidden="true">
+          <circle cx="28" cy="28" r="24" stroke="var(--border,#2a3040)" stroke-width="3"/>
+          <path d="M28 4a24 24 0 0 1 24 24" stroke="var(--accent,#93c5fd)" stroke-width="3" stroke-linecap="round"/>
+        </svg>
+        <img src="assets/InboxPieLogo.png" alt="" class="indexing-logo" width="28" height="28">
+      </div>
+      <h2 class="indexing-title">Building inbox intelligence</h2>
+      <p class="indexing-subtitle">Analysing your email metadata — this may take a few minutes for large mailboxes</p>
+      <div class="indexing-folder-row" id="indexingFolderRow" style="display:none">
+        <span class="indexing-folder-label">Indexing:</span>
+        <span class="indexing-folder-name" id="indexingFolderName"></span>
+      </div>
+      <div class="indexing-progress-wrap">
+        <div class="indexing-bar">
+          <div class="indexing-bar-fill" id="indexingBarFill" style="width:0%"></div>
+        </div>
+        <div class="indexing-stats-row">
+          <span id="indexingStatsText">Starting…</span>
+          <span id="indexingPctText">0%</span>
+        </div>
+      </div>
+      <p class="indexing-note">For Large Mailboxes, this process may take several minutes. <br>We appreciate your patience.</p>
+      <button id="indexingContinueBtn" class="indexing-continue-btn">Use app &mdash; indexing continues in background &rarr;</button>
+      <button id="indexingPauseBtn" class="indexing-pause-btn">&#9646;&#9646; Pause &mdash; resume later from Settings</button>
+    </div>
+  </div>
+
+  <!-- Mini progress bar — shown after user dismisses the full overlay -->
+  <div id="indexingMiniBar" class="indexing-mini-bar" style="display:none" aria-live="polite">
+    <svg class="indexing-mini-spin" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <circle cx="10" cy="10" r="8" stroke="var(--border,#2a3040)" stroke-width="2"/>
+      <path d="M10 2a8 8 0 0 1 8 8" stroke="var(--accent,#93c5fd)" stroke-width="2" stroke-linecap="round"/>
+    </svg>
+    <div class="indexing-mini-info">
+      <span class="indexing-mini-label" id="indexingMiniLabel">Indexing</span>
+      <div class="indexing-mini-track">
+        <div class="indexing-mini-fill" id="indexingMiniBarFill" style="width:0%"></div>
+      </div>
+    </div>
+    <span class="indexing-mini-pct" id="indexingMiniPct">0%</span>
+    <button class="indexing-mini-btn" id="indexingMiniPauseBtn" title="Pause indexing">&#9646;&#9646;</button>
+    <button class="indexing-mini-btn" id="indexingMiniExpandBtn" title="Show details">&#8679;</button>
   </div>
 
   <script src="shell.js"></script>

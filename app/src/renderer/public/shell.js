@@ -8,7 +8,7 @@
 
   // ── Screen management ──────────────────────────────────────────────────────
 
-  var SCREENS = ["onboardingScreen", "accountScreen", "appShell"];
+  var SCREENS = ["onboardingScreen", "setupScreen", "accountScreen", "appShell"];
 
   function showScreen(id) {
     SCREENS.forEach(function (name) {
@@ -27,27 +27,210 @@
     });
   }
 
-  // ── Onboarding ─────────────────────────────────────────────────────────────
+  // ── After-setup transition (to normal onboarding → account flow) ───────────
 
-  if (!localStorage.getItem(ONBOARDING_KEY)) {
-    showScreen("onboardingScreen");
-    var fill = document.querySelector(".onboarding-loader-fill");
-    if (fill) {
-      requestAnimationFrame(function () {
-        fill.style.transition = "width 2.2s cubic-bezier(0.4, 0, 0.2, 1)";
-        fill.style.width = "100%";
-      });
+  function enterApp() {
+    browser.runtime.sendMessage({ action: "markAppReady" }).catch(function () {});
+    if (!localStorage.getItem(ONBOARDING_KEY)) {
+      showScreen("onboardingScreen");
+      var fill = document.querySelector(".onboarding-loader-fill");
+      if (fill) {
+        requestAnimationFrame(function () {
+          fill.style.transition = "width 1.4s cubic-bezier(0.4, 0, 0.2, 1)";
+          fill.style.width = "100%";
+        });
+      }
+      setTimeout(function () {
+        localStorage.setItem(ONBOARDING_KEY, "1");
+        var onb = document.getElementById("onboardingScreen");
+        if (onb) { onb.style.opacity = "0"; onb.style.transition = "opacity 0.4s ease"; }
+        setTimeout(function () { showScreen("accountScreen"); initProviderStep(); }, 420);
+      }, 1600);
+    } else {
+      showScreen("accountScreen");
+      initProviderStep();
     }
-    setTimeout(function () {
-      localStorage.setItem(ONBOARDING_KEY, "1");
-      var onb = document.getElementById("onboardingScreen");
-      if (onb) { onb.style.opacity = "0"; onb.style.transition = "opacity 0.4s ease"; }
-      setTimeout(function () { showScreen("accountScreen"); initProviderStep(); }, 420);
-    }, 2600);
-  } else {
-    showScreen("accountScreen");
-    initProviderStep();
   }
+
+  // ── Setup screen ──────────────────────────────────────────────────────────
+  //
+  // Shown when app_ready preference is not "yes".
+  // Polls getSetupStatus every 3s; also listens for live embeddingProgress events.
+
+  var _setupPollTimer = null;
+  var _setupStatus    = null;   // latest server response
+
+  function startSetupScreen() {
+    showScreen("setupScreen");
+    pollSetupStatus();
+
+    // Wire enter and skip buttons
+    var enterBtn = document.getElementById("setupEnterBtn");
+    var skipBtn  = document.getElementById("setupSkipBtn");
+    if (enterBtn) enterBtn.addEventListener("click", function () { stopSetupPoll(); enterApp(); });
+    if (skipBtn)  skipBtn.addEventListener("click",  function () { stopSetupPoll(); enterApp(); });
+
+    // Listen for live embedding progress events (fired from main process prewarm)
+    browser.runtime.onMessage.addListener(function (msg) {
+      if (!msg || msg.action !== "embeddingProgress") return;
+      applyEmbeddingProgress(msg);
+      // Re-derive overall state from the latest full status merged with live progress
+      if (_setupStatus) updateSetupUI(_setupStatus);
+    });
+  }
+
+  function stopSetupPoll() {
+    if (_setupPollTimer) { clearTimeout(_setupPollTimer); _setupPollTimer = null; }
+  }
+
+  function pollSetupStatus() {
+    browser.runtime.sendMessage({ action: "getSetupStatus" }).then(function (s) {
+      _setupStatus = s;
+      updateSetupUI(s);
+      // Keep polling until app is ready (all required tasks done)
+      if (!s.appReady) {
+        _setupPollTimer = setTimeout(pollSetupStatus, 3000);
+      }
+    }).catch(function () {
+      _setupPollTimer = setTimeout(pollSetupStatus, 5000);
+    });
+  }
+
+  // Map a live embeddingProgress event onto the UI without waiting for a full poll
+  function applyEmbeddingProgress(msg) {
+    var task   = document.getElementById("setupTaskEmbedding");
+    var badge  = document.getElementById("setupBadgeEmbedding");
+    var desc   = document.getElementById("setupDescEmbedding");
+    var barW   = document.getElementById("setupBarEmbedding");
+    var fill   = document.getElementById("setupBarFillEmbedding");
+    var pctEl  = document.getElementById("setupPctEmbedding");
+    if (!task) return;
+
+    if (msg.phase === "ready") {
+      setTaskStatus(task, badge, "done", "Ready");
+      if (desc)  desc.textContent  = "bge-large-en-v1.5 loaded in memory";
+      if (barW)  barW.style.display = "none";
+    } else if (msg.phase === "downloading") {
+      setTaskStatus(task, badge, "active", "Downloading");
+      if (barW)  barW.style.display = "";
+      var pct = msg.pct || 0;
+      if (fill)  fill.style.width = pct + "%";
+      if (pctEl) pctEl.textContent = pct + "%";
+    } else if (msg.phase === "error") {
+      setTaskStatus(task, badge, "error", "Failed");
+      if (desc) desc.textContent = "Download failed: " + (msg.error || "unknown error");
+    }
+  }
+
+  function setTaskStatus(taskEl, badgeEl, status, badgeText) {
+    if (taskEl)  taskEl.setAttribute("data-status", status);
+    if (badgeEl) badgeEl.textContent = badgeText;
+  }
+
+  function updateSetupUI(s) {
+    if (!s || !s.tasks) return;
+
+    var requiredDone = 0;
+    var requiredTotal = 0;
+    var totalPct = 0;
+    var taskCount = s.tasks.length;
+
+    s.tasks.forEach(function (t) {
+      var taskEl  = document.getElementById("setupTaskEmbedding".replace("Embedding", capitalize(t.id)));
+      var badgeEl = document.getElementById("setupBadgeEmbedding".replace("Embedding", capitalize(t.id)));
+      var descEl  = document.getElementById("setupDescEmbedding".replace("Embedding", capitalize(t.id)));
+      var barW    = document.getElementById("setupBarEmbedding".replace("Embedding", capitalize(t.id)));
+      var fill    = document.getElementById("setupBarFillEmbedding".replace("Embedding", capitalize(t.id)));
+      var pctEl   = document.getElementById("setupPctEmbedding".replace("Embedding", capitalize(t.id)));
+
+      // Use element IDs that match task IDs
+      taskEl  = document.getElementById("setupTask"  + capitalize(t.id));
+      badgeEl = document.getElementById("setupBadge" + capitalize(t.id));
+      descEl  = document.getElementById("setupDesc"  + capitalize(t.id));
+      barW    = document.getElementById("setupBar"   + capitalize(t.id));
+      fill    = document.getElementById("setupBarFill" + capitalize(t.id));
+      pctEl   = document.getElementById("setupPct"   + capitalize(t.id));
+
+      var status = t.status;  // "done" | "active" | "warn" | "error" | "pending"
+      var badgeText =
+        status === "done"   ? "Done" :
+        status === "active" ? "Downloading" :
+        status === "warn"   ? "Optional" :
+        status === "error"  ? "Error" : "Pending";
+
+      if (taskEl)  taskEl.setAttribute("data-status", status);
+      if (badgeEl) badgeEl.textContent = badgeText;
+      if (descEl && t.detail) descEl.textContent = t.detail;
+
+      // Show progress bar only for active embedding download
+      if (t.id === "embedding" && barW) {
+        if (status === "active") {
+          barW.style.display = "";
+          if (fill)  fill.style.width = (t.pct || 0) + "%";
+          if (pctEl) pctEl.textContent = (t.pct || 0) + "%";
+        } else {
+          barW.style.display = "none";
+        }
+      }
+
+      totalPct += (status === "done" ? 100 : (t.pct || 0));
+      if (t.required) {
+        requiredTotal++;
+        if (status === "done") requiredDone++;
+      }
+    });
+
+    // Overall progress bar
+    var overallPct = taskCount > 0 ? Math.round(totalPct / taskCount) : 0;
+    var overallFill  = document.getElementById("setupOverallFill");
+    var overallLabel = document.getElementById("setupOverallLabel");
+    if (overallFill)  overallFill.style.width = overallPct + "%";
+    if (overallLabel) {
+      if (overallPct >= 100) {
+        overallLabel.textContent = "All set! Ready to go.";
+      } else {
+        overallLabel.textContent = "Setting up… " + overallPct + "% complete";
+      }
+    }
+
+    // Show Enter button when all REQUIRED tasks are done
+    var allRequiredDone = requiredDone >= requiredTotal;
+    var enterBtn = document.getElementById("setupEnterBtn");
+    var skipNote = document.getElementById("setupSkipNote");
+    if (enterBtn) enterBtn.style.display = allRequiredDone ? "" : "none";
+    if (skipNote) skipNote.style.display = allRequiredDone ? "none" : "";
+
+    // Auto-advance when app is already marked ready
+    if (s.appReady) {
+      stopSetupPoll();
+      var el = document.getElementById("setupScreen");
+      if (el) { el.style.opacity = "0"; el.style.transition = "opacity 0.4s ease"; }
+      setTimeout(function () { enterApp(); }, 420);
+    }
+  }
+
+  function capitalize(str) {
+    return str ? str.charAt(0).toUpperCase() + str.slice(1) : "";
+  }
+
+  // ── Boot: decide which screen to show ──────────────────────────────────────
+
+  // Ask the backend whether the app is fully set up.
+  // Keep the screen hidden until we know (avoids flash of wrong screen).
+  browser.runtime.sendMessage({ action: "getPreference", key: "app_ready" })
+    .then(function (res) {
+      if (res && res.value === "yes") {
+        // App is ready — fast path to the normal onboarding/account flow
+        enterApp();
+      } else {
+        // First run or incomplete setup — show the setup screen
+        startSetupScreen();
+      }
+    })
+    .catch(function () {
+      // IPC not yet ready (dev hot-reload edge case) — fall through to account screen
+      enterApp();
+    });
 
   // ── Step 1: Provider selection ─────────────────────────────────────────────
 
@@ -619,6 +802,204 @@
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
+  }
+
+  // ── Indexing overlay + mini bar ──────────────────────────────────────────────
+  //
+  // Full overlay: blocks the screen while indexing starts. User can dismiss it via
+  // "Use app" — indexing keeps running and a mini status bar appears instead.
+  // Mini bar: bottom-right pill with live progress, Pause, and Expand buttons.
+
+  var _indexDismissed = false;
+  var _lastIdx = { done: 0, total: 0, folder: "" };
+
+  function _setMiniProgress(pct) {
+    var fill  = document.getElementById("indexingMiniBarFill");
+    var pctEl = document.getElementById("indexingMiniPct");
+    if (fill)  fill.style.width  = pct + "%";
+    if (pctEl) pctEl.textContent = pct + "%";
+  }
+
+  function showIndexingOverlay(total) {
+    _indexDismissed = false;
+    _lastIdx = { done: 0, total: total || 0, folder: "" };
+    var mini = document.getElementById("indexingMiniBar");
+    if (mini) { mini.style.display = "none"; mini.style.opacity = ""; mini.style.transition = ""; }
+    var el = document.getElementById("indexingOverlay");
+    if (!el) return;
+    var fill      = document.getElementById("indexingBarFill");
+    var stats     = document.getElementById("indexingStatsText");
+    var pctEl     = document.getElementById("indexingPctText");
+    var folderRow = document.getElementById("indexingFolderRow");
+    if (fill)      fill.style.width        = "0%";
+    if (stats)     stats.textContent       = total ? "0 / " + Number(total).toLocaleString() + " emails" : "Starting\u2026";
+    if (pctEl)     pctEl.textContent       = "0%";
+    if (folderRow) folderRow.style.display = "none";
+    el.style.opacity    = "1";
+    el.style.transition = "";
+    el.style.display    = "flex";
+  }
+
+  function updateIndexingOverlay(done, total, folder) {
+    _lastIdx = { done: done, total: total, folder: folder };
+    var pct = total > 0 ? Math.min(99, Math.round((done / total) * 100)) : 0;
+
+    if (!_indexDismissed) {
+      var el = document.getElementById("indexingOverlay");
+      if (el && el.style.display !== "none") {
+        var fill       = document.getElementById("indexingBarFill");
+        var stats      = document.getElementById("indexingStatsText");
+        var pctEl      = document.getElementById("indexingPctText");
+        var folderRow  = document.getElementById("indexingFolderRow");
+        var folderName = document.getElementById("indexingFolderName");
+        if (fill)  fill.style.width  = pct + "%";
+        if (stats) stats.textContent = Number(done).toLocaleString() + " / " + Number(total).toLocaleString() + " emails";
+        if (pctEl) pctEl.textContent = pct + "%";
+        if (folder && folderRow && folderName) {
+          folderRow.style.display = "";
+          folderName.textContent  = folder;
+        }
+      }
+    }
+
+    var mini = document.getElementById("indexingMiniBar");
+    if (mini && mini.style.display !== "none") _setMiniProgress(pct);
+  }
+
+  function hideIndexingOverlay(success) {
+    var el   = document.getElementById("indexingOverlay");
+    var mini = document.getElementById("indexingMiniBar");
+
+    function _fadeMiniDone() {
+      if (!mini || mini.style.display === "none") return;
+      var label = document.getElementById("indexingMiniLabel");
+      if (label) label.textContent = "Done \u2713";
+      _setMiniProgress(100);
+      setTimeout(function () {
+        mini.style.opacity    = "0";
+        mini.style.transition = "opacity 0.4s ease";
+        setTimeout(function () {
+          mini.style.display    = "none";
+          mini.style.opacity    = "";
+          mini.style.transition = "";
+        }, 430);
+      }, 1500);
+    }
+
+    if (success) {
+      if (el && el.style.display !== "none") {
+        var fill  = document.getElementById("indexingBarFill");
+        var stats = document.getElementById("indexingStatsText");
+        var pctEl = document.getElementById("indexingPctText");
+        if (fill)  fill.style.width  = "100%";
+        if (stats) stats.textContent = "Indexing complete \u2713";
+        if (pctEl) pctEl.textContent = "100%";
+        setTimeout(function () {
+          el.style.opacity    = "0";
+          el.style.transition = "opacity 0.4s ease";
+          setTimeout(function () {
+            el.style.display    = "none";
+            el.style.opacity    = "";
+            el.style.transition = "";
+          }, 430);
+        }, 900);
+      }
+      _fadeMiniDone();
+    } else {
+      if (el)   el.style.display   = "none";
+      if (mini) mini.style.display = "none";
+    }
+    _indexDismissed = false;
+  }
+
+  // Global listener — vectorIndex events arrive regardless of current screen
+  browser.runtime.onMessage.addListener(function (msg) {
+    if (!msg) return;
+    switch (msg.action) {
+      case "vectorIndexStarted":
+        showIndexingOverlay(msg.total || 0);
+        break;
+      case "vectorIndexProgress":
+        updateIndexingOverlay(msg.done || 0, msg.total || 0, msg.folder || "");
+        break;
+      case "vectorIndexComplete":
+        hideIndexingOverlay(true);
+        break;
+      case "vectorIndexError":
+        hideIndexingOverlay(false);
+        break;
+    }
+  });
+
+  // "Use app" button — dismiss overlay, show mini bar, keep indexing running
+  var _indexContinueBtn = document.getElementById("indexingContinueBtn");
+  if (_indexContinueBtn) {
+    _indexContinueBtn.addEventListener("click", function () {
+      _indexDismissed = true;
+      var el   = document.getElementById("indexingOverlay");
+      var mini = document.getElementById("indexingMiniBar");
+      if (el) {
+        el.style.opacity    = "0";
+        el.style.transition = "opacity 0.25s ease";
+        setTimeout(function () {
+          el.style.display    = "none";
+          el.style.opacity    = "";
+          el.style.transition = "";
+          if (mini) {
+            var label = document.getElementById("indexingMiniLabel");
+            if (label) label.textContent = "Indexing";
+            var pct = _lastIdx.total > 0
+              ? Math.min(99, Math.round((_lastIdx.done / _lastIdx.total) * 100))
+              : 0;
+            _setMiniProgress(pct);
+            mini.style.display = "flex";
+          }
+        }, 260);
+      }
+    });
+  }
+
+  // Pause button (full overlay)
+  var _indexPauseBtn = document.getElementById("indexingPauseBtn");
+  if (_indexPauseBtn) {
+    _indexPauseBtn.addEventListener("click", function () {
+      _indexPauseBtn.disabled = true;
+      _indexPauseBtn.textContent = "Pausing\u2026";
+      browser.runtime.sendMessage({ action: "pauseIndexing" }).then(function () {
+        hideIndexingOverlay(false);
+        _indexPauseBtn.disabled  = false;
+        _indexPauseBtn.innerHTML = "&#9646;&#9646; Pause &mdash; resume later from Settings";
+      }).catch(function () {
+        _indexPauseBtn.disabled  = false;
+        _indexPauseBtn.innerHTML = "&#9646;&#9646; Pause &mdash; resume later from Settings";
+      });
+    });
+  }
+
+  // Pause button (mini bar)
+  var _indexMiniPauseBtn = document.getElementById("indexingMiniPauseBtn");
+  if (_indexMiniPauseBtn) {
+    _indexMiniPauseBtn.addEventListener("click", function () {
+      _indexMiniPauseBtn.disabled = true;
+      browser.runtime.sendMessage({ action: "pauseIndexing" }).then(function () {
+        hideIndexingOverlay(false);
+        _indexMiniPauseBtn.disabled = false;
+      }).catch(function () {
+        _indexMiniPauseBtn.disabled = false;
+      });
+    });
+  }
+
+  // Expand button (mini bar) — re-show full overlay with current progress
+  var _indexExpandBtn = document.getElementById("indexingMiniExpandBtn");
+  if (_indexExpandBtn) {
+    _indexExpandBtn.addEventListener("click", function () {
+      _indexDismissed = false;
+      var mini = document.getElementById("indexingMiniBar");
+      if (mini) mini.style.display = "none";
+      showIndexingOverlay(_lastIdx.total);
+      if (_lastIdx.done > 0) updateIndexingOverlay(_lastIdx.done, _lastIdx.total, _lastIdx.folder);
+    });
   }
 
 })();

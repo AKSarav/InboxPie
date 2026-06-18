@@ -149,6 +149,24 @@
     if (headerCollapseBtn) headerCollapseBtn.addEventListener("click", function () { setHeaderCollapsed(true); });
     if (headerRevealBtn)   headerRevealBtn.addEventListener("click",   function () { setHeaderCollapsed(false); });
 
+    // Sidebar collapse toggle
+    const sidebarToggleBtn = document.getElementById("sidebarToggleBtn");
+    const leftNav = document.getElementById("leftNav");
+    if (sidebarToggleBtn && leftNav) {
+      // Load collapsed state from localStorage
+      const isCollapsed = localStorage.getItem("sidebar-collapsed") === "true";
+      if (isCollapsed) {
+        leftNav.classList.add("collapsed");
+        updateSidebarToggleIcon(true);
+      }
+      
+      sidebarToggleBtn.addEventListener("click", () => {
+        const collapsed = leftNav.classList.toggle("collapsed");
+        localStorage.setItem("sidebar-collapsed", collapsed);
+        updateSidebarToggleIcon(collapsed);
+      });
+    }
+
     // Export buttons
     $("#exportCsvBtn").addEventListener("click", exportCSV);
     $("#exportJsonBtn").addEventListener("click", exportJSON);
@@ -233,6 +251,20 @@
     } else {
       btn.classList.remove("active");
       btn.title = "Privacy mode OFF — full emails shown. Click to mask emails.";
+    }
+  }
+
+  function updateSidebarToggleIcon(isCollapsed) {
+    const collapseIcon = document.querySelector(".toggle-icon-collapse");
+    const expandIcon = document.querySelector(".toggle-icon-expand");
+    if (collapseIcon && expandIcon) {
+      if (isCollapsed) {
+        collapseIcon.style.display = "none";
+        expandIcon.style.display = "block";
+      } else {
+        collapseIcon.style.display = "block";
+        expandIcon.style.display = "none";
+      }
     }
   }
 

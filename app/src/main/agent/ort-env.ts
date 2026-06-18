@@ -18,6 +18,9 @@ const CAP   = Math.max(1, Math.min(2, Math.floor(cores / 4)));   // 1–2 thread
 // Belt-and-suspenders env hints (some ORT builds read these).
 if (!process.env["OMP_NUM_THREADS"]) process.env["OMP_NUM_THREADS"] = String(CAP);
 if (!process.env["ORT_NUM_THREADS"]) process.env["ORT_NUM_THREADS"] = String(CAP);
+// macOS Accelerate framework uses GCD internally and ignores intraOpNumThreads.
+// VECLIB_MAXIMUM_THREADS is the only way to cap it.
+if (!process.env["VECLIB_MAXIMUM_THREADS"]) process.env["VECLIB_MAXIMUM_THREADS"] = String(CAP);
 
 try {
   // Resolve the same InferenceSession transformers.js uses (ONNX_NODE.default ?? ONNX_NODE).

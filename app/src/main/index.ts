@@ -3,8 +3,28 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { registerIpcHandlers, cancelBackgroundWork } from "./ipc/handlers";
+import { prewarmEmbeddingModel, terminateEmbeddingWorker } from "./agent/embeddings";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Resolve the icon path - works in both dev and production
+const getIconPath = (): string => {
+  // In production (built app), icon is in the app resources
+  const productionIcon = path.join(__dirname, "../renderer/assets/icon.png");
+  // In dev, use the src directory directly
+  const devIcon = path.join(__dirname, "../../src/renderer/assets/icon.png");
+  
+  try {
+    // Try production path first
+    const fs = require("fs");
+    if (fs.existsSync(productionIcon)) {
+      return productionIcon;
+    }
+    return devIcon;
+  } catch {
+    return devIcon;
+  }
+};
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -15,6 +35,7 @@ function createWindow(): void {
     minWidth: 960,
     minHeight: 640,
     title: "InboxPie",
+    icon: getIconPath(),
     backgroundColor: "#0f1117",
     webPreferences: {
       preload: path.join(__dirname, "../preload/index.js"),
@@ -54,6 +75,19 @@ app.whenReady().then(() => {
   registerIpcHandlers(() => mainWindow);
   createWindow();
 
+  // Pre-download the embedding model in the background so the first indexing run
+  // doesn't stall on a ~335MB download. Emits `inboxpie:event` so the setup screen
+  // can update live without polling (falls back to polling if the window isn't ready yet).
+  prewarmEmbeddingModel((status) => {
+    console.log(`[embeddings] prewarm: phase=${status.phase}${status.pct != null ? ` pct=${status.pct}` : ""}${status.error ? ` err=${status.error}` : ""}`);
+    mainWindow?.webContents.send("inboxpie:event", {
+      action: "embeddingProgress",
+      phase:  status.phase,
+      pct:    status.pct ?? (status.phase === "ready" ? 100 : 0),
+      error:  status.error,
+    });
+  }).catch((e) => console.warn("[embeddings] prewarm failed:", (e as Error).message));
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -64,6 +98,8 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
-  // Kill scan subprocesses and stop indexing so nothing lingers after the app exits.
+  // Kill scan subprocesses, stop indexing, and terminate the embedding worker
+  // so no threads or processes linger after the app exits.
   cancelBackgroundWork();
+  terminateEmbeddingWorker();
 });

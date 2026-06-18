@@ -2,6 +2,7 @@ import * as lancedb from "@lancedb/lancedb";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { MODEL_NAME, EMBEDDING_DIM } from "../agent/embeddings";
 
 const LANCE_DIR  = path.join(os.homedir(), ".inboxpie", "lancedb");
 const TABLE_NAME = "emails";
@@ -60,12 +61,78 @@ class LanceStore {
   private db:    lancedb.Connection | null = null;
   private table: lancedb.Table      | null = null;
 
+  /** Path to a small file that records which embedding model built this index. */
+  private get _stampPath(): string {
+    return path.join(LANCE_DIR, ".embedding-model");
+  }
+
+  /** Read the model stamp that was used to build the current LanceDB index. */
+  private _readStamp(): string {
+    try { return fs.readFileSync(this._stampPath, "utf8").trim(); } catch { return ""; }
+  }
+
+  /** Write the current model name so we can detect model changes on next startup. */
+  private _writeStamp(): void {
+    try { fs.writeFileSync(this._stampPath, MODEL_NAME, "utf8"); } catch { /* ignore */ }
+  }
+
   async open(): Promise<void> {
     if (this.db) return;
     fs.mkdirSync(LANCE_DIR, { recursive: true });
     this.db = await lancedb.connect(LANCE_DIR);
     const names = await this.db.tableNames();
+
     if (names.includes(TABLE_NAME)) {
+      // ── Dimension-mismatch guard ────────────────────────────────────────────
+      // If the index was built with a different embedding model the vector column
+      // dimension won't match the current EMBEDDING_DIM. Drop and recreate the
+      // table so the next indexing run rebuilds it with the correct schema.
+      //
+      // Two-layer check:
+      //   1. Stamp file: model name stored at index-creation time → fast path.
+      //   2. Live dim sample: catches databases created before the stamp feature,
+      //      or cases where the stamp file was lost (e.g. manual deletion).
+      const stamp = this._readStamp();
+      let needsDrop = false;
+
+      if (stamp && stamp !== MODEL_NAME) {
+        console.log(
+          `[lanceStore] Embedding model changed (${stamp} → ${MODEL_NAME}). ` +
+          `Dropping stale index — please re-index your folders.`,
+        );
+        needsDrop = true;
+      } else if (!stamp) {
+        // No stamp: sample one row and compare vector length against expected dim.
+        try {
+          const tbl = await this.db.openTable(TABLE_NAME);
+          const sample = await (tbl as any).query().limit(1).toArray() as Record<string, unknown>[];
+          if (sample.length > 0) {
+            const vec = sample[0]?.["vector"] as number[] | undefined;
+            const storedDim = Array.isArray(vec) ? vec.length : 0;
+            if (storedDim > 0 && storedDim !== EMBEDDING_DIM) {
+              console.log(
+                `[lanceStore] Vector dim mismatch: stored=${storedDim}, expected=${EMBEDDING_DIM}. ` +
+                `Dropping stale index — please re-index your folders.`,
+              );
+              needsDrop = true;
+            } else {
+              // Dim matches (or table is empty) — write stamp to baseline future checks.
+              this._writeStamp();
+            }
+          } else {
+            this._writeStamp();
+          }
+        } catch {
+          // Can't open or sample — proceed normally; worst case is a search error later.
+        }
+      }
+
+      if (needsDrop) {
+        await this.db.dropTable(TABLE_NAME);
+        fs.rmSync(this._stampPath, { force: true });
+        this.table = null;
+        return;
+      }
       this.table = await this.db.openTable(TABLE_NAME);
     }
   }
@@ -81,6 +148,8 @@ class LanceStore {
     const rows = records as unknown as Record<string, unknown>[];
     if (!this.table) {
       this.table = await db.createTable(TABLE_NAME, rows);
+      // Stamp the model so we can detect future model upgrades.
+      this._writeStamp();
     } else {
       await this.table.add(rows);
     }
@@ -455,6 +524,9 @@ class LanceStore {
       this._hasBodyCache = null;
       this._profileCache = null;
       this._ftsReady     = false;
+      // Compact: physically remove tombstoned files so indexedIds() and
+      // disk usage reflect reality immediately after the wipe.
+      try { await (this.table as any).cleanupOldVersions(); } catch { /* non-fatal */ }
       return before - after;
     } catch {
       return 0;

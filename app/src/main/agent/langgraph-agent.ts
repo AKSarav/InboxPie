@@ -807,6 +807,18 @@ export async function runAppleMailAgent(
       };
     }
     if (rows && rows.length > 0) {
+      // Fast mode: never return a raw table — the model was supposed to write a text answer.
+      // If we got here it means neither a text answer nor final_answer was captured.
+      // Return a plain-text fallback so the user sees something useful, not a table dump.
+      if (mode === "fast") {
+        return {
+          intent:        userMessage,
+          response_type: "text" as const,
+          answer_text:   `Found ${rows.length} relevant email(s). The model did not produce a text summary — try rephrasing your question, or switch to Deep mode for a detailed report.`,
+          thinking:      thinkingText,
+          agentSteps,
+        };
+      }
       return {
         intent:        userMessage,
         response_type: aggregateRows ? "bar_chart" : "data_table",

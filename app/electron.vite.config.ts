@@ -12,6 +12,9 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve(__dirname, "src/main/index.ts"),
+          // Compiled as a separate file so worker_threads can reference it by path.
+          // Output lands at out/main/embedding-worker.js alongside index.js.
+          "embedding-worker": resolve(__dirname, "src/main/agent/embedding-worker.ts"),
         },
       },
     },

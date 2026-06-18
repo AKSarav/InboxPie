@@ -678,6 +678,22 @@
       var agentSteps   = (res && res.agentSteps && res.agentSteps.length)
         ? res.agentSteps : buildFallbackSteps(res);
 
+      // In fast mode: if the LLM was already streaming a plain-text answer (the user saw it),
+      // use that as the final response instead of any server-rendered widget/table that may
+      // have been produced as a fallback. The streamed text IS the real answer.
+      if (chat.mode === 'fast' && streamedText.trim()) {
+        var cleanStreamed = streamedText
+          .replace(/<think>[\s\S]*?<\/think>/gi, '')
+          .replace(/<think>[\s\S]*$/i, '')
+          .trim();
+        if (cleanStreamed) {
+          responseType = 'text';
+          answerText   = cleanStreamed;
+          widgetHtml   = '';
+          htmlWidget   = '';
+        }
+      }
+
       chat.history.push({
         role: 'assistant', content: answerText,
         _thinking: thinking, _steps: agentSteps,
@@ -1492,6 +1508,24 @@
         '</div>' +
 
         '<div class="ais-section-label">Local AI</div>' +
+        '<div class="ais-card" id="aisEmbeddingCard">' +
+          '<div class="ais-card-header">' +
+            '<span class="ais-card-icon">🧠</span>' +
+            '<div>' +
+              '<div class="ais-card-name">Embedding Model</div>' +
+              '<div class="ais-card-sub">bge-base-en-v1.5 — 768-dim, ~110 MB · quantized ONNX · runs offline</div>' +
+            '</div>' +
+            '<span class="ais-badge" id="aisEmbedBadge">Checking…</span>' +
+          '</div>' +
+          '<div class="ais-card-body">' +
+            '<div class="ais-ollama-hint" id="aisEmbedHint">Loading status…</div>' +
+            '<div class="ais-embed-bar-wrap" id="aisEmbedBarWrap" style="display:none">' +
+              '<div class="ais-embed-bar"><div class="ais-embed-bar-fill" id="aisEmbedBarFill"></div></div>' +
+              '<span class="ais-embed-bar-label" id="aisEmbedBarLabel"></span>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+        '<div id="aisIndexingStatusCard"></div>' +
         '<div class="ais-card' + (activeProvider === 'ollama' ? ' ais-card-active' : '') + '" id="aisCard_ollama">' +
           '<div class="ais-card-header">' +
             '<span class="ais-card-icon">🖥</span>' +
@@ -1527,6 +1561,8 @@
     aisWireGlobalActions();
     aisLoadCategories();
     aisWireCategoryAdd();
+    aisLoadEmbeddingStatus();
+    aisLoadIndexingStatus();
 
     // Wire up events
     shell.querySelectorAll('.ais-btn-add, .ais-btn-edit').forEach(function (btn) {
@@ -1689,6 +1725,84 @@
   }
 
   function aisSelectedFolders() { return Object.keys(aisSelected); }
+
+  function aisLoadIndexingStatus() {
+    var card = document.getElementById('aisIndexingStatusCard');
+    if (!card) return;
+    browser.runtime.sendMessage({ action: 'getIndexingStatus' }).then(function (s) {
+      if (!s || !s.paused) { card.innerHTML = ''; return; }
+      var folders = s.pausedFolders || [];
+      var folderPills = folders.length
+        ? '<div class="ais-paused-folders">' + folders.map(function (f) { return '<span class="ais-paused-folder-pill">' + esc(f) + '</span>'; }).join('') + '</div>'
+        : '';
+      var pendingLabel = folders.length
+        ? folders.length + ' folder' + (folders.length !== 1 ? 's' : '') + ' pending'
+        : 'Resume to rebuild Smart Search';
+      card.innerHTML =
+        '<div class="ais-card ais-card-paused">' +
+          '<div class="ais-card-header">' +
+            '<span class="ais-card-icon">⏸</span>' +
+            '<div>' +
+              '<div class="ais-card-name">Indexing Paused</div>' +
+              '<div class="ais-card-sub">' + esc(pendingLabel) + '</div>' +
+            '</div>' +
+            '<button class="ais-btn ais-btn-resume" id="aisResumeIndexBtn">Resume</button>' +
+          '</div>' +
+          (folderPills ? '<div class="ais-card-body">' + folderPills + '</div>' : '') +
+        '</div>';
+      var btn = document.getElementById('aisResumeIndexBtn');
+      if (btn) {
+        btn.addEventListener('click', function () {
+          btn.disabled = true;
+          btn.textContent = 'Resuming…';
+          browser.runtime.sendMessage({ action: 'resumeIndexing' })
+            .then(function () { card.innerHTML = ''; })
+            .catch(function () { btn.disabled = false; btn.textContent = 'Resume'; });
+        });
+      }
+    }).catch(function () {});
+  }
+
+  function aisLoadEmbeddingStatus() {
+    var badge   = document.getElementById('aisEmbedBadge');
+    var hint    = document.getElementById('aisEmbedHint');
+    var barWrap = document.getElementById('aisEmbedBarWrap');
+    var barFill = document.getElementById('aisEmbedBarFill');
+    var barLabel= document.getElementById('aisEmbedBarLabel');
+    if (!badge || !hint) return;
+
+    browser.runtime.sendMessage({ action: 'checkEmbedding' }).then(function (s) {
+      if (!s) return;
+      if (s.ready) {
+        badge.className  = 'ais-badge ais-badge-ok';
+        badge.textContent = 'Ready';
+        hint.textContent  = 'Model loaded in memory — semantic search is active.';
+        if (barWrap) barWrap.style.display = 'none';
+      } else if (s.cached) {
+        badge.className  = 'ais-badge ais-badge-ok';
+        badge.textContent = 'Cached';
+        var mb = s.downloadedMB || 0;
+        hint.textContent  = 'Downloaded (' + mb + ' MB on disk). Will load into memory on first search.';
+        if (barWrap) barWrap.style.display = 'none';
+      } else {
+        badge.className  = 'ais-badge';
+        badge.textContent = 'Downloading…';
+        var total = s.totalMB || 335;
+        var dl    = s.downloadedMB || 0;
+        hint.textContent  = 'Downloading bge-base-en-v1.5 in the background (~' + total + ' MB). You can use the app while this runs.';
+        if (barWrap && barFill && barLabel) {
+          barWrap.style.display = '';
+          var pct = total > 0 ? Math.min(100, Math.round((dl / total) * 100)) : 0;
+          barFill.style.width = pct + '%';
+          barLabel.textContent = dl + ' / ' + total + ' MB';
+        }
+        // Poll every 4s until cached
+        setTimeout(aisLoadEmbeddingStatus, 4000);
+      }
+    }).catch(function () {
+      if (hint) hint.textContent = 'Could not check embedding model status.';
+    });
+  }
 
   function aisLoadFolderTable() {
     var body    = document.getElementById('aisFoldersBody');

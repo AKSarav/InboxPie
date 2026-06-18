@@ -1,10 +1,11 @@
 import { ipcMain, shell, safeStorage, app, type BrowserWindow } from "electron";
 import fs   from "node:fs";
+import os   from "node:os";
 import path from "node:path";
 
 import type { ProgressEvent, RpcAction } from "../../../shared/message-record";
 import { checkOllama, runAgentQuery, checkCloudProvider } from "../agent/nlp-agent";
-import { checkEmbeddingModel }        from "../agent/embeddings";
+import { checkEmbeddingModel, isEmbeddingReady } from "../agent/embeddings";
 import { buildVectorIndex }           from "../agent/indexer";
 import { lanceStore }                 from "../db/lance-store";
 import { renderWidget }               from "../agent/widget-renderer";
@@ -189,10 +190,23 @@ async function runFolderIndexJob(
 
 let indexChain: Promise<unknown> = Promise.resolve();
 let indexCancelRequested = false;
+let _currentIndexFolders: string[] = [];   // tracked for pause support
+// In-memory flag: blocks auto-indexing that fires after every scan.
+// Set to true on every app start so indexing is never auto-resumed on restart.
+// Cleared only when user explicitly triggers indexing from Settings.
+let _autoIndexBlocked = true;
 
 function enqueueIndexJob(fn: () => Promise<void>): void {
   indexCancelRequested = false; // a freshly-requested job clears any stale cancel
-  indexChain = indexChain.then(() => fn()).catch((e) => {
+  indexChain = indexChain.then(async () => {
+    try { inboxPieDb.setPreference("index_ongoing", "yes"); } catch { /* non-fatal */ }
+    try {
+      await fn();
+    } finally {
+      try { inboxPieDb.setPreference("index_ongoing", "no"); } catch { /* non-fatal */ }
+    }
+  }).catch((e) => {
+    try { inboxPieDb.setPreference("index_ongoing", "no"); } catch { /* ignore */ }
     console.error("[index] job failed:", (e as Error)?.message ?? e);
   });
 }
@@ -210,6 +224,8 @@ export function cancelBackgroundWork(): void {
 let currentChatAbort: AbortController | null = null;
 
 export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): void {
+  // Reset any stale indexing flag from a previous session (covers crash-mid-index case).
+  try { inboxPieDb.setPreference("index_ongoing", "no"); } catch { /* non-fatal */ }
   // Seed the built-in categories once so they appear as editable rows in Settings.
   try { inboxPieDb.seedDefaultCategories(DEFAULT_CATEGORIES); } catch { /* non-fatal */ }
 
@@ -443,18 +459,158 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
 
       // ── Embedding / vector index ──────────────────────────────────────────────
 
-      case "checkEmbedding":
-        return checkEmbeddingModel();
+      case "checkEmbedding": {
+        const status = await checkEmbeddingModel();
+        return { ...status, ready: isEmbeddingReady() };
+      }
+
+      // ── First-run setup status ────────────────────────────────────────────────
+      // Returns the state of all setup prerequisites so the setup screen can poll.
+
+      case "getSetupStatus": {
+        const embStatus = await checkEmbeddingModel();
+
+        // Check Python + inboxpie_cli availability via a quick subprocess
+        let pythonOk = inboxPieDb.getPreference("is_packages_downloaded", null) === "yes";
+        let pythonDetail = pythonOk ? "inboxpie_cli is available" : "";
+        if (!pythonOk) {
+          try {
+            const { execSync } = await import("node:child_process");
+            execSync("python3 -c \"import inboxpie_cli; print('ok')\"", { timeout: 8000, stdio: "pipe" });
+            pythonOk = true;
+            pythonDetail = "inboxpie_cli is available";
+            inboxPieDb.setPreference("is_packages_downloaded", "yes");
+          } catch (e) {
+            pythonDetail = "Run: pip install inboxpie-cli";
+          }
+        }
+
+        // Check Full Disk Access by attempting to stat the Mail envelope index
+        const mailDir = path.join(os.homedir(), "Library", "Mail");
+        let permsOk = false;
+        let permsDetail = "Grant access in System Settings → Privacy & Security → Full Disk Access";
+        try {
+          fs.accessSync(mailDir, fs.constants.R_OK);
+          permsOk = true;
+          permsDetail = "Full Disk Access granted";
+          inboxPieDb.setPreference("is_permissions_granted", "yes");
+        } catch {
+          permsOk = inboxPieDb.getPreference("is_permissions_granted", null) === "yes";
+          if (permsOk) permsDetail = "Full Disk Access granted";
+        }
+
+        // Update embedding flag in prefs
+        if (embStatus.cached) inboxPieDb.setPreference("is_embedding_downloaded", "yes");
+
+        const appReady = inboxPieDb.getPreference("app_ready", null) === "yes";
+
+        return {
+          appReady,
+          tasks: [
+            {
+              id:      "embedding",
+              label:   "AI Embedding Model",
+              status:  isEmbeddingReady() ? "done" : embStatus.cached ? "done" : "active",
+              pct:     (isEmbeddingReady() || embStatus.cached) ? 100 : (embStatus.totalMB > 0 ? Math.min(99, Math.round((embStatus.downloadedMB / embStatus.totalMB) * 100)) : 0),
+              detail:  isEmbeddingReady()
+                ? "bge-large-en-v1.5 loaded in memory"
+                : embStatus.cached
+                  ? `Cached (${embStatus.downloadedMB} MB) — will load on first search`
+                  : `Downloading… ${embStatus.downloadedMB}/${embStatus.totalMB} MB`,
+              required: true,
+            },
+            {
+              id:      "python",
+              label:   "Python & CLI Scanner",
+              status:  pythonOk ? "done" : "warn",
+              pct:     pythonOk ? 100 : 0,
+              detail:  pythonDetail,
+              required: false,
+            },
+            {
+              id:      "perms",
+              label:   "Full Disk Access",
+              status:  permsOk ? "done" : "warn",
+              pct:     permsOk ? 100 : 0,
+              detail:  permsDetail,
+              required: false,
+            },
+          ],
+        };
+      }
+
+      case "markAppReady": {
+        inboxPieDb.setPreference("app_ready", "yes");
+        return { ok: true };
+      }
+
+      case "pauseIndexing": {
+        // Stop the running embedding loop between batches and record which folders
+        // were in progress so the user can resume from Settings.
+        inboxPieDb.setPreference("index_paused",         "yes");
+        inboxPieDb.setPreference("index_paused_folders", JSON.stringify(_currentIndexFolders));
+        indexCancelRequested = true;   // stops embedBatch loop at next batch boundary
+        return { ok: true };
+      }
+
+      case "resumeIndexing": {
+        // Re-index only the folders that were paused, incremental so already-indexed
+        // emails are skipped and only the remaining ones are embedded.
+        const pausedFolders = JSON.parse(
+          inboxPieDb.getPreference("index_paused_folders", null) ?? "[]"
+        ) as string[];
+        inboxPieDb.setPreference("index_paused",         "no");
+        inboxPieDb.setPreference("index_paused_folders", "[]");
+        if (!pausedFolders.length) return { ok: true, skipped: true };
+        _currentIndexFolders = pausedFolders;
+        _autoIndexBlocked = false;  // user explicitly resuming
+        const rAuditId  = inboxPieDb.startIndexAudit(null, pausedFolders);
+        const rStartedAt = Date.now();
+        getMainWindow()?.webContents.send("inboxpie:event", { action: "vectorIndexStarted", total: 0 });
+        enqueueIndexJob(async () => {
+          try {
+            const result = await runFolderIndexJob(pausedFolders, /* incremental */ true, getMainWindow);
+            inboxPieDb.completeIndexAudit(rAuditId, result.indexed, result.errors);
+            writeIndexLog({ mode: "metadata", mailboxId: null, folders: pausedFolders,
+              total: result.total, indexed: result.indexed, errors: result.errors,
+              durationMs: Date.now() - rStartedAt });
+            const stats = await lanceStore.getStats();
+            getMainWindow()?.webContents.send("inboxpie:event", { action: "vectorIndexComplete", ...stats });
+          } catch (e) {
+            const errMsg = (e as Error).message;
+            inboxPieDb.failIndexAudit(rAuditId, errMsg);
+            getMainWindow()?.webContents.send("inboxpie:event", { action: "vectorIndexError", error: errMsg });
+          }
+        });
+        return { ok: true };
+      }
+
+      case "getIndexingStatus": {
+        const ongoing       = inboxPieDb.getPreference("index_ongoing", null) === "yes";
+        const paused        = inboxPieDb.getPreference("index_paused",  null) === "yes";
+        const pausedFolders = JSON.parse(inboxPieDb.getPreference("index_paused_folders", null) ?? "[]") as string[];
+        return { ongoing, paused, pausedFolders };
+      }
 
       case "getVectorIndexStats":
         return lanceStore.getStats();
 
       case "buildVectorIndex": {
+        // If user explicitly paused indexing, skip the auto-restart that happens
+        // after every scan. The user must resume manually from Settings.
+        // Also blocked on every fresh app start (_autoIndexBlocked) so restarting
+        // the app never auto-resumes an interrupted index.
+        const isPaused = inboxPieDb.getPreference("index_paused", null) === "yes";
+        if (isPaused || _autoIndexBlocked) {
+          return { queued: false, paused: isPaused, blocked: _autoIndexBlocked };
+        }
+
         // Triggered after a scan. Indexes each scanned folder in ITS OWN read_mode
         // (folder-level). Incremental — only new mail is embedded on re-scans.
         const { messages: msgs } = message as any;
         const initialMsgs: Record<string, unknown>[] = msgs ?? [];
         const folders = [...new Set(initialMsgs.map((m: any) => m.folder).filter(Boolean))] as string[];
+        _currentIndexFolders = folders;
 
         const auditId = inboxPieDb.startIndexAudit(null, folders);
         const startedAt = Date.now();
@@ -527,6 +683,11 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
         const { folders: targetFolders, incremental } = message as any;
         const isIncremental = !!incremental;
         const auditFolders = (targetFolders as string[]) ?? [];
+        _currentIndexFolders = auditFolders;
+        // Explicit reindex from Settings clears any existing pause AND unblocks auto-index
+        _autoIndexBlocked = false;
+        inboxPieDb.setPreference("index_paused", "no");
+        inboxPieDb.setPreference("index_paused_folders", "[]");
 
         const auditId  = inboxPieDb.startIndexAudit(null, auditFolders);
         const startedAt = Date.now();

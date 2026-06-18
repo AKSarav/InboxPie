@@ -51,6 +51,10 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "src/renderer/assets/icon.png",
+        "to": "renderer/assets/icon.png"
       }
     ],
     "mac": {

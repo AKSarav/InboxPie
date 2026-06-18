@@ -115,6 +115,11 @@ export type RpcAction =
   | { action: "getClusterEmails"; label: string }
   // Vector index / semantic RAG
   | { action: "checkEmbedding" }
+  | { action: "getSetupStatus" }
+  | { action: "markAppReady" }
+  | { action: "getIndexingStatus" }
+  | { action: "pauseIndexing" }
+  | { action: "resumeIndexing" }
   | { action: "getVectorIndexStats" }
   | { action: "buildVectorIndex"; messages: MessageRecord[] }
   | { action: "reindexFolders"; folders: string[]; incremental?: boolean }
