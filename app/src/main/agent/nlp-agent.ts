@@ -24,7 +24,7 @@ export interface AgentStep {
 
 export interface AgentResponse {
   intent: string;
-  response_type: "text" | "stat_card" | "bar_chart" | "data_table" | "html_widget";
+  response_type: "text" | "stat_card" | "bar_chart" | "pie_chart" | "line_chart" | "data_table" | "html_widget";
   answer_text: string;
   rows?: Record<string, unknown>[];
   widget_html?: string;   // model-authored HTML fragment, rendered in a sandboxed iframe

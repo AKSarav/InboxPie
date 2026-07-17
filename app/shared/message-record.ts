@@ -22,6 +22,7 @@ export interface MessageRecord {
   accountId: string;
   tags: string[];
   size: number;
+  body_preview?: string;
 }
 
 export interface MailAccount {
@@ -113,6 +114,7 @@ export type RpcAction =
   | { action: "getFolderIndexBreakdown" }
   | { action: "getSemanticClusters" }
   | { action: "getClusterEmails"; label: string }
+  | { action: "getCluster2D" }
   // Vector index / semantic RAG
   | { action: "checkEmbedding" }
   | { action: "getSetupStatus" }
@@ -126,6 +128,7 @@ export type RpcAction =
   | { action: "setFolderReadMode"; folder: string; mode: "metadata" | "content" }
   | { action: "deleteFolders"; folders: string[] }
   | { action: "resetVectorIndex" }
+  | { action: "getSubscriptionStats" }
   | { action: "resetAllData" };
 
 export type ProgressEvent =

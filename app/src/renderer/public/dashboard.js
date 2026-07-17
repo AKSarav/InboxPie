@@ -42,6 +42,19 @@
   ];
   function colorFor(i) { return PALETTE[i % PALETTE.length]; }
 
+  function initViewChart(hostId, option) {
+    if (!window.echarts) return;
+    const el = document.getElementById(hostId);
+    if (!el) return;
+    if (!el._echartsInstance) {
+      el._echartsInstance = echarts.init(el, "dark");
+      new ResizeObserver(() => el._echartsInstance && el._echartsInstance.resize()).observe(el);
+    }
+    el._echartsInstance.setOption(option, true);
+    // Defer resize until after browser layout (fixes empty chart when view was display:none)
+    requestAnimationFrame(() => el._echartsInstance && el._echartsInstance.resize());
+  }
+
   // Theme-aware colors — read CSS vars at render time
   function cssVar(name) {
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -60,6 +73,21 @@
     document.documentElement.setAttribute("data-theme", saved);
     updateThemeIcon(saved);
 
+    // Display the current email provider in the nav footer
+    const providerId = localStorage.getItem("inboxpie-selected-provider");
+    if (providerId) {
+      const navBadge = $("#navProviderBadge");
+      if (navBadge) {
+        const APPLE_MAIL_BADGE =
+          '<img src="assets/apple-mail-logo.png" alt="" width="35" height="35" ' +
+            'style="border-radius:4px;display:inline-block;vertical-align:middle;">';
+        const THUNDERBIRD_BADGE =
+          '<img src="assets/thunderbird-logo.png" alt="" width="35" height="35rec" ' +
+            'style="border-radius:4px;display:inline-block;vertical-align:middle;">';
+        navBadge.innerHTML = providerId === "thunderbird" ? THUNDERBIRD_BADGE : APPLE_MAIL_BADGE;
+      }
+    }
+
     // Load saved privacy mask setting
     privacyMaskEnabled = localStorage.getItem("mail-audit-privacy-mask") === "true";
     updatePrivacyToggle();
@@ -75,14 +103,42 @@
       if (allMessages.length > 0) switchView(currentView);
     });
 
+    // Home button — return to provider selection
+    const homeBtn = document.getElementById("homeBtn");
+    if (homeBtn) {
+      homeBtn.addEventListener("click", () => {
+        // Navigate back to account setup screen and reset to provider selection
+        // These functions are defined in shell.js (global scope)
+        if (typeof showScreen === "function" && typeof initProviderStep === "function") {
+          showScreen("accountScreen");
+          initProviderStep();
+        }
+      });
+    }
+
     $("#resetBtn").addEventListener("click", () => {
-      if (allMessages.length > 0 || selectedIds.size > 0) {
-        const ok = confirm(
-          "Reset the dashboard? Scan results and selections will be cleared so you can choose folders and scan again."
-        );
-        if (!ok) return;
-      }
-      resetDashboard();
+      // Show reset confirmation modal
+      const modal = $("#resetConfirmModal");
+      modal.style.display = "flex";
+
+      const cancelBtn = $("#resetConfirmCancel");
+      const okBtn = $("#resetConfirmOk");
+
+      cancelBtn.onclick = () => { modal.style.display = "none"; };
+
+      okBtn.onclick = () => {
+        modal.style.display = "none";
+        // Clear all app data (scan results, vector index, app state preferences) and reload
+        browser.runtime.sendMessage({ action: "resetAllData" }).then(() => {
+          // Hard reload (Ctrl+Shift+Reload equivalent) — clears browser cache + resets app state
+          // Returns to provider selection wizard
+          location.reload(true);
+        }).catch((err) => {
+          console.error("[reset] resetAllData failed:", err);
+          // Fallback: just reload anyway
+          location.reload(true);
+        });
+      };
     });
 
     // Privacy mask toggle
@@ -900,6 +956,8 @@
   function resetDashboard() {
     allMessages = [];
     if (window._ip) window._ip.messages = [];
+    var navMailbox = document.getElementById("navMailbox");
+    if (navMailbox) navMailbox.style.display = "none";
     var navIntelligence = document.getElementById("navIntelligence");
     if (navIntelligence) navIntelligence.style.display = "none";
     selectedIds.clear();
@@ -1047,7 +1105,25 @@
         if (selectedIds.size > 0) showSelectionReviewModal();
       };
 
-      // Show Intelligence nav (SmartSearch + KnowledgeMap)
+      // Used by intelligence.js category drill-down
+      window._ip.openCategoryReview = function (clusterRows) {
+        selectedIds.clear();
+        var byKey = {};
+        allMessages.forEach(function (m) {
+          var key = (m.subject || '').trim().toLowerCase() + '|' + (m.senderEmail || '').toLowerCase();
+          byKey[key] = m;
+        });
+        clusterRows.forEach(function (r) {
+          var key = (r.subject || '').trim().toLowerCase() + '|' + (r.sender_email || '').toLowerCase();
+          if (byKey[key]) selectedIds.add(byKey[key].id);
+        });
+        updateStats();
+        if (selectedIds.size > 0) showSelectionReviewModal();
+      };
+
+      // Show Mailbox + Intelligence nav sections
+      var navMailbox = document.getElementById("navMailbox");
+      if (navMailbox) navMailbox.style.display = "block";
       var navIntelligence = document.getElementById("navIntelligence");
       if (navIntelligence) navIntelligence.style.display = "block";
 
@@ -1132,16 +1208,17 @@
     document.querySelector(`.tab[data-view="${view}"]`)?.classList.add("active");
     document.querySelectorAll(".view-panel").forEach((p) => (p.style.display = "none"));
 
-    // Intelligence views: hide scan header + reveal bar + stats/export chrome entirely
-    const isIntelligence = view === "smartsearch" || view === "knowledgemap" || view === "aisettings";
+    // Full-page views (mailbox + intelligence): hide scan header/stats/export chrome
+    const isFullPage = view === "smartsearch" || view === "knowledgemap" || view === "aisettings"
+                    || view === "indexes" || view === "groups";
     const statsBar   = $("#statsBar");
     const exportBar  = $("#exportBar");
     const header     = $("#header");
     const revealBar  = $("#headerRevealBar");
-    if (statsBar)  statsBar.style.display  = isIntelligence ? "none" : "grid";
-    if (exportBar) exportBar.style.display = isIntelligence ? "none" : "flex";
-    if (header)    header.style.display    = isIntelligence ? "none" : "";
-    if (revealBar) revealBar.style.display = "none"; // never show reveal bar on intelligence views
+    if (statsBar)  statsBar.style.display  = isFullPage ? "none" : "grid";
+    if (exportBar) exportBar.style.display = isFullPage ? "none" : "flex";
+    if (header)    header.style.display    = isFullPage ? "none" : "";
+    if (revealBar) revealBar.style.display = "none";
 
     const panel = $(`#${view}View`);
     if (panel) {
@@ -1151,6 +1228,10 @@
       else if (view === "domain") renderDomainTable();
       else if (view === "size") renderSizeDashboard();
       else if (view === "timeline") renderTimeline();
+      else if (view === "categories")   { if (window.renderCategories)   window.renderCategories(); }
+      else if (view === "subscriptions"){ if (window.renderSubscriptions) window.renderSubscriptions(); }
+      else if (view === "indexes")     { if (window.renderIndexes)     window.renderIndexes(); }
+      else if (view === "groups")      { if (window.renderGroups)      window.renderGroups(); }
       else if (view === "smartsearch")  { if (window.renderSmartSearch)  window.renderSmartSearch(); }
       else if (view === "knowledgemap") { if (window.renderKnowledgeMap) window.renderKnowledgeMap(); }
       else if (view === "aisettings")   { if (window.renderAISettings)   window.renderAISettings(); }
@@ -1507,6 +1588,45 @@
     let entries = Object.entries(bySender);
     const maxCount = Math.max(1, ...entries.map(([, v]) => v.length));
 
+    // Render top-senders donut chart + top-list (matches By Category layout)
+    const topSenders = Object.entries(bySender)
+      .sort((a, b) => b[1].length - a[1].length)
+      .slice(0, 10);
+    if (topSenders.length) {
+      const total = topSenders.reduce((s, [, msgs]) => s + msgs.length, 0);
+      const pieData = topSenders.map(([email, msgs]) => ({
+        name: msgs[0].senderName || email,
+        value: msgs.length,
+      }));
+      initViewChart("senderChart", {
+        backgroundColor: "transparent",
+        tooltip: { trigger: "item", formatter: "{b}: {c} ({d}%)" },
+        legend: { show: false },
+        series: [{
+          type: "pie",
+          radius: ["42%", "70%"],
+          center: ["50%", "50%"],
+          data: pieData,
+          label: { formatter: "{b}\n{d}%", fontSize: 11 },
+          emphasis: { itemStyle: { shadowBlur: 8, shadowColor: "rgba(0,0,0,0.4)" } }
+        }]
+      });
+      const topListEl = document.getElementById("senderTopList");
+      if (topListEl) {
+        topListEl.innerHTML = topSenders.slice(0, 8).map(([email, msgs]) => {
+          const name = msgs[0].senderName || email;
+          const count = msgs.length;
+          const pct = total > 0 ? Math.round(count / total * 100) : 0;
+          return `<div class="an-top-row">` +
+            `<span class="an-top-icon">👤</span>` +
+            `<span class="an-top-label">${escHtml(name)}</span>` +
+            `<span class="an-top-count">${count.toLocaleString()}</span>` +
+            `<div class="an-top-bar"><div class="an-top-bar-fill" style="width:${pct}%"></div></div>` +
+            `</div>`;
+        }).join("");
+      }
+    }
+
     const q = (searchInput.value || "").toLowerCase();
     if (q) entries = entries.filter(([email, msgs]) => email.includes(q) || msgs[0].senderName.toLowerCase().includes(q));
 
@@ -1696,6 +1816,45 @@
     if (q) entries = entries.filter(([domain]) => domain.toLowerCase().includes(q));
     entries.sort((a, b) => b[1].length - a[1].length);
 
+    // Render top-domains donut chart + top-list (matches By Category layout)
+    const topDomains = Object.entries(byDomain)
+      .sort((a, b) => b[1].length - a[1].length)
+      .slice(0, 10);
+    if (topDomains.length) {
+      const total = topDomains.reduce((s, [, msgs]) => s + msgs.length, 0);
+      const pieData = topDomains.map(([domain, msgs]) => ({
+        name: displayDomain(domain),
+        value: msgs.length,
+      }));
+      initViewChart("domainChart", {
+        backgroundColor: "transparent",
+        tooltip: { trigger: "item", formatter: "{b}: {c} ({d}%)" },
+        legend: { show: false },
+        series: [{
+          type: "pie",
+          radius: ["42%", "70%"],
+          center: ["50%", "50%"],
+          data: pieData,
+          label: { formatter: "{b}\n{d}%", fontSize: 11 },
+          emphasis: { itemStyle: { shadowBlur: 8, shadowColor: "rgba(0,0,0,0.4)" } }
+        }]
+      });
+      const topListEl = document.getElementById("domainTopList");
+      if (topListEl) {
+        topListEl.innerHTML = topDomains.slice(0, 8).map(([domain, msgs]) => {
+          const name = displayDomain(domain);
+          const count = msgs.length;
+          const pct = total > 0 ? Math.round(count / total * 100) : 0;
+          return `<div class="an-top-row">` +
+            `<span class="an-top-icon">🌐</span>` +
+            `<span class="an-top-label">${escHtml(name)}</span>` +
+            `<span class="an-top-count">${count.toLocaleString()}</span>` +
+            `<div class="an-top-bar"><div class="an-top-bar-fill" style="width:${pct}%"></div></div>` +
+            `</div>`;
+        }).join("");
+      }
+    }
+
     setSafeHtml(container, entries.map(([domain, msgs], i) => {
       const count = msgs.length;
       const senderNum = new Set(msgs.map((m) => m.senderEmail)).size;
@@ -1843,36 +2002,101 @@
         messages: [m],
       }));
 
+    // Top donut chart: storage by domain
+    if (heavyDomains.length) {
+      initViewChart("sizeChart", {
+        backgroundColor: "transparent",
+        tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${formatBytes(p.value)} (${p.percent}%)` },
+        legend: { show: false },
+        series: [{
+          type: "pie", radius: ["42%", "70%"], center: ["50%", "50%"],
+          data: heavyDomains.map((d, i) => ({ name: d.title, value: d.count, itemStyle: { color: colorFor(i) } })),
+          label: { formatter: "{b}\n{d}%", fontSize: 11 },
+          emphasis: { itemStyle: { shadowBlur: 8, shadowColor: "rgba(0,0,0,0.4)" } }
+        }]
+      });
+      const topListEl = document.getElementById("sizeTopList");
+      if (topListEl) {
+        const maxBytes = heavyDomains[0] ? heavyDomains[0].count : 1;
+        topListEl.innerHTML = heavyDomains.map((d, i) => {
+          const pct = Math.round(d.count / maxBytes * 100);
+          return `<div class="an-top-row">` +
+            `<span class="an-top-icon">🌐</span>` +
+            `<span class="an-top-label">${escHtml(d.title)}</span>` +
+            `<span class="an-top-count">${formatBytes(d.count)}</span>` +
+            `<div class="an-top-bar"><div class="an-top-bar-fill" style="width:${pct}%;background:${colorFor(i)}"></div></div>` +
+            `</div>`;
+        }).join("");
+      }
+    }
+
     if (summary) {
-      summary.textContent = unknownCount
-        ? `${formatBytes(totalBytes)} known size across ${knownMessages.length.toLocaleString()} messages · ${unknownCount.toLocaleString()} unknown-size messages`
-        : `${formatBytes(totalBytes)} across ${knownMessages.length.toLocaleString()} messages`;
+      summary.textContent = `${formatBytes(totalBytes)} · ${knownMessages.length.toLocaleString()} messages · Largest: ${formatBytes(largest[0] ? messageSize(largest[0]) : 0)}`;
+    }
+
+    // Build mini pie chart HTML (placeholder divs initialized after setSafeHtml)
+    const bucketColors = ["#ef4444", "#f97316", "#eab308", "#3b82f6", "#22c55e"];
+    function miniPieCard(id, title, subtitle, kind, items, labelFn) {
+      const rows = items.map((item) => {
+        const allSel = item.messages.length > 0 && item.messages.every((m) => selectedIds.has(m.id));
+        return `<div class="size-mini-row ${allSel ? "selected" : ""}">` +
+          `<span class="size-mini-label">${escHtml(labelFn(item))}</span>` +
+          `<span class="size-mini-val">${formatBytes(item.count)}</span>` +
+          `<button type="button" class="btn btn-secondary size-mini-btn" data-size-kind="${kind}" data-value="${escAttr(item.value || "")}">${allSel ? "Selected" : "Select"}</button>` +
+          `</div>`;
+      }).join("");
+      return `<section class="insight-card size-mini-card">` +
+        `<div class="insight-card-head"><h3>${escHtml(title)}</h3><p>${escHtml(subtitle)}</p></div>` +
+        `<div id="${id}" class="size-mini-echarts"></div>` +
+        `<div class="size-mini-list">${rows}</div>` +
+        `</section>`;
     }
 
     setSafeHtml(container, `
-      <div class="timeline-kpis">
-        <div class="timeline-kpi"><span>${formatBytes(totalBytes)}</span><label>Known mailbox size</label></div>
-        <div class="timeline-kpi"><span>${knownMessages.length.toLocaleString()}</span><label>Messages with size</label></div>
-        <div class="timeline-kpi"><span>${formatBytes(largest[0] ? messageSize(largest[0]) : 0)}</span><label>Largest message</label></div>
-        <div class="timeline-kpi"><span>${unknownCount.toLocaleString()}</span><label>Unknown size</label></div>
-      </div>
-      <div class="size-note">Size data depends on what Thunderbird exposes per account. Unknown-size messages are kept out of storage rankings.</div>
       <div class="insight-grid size-grid">
-        ${renderSizeCard("Size Buckets", "Select a size band to recover storage quickly.", buckets, "bucket")}
-        ${renderSizeCard("Top Space-Heavy Senders", "Senders consuming the most total mailbox space.", heavySenders, "sender")}
-        ${renderSizeCard("Top Space-Heavy Domains", "Domains consuming storage across many senders.", heavyDomains, "domain")}
-        ${renderSizeCard("Large Old Messages", "Large messages older than one year.", largeOld, "message")}
+        ${miniPieCard("sizeBucketChart", "Size Buckets", "Storage by message size range",
+            "bucket", buckets, (b) => b.title)}
+        ${miniPieCard("sizeSenderChart", "Top Senders by Space", "Senders consuming most storage",
+            "sender", heavySenders.slice(0, 6), (s) => s.title)}
+        <section class="insight-card size-wide-card">
+          <div class="insight-card-head">
+            <h3>Large Old Messages</h3>
+            <p>Large messages older than one year.</p>
+          </div>
+          <div class="insight-rows">
+            ${largeOld.length ? largeOld.map((row) => renderSizeRow(row, "message")).join("") : `<div class="insight-empty">No large old messages found.</div>`}
+          </div>
+        </section>
       </div>
-      <section class="insight-card size-wide-card">
-        <div class="insight-card-head">
-          <h3>Largest Individual Messages</h3>
-          <p>Fastest path to reclaiming space. Select rows and use Move to Trash or Move to Folder.</p>
-        </div>
-        <div class="insight-rows">
-          ${topLargest.length ? topLargest.map((row) => renderSizeRow(row, "message")).join("") : `<div class="insight-empty">No message sizes available.</div>`}
-        </div>
-      </section>
     `);
+
+    // Init mini pie charts after DOM is set
+    if (buckets.length) {
+      initViewChart("sizeBucketChart", {
+        backgroundColor: "transparent",
+        tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${formatBytes(p.value)} (${p.percent}%)` },
+        legend: { show: false },
+        series: [{
+          type: "pie", radius: ["38%", "68%"], center: ["50%", "50%"],
+          data: buckets.map((b, i) => ({ name: b.title, value: b.count, itemStyle: { color: bucketColors[i % bucketColors.length] } })),
+          label: { formatter: "{b}\n{d}%", fontSize: 10 },
+          emphasis: { itemStyle: { shadowBlur: 6, shadowColor: "rgba(0,0,0,0.4)" } }
+        }]
+      });
+    }
+    if (heavySenders.length) {
+      initViewChart("sizeSenderChart", {
+        backgroundColor: "transparent",
+        tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${formatBytes(p.value)} (${p.percent}%)` },
+        legend: { show: false },
+        series: [{
+          type: "pie", radius: ["38%", "68%"], center: ["50%", "50%"],
+          data: heavySenders.slice(0, 6).map((s, i) => ({ name: s.title, value: s.count, itemStyle: { color: colorFor(i) } })),
+          label: { formatter: "{b}\n{d}%", fontSize: 10 },
+          emphasis: { itemStyle: { shadowBlur: 6, shadowColor: "rgba(0,0,0,0.4)" } }
+        }]
+      });
+    }
 
     container.querySelectorAll("[data-size-kind]").forEach((btn) => {
       btn.addEventListener("click", () => selectSizeInsight(btn, knownMessages));
@@ -2325,14 +2549,6 @@
       updateStats();
       switchView(currentView);
     };
-    $("#selectionReviewTrash").onclick = () => {
-      modal.style.display = "none";
-      showDeleteModal();
-    };
-    $("#selectionReviewFolder").onclick = () => {
-      modal.style.display = "none";
-      showMoveFolderModal();
-    };
     $("#selectionReviewExport").onclick = () => {
       exportSelectedCSV();
     };
@@ -2378,13 +2594,8 @@
 
     if (selectedIds.size === 0) {
       setSafeHtml(table, `<div class="selection-empty">No messages selected.</div>`);
-      $("#selectionReviewTrash").disabled = true;
-      $("#selectionReviewFolder").disabled = true;
       return;
     }
-
-    $("#selectionReviewTrash").disabled = false;
-    $("#selectionReviewFolder").disabled = false;
 
     if (selected.length === 0) {
       setSafeHtml(table, `<div class="selection-empty">No selected messages match your search.</div>`);

@@ -1,23 +1,20 @@
-import { app } from "electron";
 import { DatabaseSync } from "node:sqlite";
-import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-// Track live scan subprocesses so they can be killed on reload/quit instead of
-// lingering as orphaned CPU hogs (e.g. a 50k-mail .emlx walk).
-const activeScans = new Set<ChildProcess>();
+import {
+  decodeRfc2047,
+  extractBodyPreview,
+  folderTypeFromName as folderTypeFromNameShared,
+  macSecsToDateParts,
+  parseDateString,
+  parseSender,
+  unixSecsToDateParts,
+} from "./email-parser";
 
-/** Kill all in-flight scan subprocesses. Returns how many were terminated. */
-export function killActiveScans(): number {
-  let n = 0;
-  for (const child of activeScans) {
-    try { child.kill("SIGTERM"); n++; } catch { /* already gone */ }
-  }
-  activeScans.clear();
-  return n;
-}
+/** No-op kept for API compatibility — Apple Mail scanning is now in-process. */
+export function killActiveScans(): number { return 0; }
 
 import type {
   FetchMailOptions,
@@ -40,6 +37,10 @@ const MAIL_ROOT = path.join(os.homedir(), "Library", "Mail");
  *   ~/Library/Mail/MailData/Envelope Index          (older macOS)
  *   ~/Library/Mail/V10/MailData/Envelope Index      (macOS 10.15+, version # varies)
  */
+const FDA_ERROR =
+  "Full Disk Access is required. Open System Settings → Privacy & Security → " +
+  "Full Disk Access and enable InboxPie, then restart the app.";
+
 function findEnvelopeIndex(): string | null {
   const direct = path.join(MAIL_ROOT, "MailData", "Envelope Index");
   if (fs.existsSync(direct)) return direct;
@@ -47,7 +48,11 @@ function findEnvelopeIndex(): string | null {
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(MAIL_ROOT, { withFileTypes: true });
-  } catch {
+  } catch (err) {
+    const msg = String(err);
+    if (msg.includes("EPERM") || msg.includes("EACCES") || msg.includes("permission")) {
+      throw new Error(FDA_ERROR);
+    }
     return null;
   }
 
@@ -401,87 +406,341 @@ function normalizeScheme(scheme: string): string {
   }
 }
 
-function folderTypeFromName(name: string): string {
-  const lower = (name || "").toLowerCase();
-  if (lower.includes("inbox"))                              return "inbox";
-  if (lower.includes("sent"))                              return "sent";
-  if (lower.includes("trash") || lower.includes("deleted")) return "trash";
-  if (lower.includes("junk")  || lower.includes("spam"))   return "junk";
-  if (lower.includes("archive"))                           return "archives";
-  if (lower.includes("draft"))                             return "drafts";
-  return "custom";
+// Use shared folderTypeFromName from email-parser (identical logic)
+const folderTypeFromName = folderTypeFromNameShared;
+
+// ── TypeScript Envelope Index message scan ─────────────────────────────────
+
+const ENVELOPE_MESSAGES_QUERY = `
+  SELECT
+    m.ROWID,
+    m.message_id,
+    s.subject,
+    a.address,
+    a.comment,
+    m.date_sent,
+    m.date_received,
+    m.read,
+    m.flagged,
+    m.size,
+    mb.url
+  FROM messages AS m
+  LEFT JOIN subjects  AS s  ON m.subject  = s.ROWID
+  LEFT JOIN addresses AS a  ON m.sender   = a.ROWID
+  LEFT JOIN mailboxes AS mb ON m.mailbox  = mb.ROWID
+  WHERE m.deleted = 0
+`;
+
+// node:sqlite returns 64-bit integers that overflow JS Number as BigInt when
+// setReadBigInts(true) is set. All integer columns may be bigint or number.
+type SqlInt = bigint | number | null;
+
+type EnvelopeRow = {
+  ROWID: SqlInt;
+  message_id: string | null;
+  subject: string | null;
+  address: string | null;
+  comment: string | null;
+  date_sent: SqlInt;
+  date_received: SqlInt;
+  read: SqlInt;
+  flagged: SqlInt;
+  size: SqlInt;
+  url: string | null;
+};
+
+/** Safely convert a SQLite integer (possibly BigInt) to a JS number. */
+function sqlNum(v: SqlInt): number {
+  if (v == null) return 0;
+  // Number(bigint) truncates to double precision — acceptable for timestamps/sizes
+  return Number(v);
 }
 
-// ── Scan script (for fetchMessages) ───────────────────────────────────────
-
-function scanScriptPath(): string {
-  const devScript = path.join(app.getAppPath(), "scripts", "scan-apple-mail.py");
-  if (fs.existsSync(devScript)) return devScript;
-  return path.join(process.resourcesPath, "scripts", "scan-apple-mail.py");
-}
-
-function runScanScript(args: string[]): Promise<{ engine: string; messages: MessageRecord[] }> {
-  return new Promise((resolve, reject) => {
-    const python = process.env["INBOXPIE_PYTHON"] ?? "python3";
-    const script = scanScriptPath();
-    const child = spawn(python, [script, ...args], {
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    activeScans.add(child);
-
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
-    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
-    child.on("error", (err) => { activeScans.delete(child); reject(err); });
-    child.on("close", (code) => {
-      activeScans.delete(child);
-      if (code !== 0) {
-        let message = stderr.trim() || stdout.trim() || `Scan failed with exit code ${code}`;
-        try {
-          const parsed = JSON.parse(stderr.trim() || stdout.trim());
-          if (parsed.error) message = parsed.error;
-        } catch { /* keep raw message */ }
-        reject(new Error(message));
-        return;
-      }
-      try {
-        resolve(JSON.parse(stdout));
-      } catch (error) {
-        reject(new Error(`Invalid scan output: ${String(error)}`));
-      }
-    });
-  });
-}
-
-function folderFiltersFromSelections(
-  folderSelections: FetchMailOptions["folderSelections"],
-): string {
-  if (!folderSelections?.length) return "";
-  const names = folderSelections.map((item) => item.path.split("/").pop() || item.path);
-  return [...new Set(names)].join(",");
-}
+// Apple Mail's Envelope Index stores timestamps as Unix epoch seconds (integer).
+// Valid email dates: 1990-01-01 (631152000) to 2100-01-01 (4102444800).
+// Any value outside this range — including impossibly large 64-bit integers —
+// is treated as missing and falls back to parseDateString("").
+const MIN_VALID_TS =   631_152_000; // 1990-01-01 UTC
+const MAX_VALID_TS = 4_102_444_800; // 2100-01-01 UTC
+// Apple Core Data epoch offset (seconds from 1970 to 2001-01-01)
+const MAC_EPOCH_OFFSET = 978_307_200;
 
 /**
- * Run the scan script in emlx mode with body extraction enabled.
- * Used by the content-mode vector indexer so it gets real email body text.
- * ``folders`` is a list of mailbox folder names to filter (e.g. ["INBOX", "Sent"]).
+ * Resolve an Envelope Index timestamp to a valid Unix epoch second.
+ * Handles three storage formats found in the wild:
+ *   - Unix seconds       (typical, 1970 epoch)
+ *   - Mac Core Data secs (2001 epoch — add MAC_EPOCH_OFFSET)
+ *   - Nanoseconds        (rare, divide by 1e9 then apply above)
+ * Returns 0 when the value cannot be mapped to a plausible email date.
  */
+function resolveTimestamp(raw: SqlInt): number {
+  if (raw == null) return 0;
+  const v = Number(raw); // BigInt → double; loses sub-microsecond precision, fine for dates
+  if (!isFinite(v) || v <= 0) return 0;
+
+  // Unix seconds — the most common format in Envelope Index
+  if (v >= MIN_VALID_TS && v <= MAX_VALID_TS) return Math.round(v);
+
+  // Mac Core Data seconds (2001 epoch) — common in plist / CoreData stores
+  const macToUnix = v + MAC_EPOCH_OFFSET;
+  if (macToUnix >= MIN_VALID_TS && macToUnix <= MAX_VALID_TS) return Math.round(macToUnix);
+
+  // Nanoseconds (some internal Apple APIs use this)
+  const fromNano = v / 1_000_000_000;
+  if (fromNano >= MIN_VALID_TS && fromNano <= MAX_VALID_TS) return Math.round(fromNano);
+
+  // Nanoseconds with Mac epoch
+  const fromNanoMac = fromNano + MAC_EPOCH_OFFSET;
+  if (fromNanoMac >= MIN_VALID_TS && fromNanoMac <= MAX_VALID_TS) return Math.round(fromNanoMac);
+
+  return 0; // unrecognised format — caller falls back to parseDateString("")
+}
+
+function scanEnvelopeIndexMessages(
+  dbPath: string,
+  nameMap: Map<string, string>,
+  folderFilter?: Set<string>,
+  accountId?: string,
+): MessageRecord[] {
+  const { db, cleanup } = openEnvelopeIndex(dbPath);
+  try {
+    const stmt = db.prepare(ENVELOPE_MESSAGES_QUERY);
+    // setReadBigInts(true): return 64-bit integers that exceed Number.MAX_SAFE_INTEGER
+    // as BigInt instead of throwing ERR_OUT_OF_RANGE. Available since Node 22.5.
+    if (typeof (stmt as any).setReadBigInts === "function") {
+      (stmt as any).setReadBigInts(true);
+    }
+    const rows = stmt.all() as EnvelopeRow[];
+    const records: MessageRecord[] = [];
+
+    for (const row of rows) {
+      if (!row.url) continue;
+      const parsed = parseMailboxUrl(row.url);
+      if (!parsed || !parsed.folderPath) continue;
+      if (accountId && parsed.uuid !== accountId.toUpperCase()) continue;
+
+      const segments   = parsed.folderPath.split("/");
+      const folderLeaf = segments[segments.length - 1] ?? parsed.folderPath;
+      if (folderFilter?.size && !folderFilter.has(folderLeaf.toLowerCase())) continue;
+
+      const addr    = (row.address ?? "").trim();
+      const name    = (row.comment ?? "").trim();
+      const rawFrom = name && addr ? `${name} <${addr}>` : (addr || name || "");
+      const { name: senderName, email: senderEmail, author } = parseSender(rawFrom);
+      const domain  = senderEmail.includes("@") ? senderEmail.split("@")[1]!.toLowerCase() : "unknown";
+
+      // resolveTimestamp() handles BigInt values, all known storage formats
+      // (Unix seconds, Mac Core Data seconds, nanoseconds), and corrupted values.
+      const timestamp = resolveTimestamp(row.date_received) || resolveTimestamp(row.date_sent);
+      const dateParts = timestamp > 0 ? unixSecsToDateParts(timestamp) : parseDateString("");
+
+      const subject     = decodeRfc2047(row.subject ?? "") || "(No Subject)";
+      const accountName = nameMap.get(parsed.uuid) ?? parsed.uuid;
+      const rowId       = String(sqlNum(row.ROWID));
+
+      records.push({
+        id:        row.message_id || rowId,
+        subject,
+        author,
+        senderName,
+        senderEmail,
+        domain,
+        date:      dateParts.date,
+        year:      dateParts.year,
+        month:     dateParts.month,
+        monthName: dateParts.monthName,
+        read:      sqlNum(row.read) === 1,
+        flagged:   sqlNum(row.flagged) === 1,
+        folder:    parsed.folderPath,
+        folderType: folderTypeFromName(folderLeaf),
+        account:   accountName,
+        accountId: `am_${parsed.uuid}`, // Prefix with provider
+        tags:      [],
+        size:      sqlNum(row.size),
+      });
+    }
+
+    return records;
+  } finally {
+    cleanup();
+  }
+}
+
+// ── TypeScript emlx scan (fallback + body extraction) ─────────────────────
+
+/** Parse a simple Apple plist XML for the integer/real values we need. */
+function parsePlistXml(xml: string): Record<string, number | string | boolean> {
+  const result: Record<string, number | string | boolean> = {};
+  const re = /<key>([^<]+)<\/key>\s*(?:<integer>(\d+)<\/integer>|<real>([^<]+)<\/real>|<string>([^<]*)<\/string>|<(true|false)\/>)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(xml)) !== null) {
+    const key = m[1]!;
+    if (m[2] !== undefined) result[key] = parseInt(m[2], 10);
+    else if (m[3] !== undefined) result[key] = parseFloat(m[3]);
+    else if (m[4] !== undefined) result[key] = m[4];
+    else if (m[5] !== undefined) result[key] = m[5] === "true";
+  }
+  return result;
+}
+
+/** Extract folder name and account UUID from an emlx file path under mail_root. */
+function emlxFolderAndAccount(emlxPath: string, mailRoot: string): { folder: string; accountId: string } {
+  const rel = path.relative(mailRoot, emlxPath);
+  const parts = rel.split(path.sep);
+  const accountId = parts[0] ?? "unknown";
+  let folder = "Unknown";
+  for (const part of parts) {
+    if (part.endsWith(".mbox") || part.endsWith(".imapmbox")) {
+      folder = part.replace(/\.imapmbox$/, "").replace(/\.mbox$/, "");
+      break;
+    }
+  }
+  return { folder, accountId };
+}
+
+function parseEmlxFile(emlxPath: string, includeBody: boolean): MessageRecord | null {
+  let raw: Buffer;
+  try { raw = fs.readFileSync(emlxPath); } catch { return null; }
+
+  const firstNl = raw.indexOf(0x0a);
+  if (firstNl === -1) return null;
+
+  let byteCount: number;
+  try { byteCount = parseInt(raw.subarray(0, firstNl).toString("ascii").trim(), 10); } catch { return null; }
+
+  const msgStart = firstNl + 1;
+  const messageBytes = raw.subarray(msgStart, msgStart + byteCount);
+
+  // Parse plist XML for flags and date-sent
+  const plistStart = raw.indexOf(Buffer.from("<?xml"), msgStart + byteCount);
+  let plist: Record<string, number | string | boolean> = {};
+  if (plistStart !== -1) {
+    try { plist = parsePlistXml(raw.subarray(plistStart).toString("utf8")); } catch { /* ignore */ }
+  }
+
+  // Flags: bit 0 = read, bit 4 = flagged (Apple Mail emlx format)
+  const flags = typeof plist["flags"] === "number" ? plist["flags"] : 0;
+  const isRead    = !!(flags & 1);
+  const isFlagged = !!(flags & 16);
+
+  // Headers
+  const headerEnd = findHeaderBoundary(messageBytes);
+  const headerSection = messageBytes.subarray(0, headerEnd).toString("utf8");
+  const headers = new Map<string, string>();
+  const unfolded = headerSection.replace(/\r?\n[ \t]+/g, " ");
+  for (const line of unfolded.split(/\r?\n/)) {
+    const ci = line.indexOf(":");
+    if (ci < 1) continue;
+    const k = line.slice(0, ci).toLowerCase().trim();
+    const v = line.slice(ci + 1).trim();
+    if (!headers.has(k)) headers.set(k, v);
+  }
+
+  const { name: senderName, email: senderEmail, author } = parseSender(headers.get("from") ?? "");
+  const domain = senderEmail.includes("@") ? senderEmail.split("@")[1]!.toLowerCase() : "unknown";
+
+  // Date: prefer plist date-sent (Mac Core Data epoch), fall back to header
+  const plistDate = typeof plist["date-sent"] === "number" ? plist["date-sent"] as number : null;
+  const dateParts = plistDate && plistDate > 0
+    ? macSecsToDateParts(plistDate)
+    : parseDateString(headers.get("date") ?? "");
+
+  const rawSubject = headers.get("subject") ?? "";
+  const subject = decodeRfc2047(rawSubject) || "(No Subject)";
+
+  return {
+    id:         path.basename(emlxPath, ".emlx"),
+    subject,
+    author,
+    senderName,
+    senderEmail,
+    domain,
+    date:       dateParts.date,
+    year:       dateParts.year,
+    month:      dateParts.month,
+    monthName:  dateParts.monthName,
+    read:       isRead,
+    flagged:    isFlagged,
+    folder:     "",    // filled in by caller
+    folderType: "",
+    account:    "",
+    accountId:  "",
+    tags:         [],
+    size:         fs.statSync(emlxPath).size,
+    body_preview: includeBody ? extractBodyPreview(messageBytes) : undefined,
+  };
+}
+
+function findHeaderBoundary(buf: Buffer): number {
+  for (let i = 0; i < buf.length - 1; i++) {
+    if (buf[i] === 0x0a && buf[i + 1] === 0x0a) return i;
+    if (buf[i] === 0x0d && buf[i + 1] === 0x0a && i + 3 < buf.length
+        && buf[i + 2] === 0x0d && buf[i + 3] === 0x0a) return i;
+  }
+  return buf.length;
+}
+
+function scanEmlxDirectory(
+  mailRoot: string,
+  nameMap: Map<string, string>,
+  folderFilter?: Set<string>,
+  accountId?: string,
+  includeBody = false,
+): MessageRecord[] {
+  const records: MessageRecord[] = [];
+
+  function walk(dir: string): void {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { walk(full); continue; }
+      if (!entry.name.endsWith(".emlx") || entry.name.includes(".partial.")) continue;
+
+      const { folder, accountId: emlxAccountId } = emlxFolderAndAccount(full, mailRoot);
+      if (accountId && emlxAccountId.toUpperCase() !== accountId.toUpperCase()) continue;
+      if (folderFilter?.size && !folderFilter.has(folder.toLowerCase())) continue;
+
+      const record = parseEmlxFile(full, includeBody);
+      if (!record) continue;
+
+      record.folder     = folder;
+      record.folderType = folderTypeFromName(folder);
+      record.accountId  = `am_${emlxAccountId.toUpperCase()}`;
+      record.account    = nameMap.get(emlxAccountId.toUpperCase()) ?? emlxAccountId;
+      records.push(record);
+    }
+  }
+
+  walk(mailRoot);
+  return records;
+}
+
 /**
  * Fetch messages for the given folder names, for (re)indexing.
- * includeBody=true forces emlx mode and extracts body text (Full Content);
- * includeBody=false uses the fast envelope-index scan (Metadata only).
+ * includeBody=true uses emlx scan to extract body text (Full Content);
+ * includeBody=false uses the fast Envelope Index scan (Metadata only).
  */
-export async function fetchMessagesForFolders(folders: string[], includeBody: boolean): Promise<MessageRecord[]> {
-  const args: string[] = includeBody
-    ? ["--mode", "emlx", "--include-body"]
-    : ["--mode", "auto"];
-  if (folders.length > 0) {
-    args.push("--folders", [...new Set(folders)].join(","));
+export function fetchMessagesForFolders(folders: string[], includeBody: boolean): MessageRecord[] {
+  const dbPath = findEnvelopeIndex();
+  const nameMap = buildUuidToNameMap();
+  const folderFilter = folders.length > 0
+    ? new Set(folders.map((f) => f.toLowerCase()))
+    : undefined;
+
+  if (includeBody) {
+    const mailRoot = findMailVersionRoot();
+    if (!mailRoot) return [];
+    return scanEmlxDirectory(mailRoot, nameMap, folderFilter, undefined, true);
   }
-  const result = await runScanScript(args);
-  return result.messages;
+
+  if (!dbPath) {
+    const mailRoot = findMailVersionRoot();
+    if (!mailRoot) return [];
+    return scanEmlxDirectory(mailRoot, nameMap, folderFilter, undefined, false);
+  }
+
+  return scanEnvelopeIndexMessages(dbPath, nameMap, folderFilter);
 }
 
 // ── Debug helper ──────────────────────────────────────────────────────────
@@ -592,8 +851,9 @@ export class AppleMailProvider implements MailProvider {
         // Use the resolved display name (email) when available; fall back to UUID
         const displayName = nameMap.get(parsed.uuid) ?? parsed.uuid;
 
+        const accountId = `am_${parsed.uuid}`; // Prefix with "am_" for Apple Mail provider
         seen.set(parsed.uuid, {
-          id: parsed.uuid,          // UUID used as stable id for IPC / accountId filter
+          id: accountId,            // Prefixed ID for IPC / accountId filter
           name: displayName,        // Human-readable: email address or account label
           type: parsed.accountType, // "imap", "exchange", "local", …
         });
@@ -616,6 +876,9 @@ export class AppleMailProvider implements MailProvider {
     const nameMap = buildUuidToNameMap();
     const { db, cleanup } = openEnvelopeIndex(dbPath);
     try {
+      // If accountId is prefixed (am_<uuid>), extract the UUID part for SQL filtering
+      const filterUuid = accountId?.startsWith("am_") ? accountId.slice(3) : accountId;
+
       type Row = { url: string; total_count: number; unread_count: number };
       const rows = db
         .prepare(
@@ -627,7 +890,7 @@ export class AppleMailProvider implements MailProvider {
       for (const { url, total_count, unread_count } of rows) {
         const parsed = parseMailboxUrl(url);
         if (!parsed) continue;
-        if (accountId && parsed.uuid !== accountId.toUpperCase()) continue;
+        if (filterUuid && parsed.uuid !== filterUuid.toUpperCase()) continue;
         if (!parsed.folderPath) continue;
 
         const segments = parsed.folderPath.split("/");
@@ -638,7 +901,7 @@ export class AppleMailProvider implements MailProvider {
           path: parsed.folderPath,
           name,
           type: folderTypeFromName(name),
-          accountId: parsed.uuid,
+          accountId: `am_${parsed.uuid}`, // Return prefixed ID
           accountName,
           depth: segments.length - 1,
           totalCount: total_count ?? 0,
@@ -659,15 +922,29 @@ export class AppleMailProvider implements MailProvider {
     options: FetchMailOptions,
     onProgress?: (count: number) => void,
   ): Promise<FetchMailResult> {
-    const args = ["--mode", "auto"];
-    if (options.accountId) args.push("--account-id", options.accountId);
-
-    const folderFilter = folderFiltersFromSelections(options.folderSelections);
-    if (folderFilter) args.push("--folders", folderFilter);
-
     onProgress?.(0);
-    const result = await runScanScript(args);
-    onProgress?.(result.messages.length);
+
+    // Strip provider prefix from accountId if present (e.g. "am_<uuid>" → "<uuid>")
+    const filterAccountId = options.accountId?.startsWith("am_") ? options.accountId.slice(3) : options.accountId;
+
+    const nameMap = buildUuidToNameMap();
+    const folderFilter = options.folderSelections?.length
+      ? new Set(options.folderSelections.map((s) => (s.path.split("/").pop() ?? s.path).toLowerCase()))
+      : undefined;
+
+    const dbPath = findEnvelopeIndex();
+    let messages: MessageRecord[];
+
+    if (dbPath) {
+      messages = scanEnvelopeIndexMessages(dbPath, nameMap, folderFilter, filterAccountId ?? undefined);
+    } else {
+      const mailRoot = findMailVersionRoot();
+      messages = mailRoot
+        ? scanEmlxDirectory(mailRoot, nameMap, folderFilter, filterAccountId ?? undefined, false)
+        : [];
+    }
+
+    onProgress?.(messages.length);
 
     const accounts = await this.getAccounts();
     const targetAccounts = options.accountId
@@ -675,10 +952,10 @@ export class AppleMailProvider implements MailProvider {
       : accounts;
 
     return {
-      messages:            result.messages,
-      total:               result.messages.length,
-      accounts:            targetAccounts,
-      envelopeIndexPath:   findEnvelopeIndex() ?? undefined,
+      messages,
+      total:             messages.length,
+      accounts:          targetAccounts,
+      envelopeIndexPath: dbPath ?? undefined,
     };
   }
 

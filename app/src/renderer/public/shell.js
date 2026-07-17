@@ -235,9 +235,42 @@
   // ── Step 1: Provider selection ─────────────────────────────────────────────
 
   function initProviderStep() {
+    // Apple Mail is always wired; detection badge updated dynamically below.
     var appleMailBtn = document.getElementById("appleMailProvider");
     if (appleMailBtn) {
       appleMailBtn.addEventListener("click", function () { showAccountStep("apple-mail"); });
+    }
+
+    // Fetch provider list with detection flags, then enable/disable Thunderbird.
+    if (window.inboxpie && window.inboxpie.getProviders) {
+      window.inboxpie.getProviders().then(function (providers) {
+        var tb = providers.find(function (p) { return p.id === "thunderbird"; });
+        var tbBtn  = document.getElementById("thunderbirdProvider");
+        var tbPill = document.getElementById("thunderbirdPill");
+        if (!tbBtn) return;
+        if (tb && tb.detected) {
+          tbBtn.disabled = false;
+          tbBtn.classList.remove("provider-row-disabled");
+          var icon = tbBtn.querySelector(".provider-row-icon-dim");
+          if (icon) icon.classList.remove("provider-row-icon-dim");
+          if (tbPill) tbPill.remove();
+          // Add arrow chevron matching Apple Mail button
+          var arrow = document.createElement("svg");
+          arrow.setAttribute("class", "provider-row-arrow");
+          arrow.setAttribute("viewBox", "0 0 20 20");
+          arrow.setAttribute("fill", "none");
+          arrow.setAttribute("stroke", "currentColor");
+          arrow.setAttribute("stroke-width", "1.75");
+          arrow.setAttribute("stroke-linecap", "round");
+          arrow.setAttribute("stroke-linejoin", "round");
+          arrow.setAttribute("aria-hidden", "true");
+          arrow.innerHTML = "<path d=\"M7 4l6 6-6 6\"/>";
+          tbBtn.appendChild(arrow);
+          tbBtn.addEventListener("click", function () { showAccountStep("thunderbird"); });
+        } else {
+          if (tbPill) tbPill.textContent = "Not Found";
+        }
+      }).catch(function () {});
     }
   }
 
@@ -248,16 +281,38 @@
   var activeAccountId   = null;  // UUID or "all"
   var activeAccountName = null;  // resolved display name
 
+  var APPLE_MAIL_BADGE =
+    '<svg class="account-step-provider-icon" viewBox="0 0 20 20" aria-hidden="true">' +
+      '<defs><linearGradient id="amGrad2" x1="0%" y1="0%" x2="0%" y2="100%">' +
+        '<stop offset="0%" style="stop-color:#5ac8fa"/>' +
+        '<stop offset="100%" style="stop-color:#007aff"/>' +
+      '</linearGradient></defs>' +
+      '<rect width="20" height="20" rx="4" fill="url(#amGrad2)"/>' +
+      '<rect x="3" y="6" width="14" height="9" rx="1" fill="white" opacity="0.95"/>' +
+      '<path d="M3 7.5 L10 12 L17 7.5" fill="none" stroke="url(#amGrad2)" stroke-width="1.2" stroke-linecap="round"/>' +
+    '</svg>';
+
+  var THUNDERBIRD_BADGE =
+    '<img src="assets/thunderbird-logo.png" alt="" width="20" height="20" ' +
+      'style="border-radius:4px;display:inline-block;vertical-align:middle;margin-right:6px;">';
+
   function showAccountStep(providerId) {
     activeProviderId = providerId;
     localStorage.setItem(PROVIDER_KEY, providerId);
 
     showStep("accountStep");
 
+    var badge = document.getElementById("accountStepProviderBadge");
+    if (badge) badge.innerHTML = providerId === "thunderbird" ? THUNDERBIRD_BADGE : APPLE_MAIL_BADGE;
+
     var title = document.getElementById("accountPickerTitle");
     var sub   = document.getElementById("accountPickerSub");
     if (title) title.textContent = "Select account";
-    if (sub)   sub.textContent   = "Choose which Apple Mail account to analyze";
+    if (sub) {
+      sub.textContent = providerId === "thunderbird"
+        ? "Choose which Thunderbird account to analyze"
+        : "Choose which Apple Mail account to analyze";
+    }
 
     initAccountStep(providerId);
 
@@ -307,6 +362,7 @@
   // ── initAccountStep ────────────────────────────────────────────────────────
 
   var accountStepLoaded = false;
+  var accountStepProvider = null;   // which provider was last loaded
   var loadedAccounts    = [];
 
   function initAccountStep(providerId) {
@@ -317,6 +373,14 @@
     var maskIconOn  = document.getElementById("maskIconOn");
 
     if (!cardList || !continueBtn) return;
+
+    // Reset state when switching providers so the new provider's accounts load fresh
+    if (accountStepProvider !== providerId) {
+      accountStepLoaded = false;
+      accountStepProvider = providerId;
+      loadedAccounts = [];
+      continueBtn.disabled = true;
+    }
 
     activeAccountId = localStorage.getItem(ACCOUNT_KEY) || "all";
 
@@ -334,39 +398,46 @@
       });
     }
 
-    // Load accounts once per session
+    // Load accounts once per provider per session
     if (!accountStepLoaded) {
       accountStepLoaded = true;
       cardList.innerHTML = '<div class="account-loading"><svg class="account-loading-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>Loading accounts…</div>';
 
       window.inboxpie.getAccountsForProvider(providerId).then(function (accounts) {
         loadedAccounts = accounts || [];
+        console.log("[InboxPie] accounts received from provider:", providerId, JSON.stringify(accounts));
         syncAccountSelect(loadedAccounts);
         renderAccountCards();
-
-        console.log("[InboxPie] accounts received from provider:", JSON.stringify(accounts));
       }).catch(function (err) {
-        cardList.innerHTML = '<div class="account-error">Could not load accounts: ' + escHtml(String(err && err.message ? err.message : err)) + '</div>';
+        var errMsg = err && err.message ? err.message : String(err);
+        var hint = "";
+        if (errMsg.toLowerCase().includes("full disk access") || errMsg.toLowerCase().includes("eperm") || errMsg.toLowerCase().includes("eacces")) {
+          hint = ' <a href="#" class="account-fda-link" onclick="window.inboxpie && window.inboxpie.openPrivacySettings && window.inboxpie.openPrivacySettings(); return false;">Open Privacy Settings</a>';
+        }
+        cardList.innerHTML = '<div class="account-error">Could not load accounts: ' + escHtml(errMsg) + hint + '</div>';
       });
     } else {
       renderAccountCards();
     }
 
-    // Continue → folder step (wire once)
-    if (continueBtn && !continueBtn.dataset.wired) {
-      continueBtn.dataset.wired = "1";
-      continueBtn.addEventListener("click", function () {
-        if (!activeAccountId) return;
-        var name = activeAccountId === "all"
-          ? "All Accounts"
-          : (loadedAccounts.find(function (a) { return a.id === activeAccountId; }) || {}).name || activeAccountId;
-        activeAccountName = name;
-        showFolderStep(providerId, activeAccountId, activeAccountName);
-      });
-    }
+    // Continue → folder step — always re-bind so provider switches work correctly
+    continueBtn.onclick = function () {
+      if (!activeAccountId) return;
+      var name = activeAccountId === "all"
+        ? "All Accounts"
+        : (loadedAccounts.find(function (a) { return a.id === activeAccountId; }) || {}).name || activeAccountId;
+      activeAccountName = name;
+      showFolderStep(providerId, activeAccountId, activeAccountName);
+    };
 
     function renderAccountCards() {
-      if (loadedAccounts.length === 0) return;
+      if (loadedAccounts.length === 0) {
+        var emptyMsg = providerId === "thunderbird"
+          ? "No Thunderbird accounts found. Check that Thunderbird is configured with at least one account."
+          : "No Apple Mail accounts found. Make sure <strong>Full Disk Access</strong> is granted to InboxPie in System Settings → Privacy &amp; Security → Full Disk Access.";
+        cardList.innerHTML = '<div class="account-error">' + emptyMsg + '</div>';
+        return;
+      }
       cardList.innerHTML = "";
       cardList.appendChild(buildAllCard(loadedAccounts));
       loadedAccounts.forEach(function (account) {
@@ -452,31 +523,36 @@
     if (title) title.textContent = "Select folders";
     if (sub)   sub.textContent   = "Choose which folders to include in the scan";
 
+    // Provider badge (show which provider is selected)
+    var providerBadge = document.getElementById("folderStepProviderBadge");
+    if (providerBadge) {
+      providerBadge.innerHTML = providerId === "thunderbird" ? THUNDERBIRD_BADGE : APPLE_MAIL_BADGE;
+    }
+
     // Account breadcrumb chip
     var chip = document.getElementById("folderStepAccountChip");
     if (chip) chip.textContent = displayText(accountName || accountId);
 
-    // Back → account step (remove full-screen class when leaving folder step)
+    // Back → account step — always re-bind so the correct providerId is captured
     var backBtn = document.getElementById("backToAccounts");
-    if (backBtn && !backBtn.dataset.wired) {
-      backBtn.dataset.wired = "1";
-      backBtn.addEventListener("click", function () {
+    if (backBtn) {
+      backBtn.onclick = function () {
         var acctScreen = document.getElementById("accountScreen");
         if (acctScreen) acctScreen.classList.remove("folder-step-active");
         showAccountStep(providerId);
-      });
+      };
     }
 
     initFolderStep(providerId, accountId);
   }
 
   function initFolderStep(providerId, accountId) {
-    var list       = document.getElementById("folderCheckList");
-    var scanBtn    = document.getElementById("startScanBtn");
-    var scanLabel  = document.getElementById("startScanLabel");
-    var allBtn     = document.getElementById("folderSelectAll");
-    var inboxBtn   = document.getElementById("folderSelectInbox");
-    var noneBtn    = document.getElementById("folderSelectNone");
+    var list      = document.getElementById("folderCheckList");
+    var scanBtn   = document.getElementById("startScanBtn");
+    var scanLabel = document.getElementById("startScanLabel");
+    var allBtn    = document.getElementById("wizardFolderSelectAll");
+    var inboxBtn  = document.getElementById("wizardFolderSelectInbox");
+    var noneBtn   = document.getElementById("wizardFolderSelectNone");
 
     if (!list || !scanBtn) return;
 
@@ -484,6 +560,12 @@
     var indexedFolderPaths = new Set();
     list.innerHTML = '<div class="account-loading"><svg class="account-loading-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>Loading folders…</div>';
     scanBtn.disabled = true;
+
+    // Reset button handlers fresh on every call so provider switches work correctly
+    if (allBtn)   allBtn.onclick   = null;
+    if (inboxBtn) inboxBtn.onclick = null;
+    if (noneBtn)  noneBtn.onclick  = null;
+    scanBtn.onclick = null;
 
     var acctIdForApi = accountId === "all" ? null : accountId;
 
@@ -515,58 +597,44 @@
       updateScanBtn(folders);
       scanBtn.disabled = false;
 
-      // Quick-select buttons
-      if (allBtn && !allBtn.dataset.wired) {
-        allBtn.dataset.wired = "1";
-        allBtn.addEventListener("click", function () {
-          folders.forEach(function (f) { selectedFolderPaths.add(f.path); });
-          renderFolderList(folders);
-          updateScanBtn(folders);
+      // Quick-select buttons — use onclick so they're always fresh for the current folders
+      if (allBtn) allBtn.onclick = function () {
+        folders.forEach(function (f) { selectedFolderPaths.add(f.path); });
+        renderFolderList(folders);
+        updateScanBtn(folders);
+      };
+      if (inboxBtn) inboxBtn.onclick = function () {
+        selectedFolderPaths = new Set();
+        folders.forEach(function (f) {
+          if (f.type === "inbox") selectedFolderPaths.add(f.path);
         });
-      }
-      if (inboxBtn && !inboxBtn.dataset.wired) {
-        inboxBtn.dataset.wired = "1";
-        inboxBtn.addEventListener("click", function () {
-          selectedFolderPaths = new Set();
-          folders.forEach(function (f) {
-            if (f.type === "inbox") selectedFolderPaths.add(f.path);
-          });
-          renderFolderList(folders);
-          updateScanBtn(folders);
+        renderFolderList(folders);
+        updateScanBtn(folders);
+      };
+      if (noneBtn) noneBtn.onclick = function () {
+        selectedFolderPaths = new Set();
+        renderFolderList(folders);
+        updateScanBtn(folders);
+      };
+
+      // Start Scan — re-bound every time so it captures the current provider + folders
+      scanBtn.onclick = function () {
+        if (selectedFolderPaths.size === 0) return;
+
+        var folderSelections = Array.from(selectedFolderPaths).map(function (p) {
+          var folder = folders.find(function (f) { return f.path === p; });
+          return { accountId: folder ? folder.accountId : activeAccountId, path: p };
         });
-      }
-      if (noneBtn && !noneBtn.dataset.wired) {
-        noneBtn.dataset.wired = "1";
-        noneBtn.addEventListener("click", function () {
-          selectedFolderPaths = new Set();
-          renderFolderList(folders);
-          updateScanBtn(folders);
+
+        window.inboxpie.setScanOverride({
+          accountId: accountId === "all" ? null : accountId,
+          folderSelections: folderSelections,
         });
-      }
 
-      // Start Scan
-      if (!scanBtn.dataset.wired) {
-        scanBtn.dataset.wired = "1";
-        scanBtn.addEventListener("click", function () {
-          if (selectedFolderPaths.size === 0) return;
-
-          var folderSelections = Array.from(selectedFolderPaths).map(function (p) {
-            // accountId for each folder: for "all" accounts, use the account
-            // stored in the folder object; for single account, use activeAccountId
-            var folder = folders.find(function (f) { return f.path === p; });
-            return { accountId: folder ? folder.accountId : activeAccountId, path: p };
-          });
-
-          window.inboxpie.setScanOverride({
-            accountId: accountId === "all" ? null : accountId,
-            folderSelections: folderSelections,
-          });
-
-          syncAccountSelectValue(accountId === "all" ? "all" : accountId);
-          window.inboxpie.setActiveProvider(providerId).catch(function () {});
-          transitionToAppAndScan();
-        });
-      }
+        syncAccountSelectValue(accountId === "all" ? "all" : accountId);
+        window.inboxpie.setActiveProvider(providerId).catch(function () {});
+        transitionToAppAndScan();
+      };
 
     }).catch(function (err) {
       list.innerHTML = '<div class="account-error">Could not load folders: ' + escHtml(String(err && err.message ? err.message : err)) + '</div>';
@@ -620,7 +688,7 @@
     function buildFolderCard(folder, allFolders) {
       var isChecked = selectedFolderPaths.has(folder.path);
       var isIndexed = indexedFolderPaths.has((folder.path || "").toLowerCase());
-      var count     = folder.totalCount  || 0;
+      var count     = folder.totalCount;
       var unread    = folder.unreadCount || 0;
       var type      = folder.type || "custom";
       var isSystem  = ["inbox","sent","drafts","archives","trash","junk"].includes(type);
@@ -631,7 +699,7 @@
         (isSystem  ? " folder-card-system"   : " folder-card-sm");
       card.setAttribute("for", "fc-" + escHtml(folder.path));
 
-      var countDisplay = count > 0 ? count.toLocaleString() : "0";
+      var countDisplay = count != null ? count.toLocaleString() : "—";
 
       // Check mark is absolute-positioned top-right; icon + name + count centered
       card.innerHTML =

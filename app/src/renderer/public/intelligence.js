@@ -59,7 +59,7 @@
     model: '',
     ollamaOk: null,
     busy: false,
-    showThinking: false,
+    showThinking: true,
     mode: 'fast',          // 'fast' (direct text) | 'deep' (visual report) — fast is the quick default
     selectedFolders: [],   // [{path}] — from picker (max 2)
     indexedFolders: [],    // cached list from lanceStore
@@ -105,17 +105,6 @@
             '></textarea>',
           '</div>',
           '<div class="ss-input-footer">',
-            '<label class="ss-thinking-toggle" title="Show model reasoning">',
-              '<span class="ss-toggle-track">',
-                '<input type="checkbox" id="ssThinkingToggle"' + (chat.showThinking ? ' checked' : '') + '>',
-                '<span class="ss-toggle-thumb"></span>',
-              '</span>',
-              '<svg class="ss-thinking-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">',
-                '<path d="M8 2a4.5 4.5 0 013.5 7.3V11a1 1 0 01-1 1H5.5a1 1 0 01-1-1v-1.7A4.5 4.5 0 018 2z"/>',
-                '<path d="M6 12v1a2 2 0 004 0v-1"/>',
-              '</svg>',
-              '<span class="ss-toggle-label">Thinking</span>',
-            '</label>',
             '<div class="ss-mode-toggle" id="ssModeToggle">',
               '<button class="ss-mode-btn' + (chat.mode === 'fast' ? ' active' : '') + '" data-mode="fast" title="Direct chat answer — quick, no report">Fast</button>',
               '<button class="ss-mode-btn' + (chat.mode === 'deep' ? ' active' : '') + '" data-mode="deep" title="Generate a full visual report / widget — slower">Deep</button>',
@@ -163,12 +152,6 @@
       if (picker && !picker.contains(e.target) && e.target !== inputEl) ssHideFolderPicker();
     });
 
-    var thinkToggle = document.getElementById('ssThinkingToggle');
-    if (thinkToggle) thinkToggle.addEventListener('change', function () {
-      chat.showThinking = this.checked;
-      if (chat.history.length) ssRerenderHistory();
-    });
-
     document.getElementById('ssModeToggle').addEventListener('click', function (e) {
       var btn = e.target.closest('.ss-mode-btn');
       if (!btn) return;
@@ -180,14 +163,20 @@
       });
     });
 
+    // Restore persistent chat state across view switches (panel HTML is rebuilt each time)
+    ssRenderFolderChips();
+    ssUpdateActiveModel();
+
+    if (chat.history.length) {
+      // Re-render existing conversation — skip greeting and Ollama check
+      ssRerenderHistory();
+      ssCheckOllama(); // still needed to know if send is available
+      return;
+    }
+
     ssCheckOllama();
     ssLoadIndexedFolders(); // will update greeting once stats arrive
-
-    if (!chat.history.length) {
-      ssShowGreeting(false, ''); // placeholder — ssLoadIndexedFolders will update it
-    } else {
-      ssRerenderHistory();
-    }
+    ssShowGreeting(false, ''); // placeholder — ssLoadIndexedFolders will update it
 
     setTimeout(function () { inputEl.focus(); }, 80);
   };
@@ -701,7 +690,7 @@
       });
 
       if (body) {
-        var thinkBlock = chat.showThinking ? ssThinkingBlock(thinking, agentSteps) : '';
+        var thinkBlock = ssThinkingBlock(thinking, agentSteps);
         var bubbleHtml;
         if (htmlWidget && htmlWidget.trim()) {
           bubbleHtml = ssIframeWidgetBubble(htmlWidget, thinkBlock + ssWidgetProse(answerText));
@@ -711,6 +700,7 @@
           bubbleHtml = ssWidgetBubble(thinkBlock + widgetHtml, answerText);
         }
         body.insertAdjacentHTML('beforeend', bubbleHtml);
+        ssInitCharts(body);
       }
 
       if (body) {
@@ -986,17 +976,35 @@
 
   function ssThinkingBlock(thinking, steps) {
     if (!thinking && (!steps || !steps.length)) return '';
-    var rows = (steps || []).map(ssThinkStepHtml).join('');
+
+    var bodyContent;
+    var cleanThinking = thinking ? String(thinking).trim() : '';
+    if (cleanThinking) {
+      // Actual model chain-of-thought text (thinking models) — show verbatim
+      bodyContent = '<div class="ss-thinking-reasoning">' + esc(cleanThinking).replace(/\n/g, '<br>') + '</div>';
+    } else {
+      // Agent pipeline steps — plain text, no icons/colours
+      bodyContent = '<div class="ss-thinking-steps-text">' +
+        (steps || []).map(function (s) {
+          var detail = s.detail ? String(s.detail).trim() : '';
+          var trunc  = detail.length > 200 ? detail.slice(0, 200) + '…' : detail;
+          return '<div class="ss-think-step-plain">' +
+            esc(s.label) +
+            (trunc ? ' <span class="ss-think-detail-plain">— ' + esc(trunc) + '</span>' : '') +
+          '</div>';
+        }).join('') +
+      '</div>';
+    }
 
     var stepCount = (steps || []).length;
-    return '<details class="ss-thinking-block">' +
+    return '<details class="ss-thinking-block" open>' +
       '<summary class="ss-thinking-summary">' +
         '<svg class="ss-thinking-brain" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2a4.5 4.5 0 013.5 7.3V11a1 1 0 01-1 1H5.5a1 1 0 01-1-1v-1.7A4.5 4.5 0 018 2z"/><path d="M6 12v1a2 2 0 004 0v-1"/></svg>' +
         '<span class="ss-thinking-label">Thinking</span>' +
         (stepCount > 0 ? '<span class="ss-thinking-count">' + stepCount + ' step' + (stepCount === 1 ? '' : 's') + '</span>' : '') +
         '<svg class="ss-thinking-chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 4.5l3 3 3-3"/></svg>' +
       '</summary>' +
-      '<div class="ss-thinking-body">' + rows + '</div>' +
+      '<div class="ss-thinking-body">' + bodyContent + '</div>' +
       '</details>';
   }
 
@@ -1022,8 +1030,7 @@
       if (msg.role === 'user') {
         body.insertAdjacentHTML('beforeend', ssUserBubble(msg.content));
       } else {
-        var thinkBlock = (chat.showThinking && (msg._thinking || (msg._steps && msg._steps.length)))
-          ? ssThinkingBlock(msg._thinking || '', msg._steps || '') : '';
+        var thinkBlock = ssThinkingBlock(msg._thinking || '', msg._steps || []);
         if (msg._htmlWidget && msg._htmlWidget.trim()) {
           body.insertAdjacentHTML('beforeend', ssIframeWidgetBubble(msg._htmlWidget, thinkBlock + ssWidgetProse(msg.content)));
         } else if (msg._responseType !== 'text' && msg._widgetHtml) {
@@ -1033,7 +1040,31 @@
         }
       }
     });
+    ssInitCharts(body);
     ssScrollToBottom();
+  }
+
+  // ── ECharts initializer ────────────────────────────────────────────────────
+  // Finds all .sw-echarts-host containers in `root` that haven't been
+  // initialized yet and creates an ECharts instance for each one.
+  function ssInitCharts(root) {
+    if (!window.echarts) return;
+    root.querySelectorAll('.sw-echarts-host[data-echarts-option]').forEach(function (el) {
+      if (el._echartsInstance) return; // already initialized
+      try {
+        var optionStr = decodeURIComponent(el.getAttribute('data-echarts-option') || '{}');
+        var option = JSON.parse(optionStr);
+        // Use dark theme to match the app's dark UI
+        var chart = window.echarts.init(el, 'dark', { renderer: 'canvas' });
+        chart.setOption(option);
+        el._echartsInstance = chart;
+        // Resize when the panel width changes (e.g. sidebar expand/collapse)
+        var ro = new ResizeObserver(function () { chart.resize(); });
+        ro.observe(el);
+      } catch (e) {
+        console.warn('[ssInitCharts] failed to init chart:', e);
+      }
+    });
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -1067,30 +1098,25 @@
 
     panel.innerHTML = '<div class="id-shell" id="idShell"></div>';
 
-    // Only show the building screen when indexing is ACTIVELY in progress, i.e. we've
-    // received at least one progress event this run (id.progress.total > 0). A stale
-    // flag alone is not enough — otherwise we briefly flash "Building index…" on entry.
-    var activelyIndexing =
-      id.state === 'indexing' &&
-      id.progress.total > 0 &&
-      id.progress.done < id.progress.total;
-    if (activelyIndexing) {
-      idRenderProgress(id.progress.total, id.progress.done, id.progress.errors);
-      return;
-    }
-
-    // Otherwise decide from real index contents — no flash.
+    // Always check real index state first — never let a stale id.state show
+    // the progress screen over a graph that already has data.
     browser.runtime.sendMessage({ action: 'getIndexingStats' }).then(function (stats) {
       if (stats && stats.total > 0) {
+        // Has indexed data — show graph regardless of id.state
         id.state = 'indexed';
         idRenderClusters(stats);
-      } else if (window._ip && window._ip.indexing) {
-        // A scan just kicked off indexing but no progress event has landed yet.
-        id.state = 'indexing';
-        idRenderProgress(id.progress.total || (window._ip.messages || []).length, 0, 0);
       } else {
-        id.state = 'idle';
-        idRenderNotIndexed();
+        // No indexed data yet — show progress only if actively building
+        var activelyIndexing =
+          (id.state === 'indexing' && id.progress.total > 0 && id.progress.done < id.progress.total) ||
+          (window._ip && window._ip.indexing);
+        if (activelyIndexing) {
+          id.state = 'indexing';
+          idRenderProgress(id.progress.total || (window._ip && window._ip.messages ? window._ip.messages.length : 0), id.progress.done || 0, id.progress.errors || 0);
+        } else {
+          id.state = 'idle';
+          idRenderNotIndexed();
+        }
       }
     }).catch(function () { idRenderNotIndexed(); });
   };
@@ -1206,76 +1232,382 @@
     setTimeout(function () { banner.remove(); }, 5000);
   }
 
-  // ── Cluster cards (state: indexed) ────────────────────────────────────────
+  // ── Cluster graph (state: indexed) ───────────────────────────────────────
+
+  // Fruchterman-Reingold layout — O(N² + E) per iteration, runs synchronously
+  function idFRLayout(positions, edges, iterations) {
+    var n = positions.length;
+    // Scale initial PCA positions up to match the larger layout space
+    var pos = positions.map(function(p) { return { x: p.x * 6, y: p.y * 6 }; });
+    var W = 3.0, k = W * Math.sqrt(1.0 / n) * 2.2;
+
+    for (var iter = 0; iter < iterations; iter++) {
+      var temp = W * 0.6 * Math.exp(-iter / (iterations * 0.5));
+      var disp = Array.from({ length: n }, function() { return { x: 0, y: 0 }; });
+
+      // Repulsion: every pair
+      for (var i = 0; i < n; i++) {
+        for (var j = i + 1; j < n; j++) {
+          var dx = pos[i].x - pos[j].x, dy = pos[i].y - pos[j].y;
+          var dist = Math.max(Math.sqrt(dx * dx + dy * dy), 0.001);
+          var f = (k * k) / dist;
+          disp[i].x += (dx / dist) * f; disp[i].y += (dy / dist) * f;
+          disp[j].x -= (dx / dist) * f; disp[j].y -= (dy / dist) * f;
+        }
+      }
+
+      // Attraction: edges only
+      for (var ei = 0; ei < edges.length; ei++) {
+        var s = edges[ei].s, t = edges[ei].t;
+        var dx = pos[s].x - pos[t].x, dy = pos[s].y - pos[t].y;
+        var dist = Math.max(Math.sqrt(dx * dx + dy * dy), 0.001);
+        var f = (dist * dist) / k;
+        disp[s].x -= (dx / dist) * f; disp[s].y -= (dy / dist) * f;
+        disp[t].x += (dx / dist) * f; disp[t].y += (dy / dist) * f;
+      }
+
+      // Apply displacement + very weak gravity to keep graph centered
+      for (var i = 0; i < n; i++) {
+        var mag = Math.sqrt(disp[i].x * disp[i].x + disp[i].y * disp[i].y);
+        if (mag > 0) {
+          var cap = Math.min(mag, temp);
+          pos[i].x += (disp[i].x / mag) * cap;
+          pos[i].y += (disp[i].y / mag) * cap;
+        }
+        pos[i].x -= pos[i].x * 0.002;
+        pos[i].y -= pos[i].y * 0.002;
+      }
+    }
+
+    // Post-process: clamp outliers to [5th, 95th] percentile + 15% padding.
+    // Isolated nodes from FR push the sigma normalization range wide, making the
+    // main cluster appear as a tiny blob. Clamping collapses outliers to the edge.
+    var sortX = pos.map(function(p) { return p.x; }).slice().sort(function(a,b){ return a-b; });
+    var sortY = pos.map(function(p) { return p.y; }).slice().sort(function(a,b){ return a-b; });
+    var lo = Math.max(0, Math.floor(n * 0.05)), hi = Math.min(n-1, Math.floor(n * 0.95));
+    var xLo = sortX[lo], xHi = sortX[hi], yLo = sortY[lo], yHi = sortY[hi];
+    var xPad = (xHi - xLo) * 0.15 || 0.1, yPad = (yHi - yLo) * 0.15 || 0.1;
+    return pos.map(function(p) {
+      return {
+        x: Math.max(xLo - xPad, Math.min(xHi + xPad, p.x)),
+        y: Math.max(yLo - yPad, Math.min(yHi + yPad, p.y))
+      };
+    });
+  }
 
   function idRenderClusters(stats) {
     var shell = document.getElementById('idShell');
     if (!shell) return;
-
     var total = (stats && stats.total) ? stats.total : 0;
-    var folderList = (stats && stats.folders) ? stats.folders : [];
-    var folderNames = folderList.slice(0, 4).map(function (f) {
-      return typeof f === 'object' ? (f.folder || '') : String(f);
-    }).filter(Boolean).join(', ');
-    var extraFolders = folderList.length > 4 ? ' +' + (folderList.length - 4) + ' more' : '';
-    var folderBadge = folderNames
-      ? '<span class="id-folder-scope">' + esc(folderNames + extraFolders) + '</span>'
-      : '';
 
-    browser.runtime.sendMessage({ action: 'getSemanticClusters' }).then(function (clusters) {
-      var clusterCards = (clusters || []).map(function (c) {
-        var subjects = (c.topSubjects || []).slice(0, 2).map(function (s) {
-          return '<div class="id-cluster-subject">' + esc(s) + '</div>';
-        }).join('');
-        return '<div class="id-cluster-card" data-label="' + esc(c.label) + '">' +
-          '<div class="id-cluster-icon">' + c.icon + '</div>' +
-          '<div class="id-cluster-label">' + esc(c.label) + '</div>' +
-          '<div class="id-cluster-count">' + fmtNum(c.count) + '</div>' +
-          (subjects ? '<div class="id-cluster-subjects">' + subjects + '</div>' : '') +
-          '</div>';
+    shell.innerHTML = '<div class="id-graph-loading">Computing semantic space…</div>';
+
+    browser.runtime.sendMessage({ action: 'getCluster2D' }).then(function (result) {
+      if (!result || !result.points || !result.points.length) {
+        shell.innerHTML = '<div class="id-empty-state"><p>No clusters found. Index your emails in the Indexes page first.</p></div>';
+        return;
+      }
+
+      var points      = result.points;
+      var clusters    = result.clusters;
+      var withinEdges = result.withinEdges || [];
+      var crossEdges  = result.crossEdges  || [];
+      var allEdges    = withinEdges.concat(crossEdges);
+
+      var clusterMap = {};
+      clusters.forEach(function(c) { clusterMap[c.k] = c; });
+
+      var byK = {};
+      points.forEach(function(p) {
+        if (!byK[p.k]) byK[p.k] = [];
+        byK[p.k].push(p);
+      });
+
+      // FR layout uses all edges for attraction (within + cross)
+      var laid = idFRLayout(points, allEdges, 200);
+
+      // Degree from within-cluster edges only (cross-cluster edges skew degree unfairly)
+      var degree = new Array(points.length).fill(0);
+      withinEdges.forEach(function(e) { degree[e.s]++; degree[e.t]++; });
+      var maxDeg = Math.max.apply(null, degree) || 1;
+
+      // Highest-degree node per cluster becomes the labelled anchor
+      var clusterAnchor = {};
+      clusters.forEach(function(c) {
+        var best = -1, bestDeg = -1;
+        (byK[c.k] || []).forEach(function(p) {
+          var idx = points.indexOf(p);
+          if (degree[idx] > bestDeg) { bestDeg = degree[idx]; best = idx; }
+        });
+        clusterAnchor[c.k] = best;
+      });
+
+      // Build layout HTML
+      shell.innerHTML =
+        '<div class="id-graph-layout">' +
+          '<div id="idGraphHost" class="id-graph-host"></div>' +
+          '<div id="idGraphTooltip" class="id-graph-tooltip"></div>' +
+          '<div class="id-graph-sidebar">' +
+            '<div class="id-graph-sidebar-top">' +
+              '<span class="id-graph-sidebar-title">CLUSTERS</span>' +
+            '</div>' +
+            '<div class="id-graph-sidebar-meta">' + fmtNum(total) + ' emails · ' + clusters.length + ' clusters</div>' +
+            '<div class="id-community-list" id="idCommunityList"></div>' +
+          '</div>' +
+        '</div>';
+
+      var host  = document.getElementById('idGraphHost');
+      var tipEl = document.getElementById('idGraphTooltip');
+      if (!host || !window.Sigma || !window.graphology) return;
+
+      // ── Chip / badge label renderer (GitNexus style) ──────────────────────────
+      function drawChipLabel(ctx, data, settings) {
+        if (!data.label) return;
+        var fs = settings.labelSize || 11;
+        var fw = settings.labelWeight || '600';
+        var ff = settings.labelFont || 'Inter, system-ui, sans-serif';
+        ctx.font = fw + ' ' + fs + 'px ' + ff;
+        var tw = ctx.measureText(data.label).width;
+        var px = 7, py = 3;
+        var bx = data.x + data.size + 5;
+        var by = data.y - Math.round((fs + py * 2) / 2);
+        var bw = tw + px * 2, bh = fs + py * 2;
+        // data.color is the anchor's colour (20% lightenHex of cluster colour)
+        var accent = data.color || '#818cf8';
+        // Chip: deep navy background + cluster-accented border
+        ctx.fillStyle = 'rgba(5, 9, 20, 0.93)';
+        if (ctx.roundRect) {
+          ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 4); ctx.fill();
+          ctx.strokeStyle = accent + 'B0'; // ~69% opacity border
+          ctx.lineWidth = 1.0;
+          ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 4); ctx.stroke();
+        } else {
+          ctx.fillRect(bx, by, bw, bh);
+        }
+        // Soft white text — always legible on dark background
+        ctx.fillStyle = '#dde6f4';
+        ctx.fillText(data.label, bx + px, data.y + Math.round(fs * 0.36));
+      }
+
+      // ── Build Graphology graph ────────────────────────────────────────────────
+      var G = new graphology.Graph({ type: 'undirected', multi: false });
+
+      // ── Colour helpers ────────────────────────────────────────────────────────
+      // Lighten a hex colour by mixing toward white (t=0…1)
+      function lightenHex(hex, t) {
+        var r = parseInt(hex.slice(1,3), 16), g = parseInt(hex.slice(3,5), 16), b = parseInt(hex.slice(5,7), 16);
+        r = Math.min(255, Math.round(r + (255-r) * t));
+        g = Math.min(255, Math.round(g + (255-g) * t));
+        b = Math.min(255, Math.round(b + (255-b) * t));
+        return '#' + r.toString(16).padStart(2,'0') + g.toString(16).padStart(2,'0') + b.toString(16).padStart(2,'0');
+      }
+      function hexToRgba(hex, alpha) {
+        var r = parseInt(hex.slice(1,3), 16), g = parseInt(hex.slice(3,5), 16), b = parseInt(hex.slice(5,7), 16);
+        return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
+      }
+
+      // ── Build Graphology graph (nodes only — edges drawn on canvas overlay) ──
+      points.forEach(function(p, i) {
+        var c   = clusterMap[p.k] || {};
+        var deg = degree[i] || 0;
+        var isAnchor = clusterAnchor[p.k] === i;
+        var clusterColor = c.color || '#818cf8';
+        // Small nodes: full cluster colour. Anchors: 20% toward white so they pop.
+        var nodeColor = isAnchor ? lightenHex(clusterColor, 0.20) : clusterColor;
+        var sz = isAnchor
+          ? Math.min(9, Math.max(5.5, 5.5 + (deg / maxDeg) * 3.5))
+          : Math.min(3, Math.max(1.5, 1.5 + (deg / maxDeg) * 1.5));
+        G.addNode(String(i), {
+          x: laid[i].x, y: laid[i].y,
+          size: sz,
+          color: nodeColor,
+          label: isAnchor ? (c.label || '') : '',
+          _k: p.k, _subject: p.subject,
+          _email: p.sender_email, _name: p.sender_name,
+          _baseSize: sz, _baseColor: nodeColor, _clusterColor: clusterColor
+        });
+      });
+
+      // Edges go in G as invisible so sigma topology works but WebGL draws nothing.
+      // The canvas overlay below draws them as bezier curves.
+      var allEdgesForOverlay = [];
+      withinEdges.forEach(function(e) {
+        allEdgesForOverlay.push({ s: e.s, t: e.t, within: true });
+        try { G.addEdge(String(e.s), String(e.t), { color: 'rgba(0,0,0,0)', size: 0 }); } catch(ex) {}
+      });
+      crossEdges.forEach(function(e) {
+        allEdgesForOverlay.push({ s: e.s, t: e.t, within: false });
+        try { G.addEdge(String(e.s), String(e.t), { color: 'rgba(0,0,0,0)', size: 0 }); } catch(ex) {}
+      });
+
+      // ── Sigma.js renderer ─────────────────────────────────────────────────────
+      var SigmaClass = window.Sigma.Sigma || window.Sigma.default;
+      var renderer = new SigmaClass(G, host, {
+        renderEdgeLabels: false,
+        defaultEdgeColor: 'rgba(0,0,0,0)',
+        defaultNodeColor: '#3B5280',
+        allowInvalidContainer: true,
+        labelFont: 'Inter, system-ui, -apple-system, sans-serif',
+        labelSize: 11,
+        labelWeight: '600',
+        labelThreshold: 4,
+        minCameraRatio: 0.05,
+        maxCameraRatio: 15,
+        enableEdgeClickEvents: false,
+        enableEdgeWheelEvents: false,
+        enableEdgeHoverEvents: false,
+        defaultDrawNodeLabel: drawChipLabel
+      });
+
+      // ── Bezier curve edge overlay ─────────────────────────────────────────────
+      // Sigma WebGL only draws straight lines. We draw quadratic bezier curves
+      // on a 2D canvas overlay that sits above Sigma's WebGL canvas.
+      var overlayCanvas = document.createElement('canvas');
+      overlayCanvas.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;';
+      host.appendChild(overlayCanvas);
+
+      var highlightedK = -1; // -1 = show all
+
+      function drawCurvedEdges() {
+        var W = host.clientWidth, H = host.clientHeight;
+        if (!W || !H) return;
+        overlayCanvas.width = W; overlayCanvas.height = H;
+        var ctx = overlayCanvas.getContext('2d');
+        ctx.clearRect(0, 0, W, H);
+        ctx.lineCap = 'round';
+
+        allEdgesForOverlay.forEach(function(e) {
+          try {
+            var sA = G.getNodeAttributes(String(e.s));
+            var tA = G.getNodeAttributes(String(e.t));
+            var s  = renderer.graphToViewport({ x: sA.x, y: sA.y });
+            var t  = renderer.graphToViewport({ x: tA.x, y: tA.y });
+            var dx = t.x - s.x, dy = t.y - s.y;
+            var curv = e.within ? 0.22 : 0.10;
+            // Control point perpendicular to edge midpoint (alternates side per edge index)
+            var cpx = (s.x + t.x) / 2 - dy * curv;
+            var cpy = (s.y + t.y) / 2 + dx * curv;
+
+            var clK  = points[e.s].k;
+            var active = (highlightedK === -1 || clK === highlightedK);
+            var c = clusterMap[clK] || {};
+
+            if (e.within) {
+              ctx.strokeStyle = hexToRgba(c.color || '#818cf8', active ? 0.28 : 0.05);
+              ctx.lineWidth = active ? 0.7 : 0.3;
+            } else {
+              ctx.strokeStyle = hexToRgba('#334155', active ? 0.13 : 0.03);
+              ctx.lineWidth = 0.3;
+            }
+            ctx.beginPath();
+            ctx.moveTo(s.x, s.y);
+            ctx.quadraticCurveTo(cpx, cpy, t.x, t.y);
+            ctx.stroke();
+          } catch(ex) {}
+        });
+      }
+
+      // Redraw curves on every sigma render (camera moves, zoom, etc.)
+      renderer.on('afterRender', drawCurvedEdges);
+
+      // ── Tooltip ───────────────────────────────────────────────────────────────
+      renderer.on('enterNode', function(e) {
+        var a = G.getNodeAttributes(e.node);
+        var c = clusterMap[a._k] || {};
+        tipEl.innerHTML =
+          '<div class="id-tt-subject">' + esc(a._subject || '(no subject)') + '</div>' +
+          '<div class="id-tt-email">' + esc(a._email || '') + '</div>' +
+          '<div class="id-tt-cluster" style="color:' + (c.color || '#818cf8') + '">' + esc(c.label || '') + '</div>';
+        tipEl.style.display = 'block';
+        host.style.cursor = 'pointer';
+      });
+      renderer.on('leaveNode', function() {
+        tipEl.style.display = 'none';
+        host.style.cursor = '';
+      });
+      host.addEventListener('mousemove', function(ev) {
+        var rect = host.getBoundingClientRect();
+        tipEl.style.left = (ev.clientX - rect.left + 18) + 'px';
+        tipEl.style.top  = (ev.clientY - rect.top  + 12) + 'px';
+      });
+
+      renderer.on('clickNode', function(e) {
+        var a = G.getNodeAttributes(e.node);
+        var rows = (byK[a._k] || []).map(function(pt) {
+          return { subject: pt.subject, sender_email: pt.sender_email };
+        });
+        if (rows.length && window._ip && window._ip.openCategoryReview) {
+          window._ip.openCategoryReview(rows);
+        }
+      });
+
+      requestAnimationFrame(function() {
+        renderer.getCamera().animatedReset();
+      });
+
+      new ResizeObserver(function() {
+        renderer.refresh();
+        drawCurvedEdges();
+      }).observe(host);
+
+      // ── Sidebar ───────────────────────────────────────────────────────────────
+      var listEl = document.getElementById('idCommunityList');
+      if (!listEl) return;
+
+      listEl.innerHTML = clusters.map(function(c) {
+        return '<div class="id-community-row" data-k="' + c.k + '">' +
+          '<span class="id-community-dot" style="background:' + c.color + '"></span>' +
+          '<span class="id-community-name">' + esc(c.label) + '</span>' +
+          '<span class="id-community-count">' + c.count + '</span>' +
+        '</div>';
       }).join('');
 
-      shell.innerHTML = [
-        '<div class="id-indexed-wrap">',
-          '<div class="id-indexed-header">',
-            '<div class="id-indexed-title">',
-              '<h2>Inbox Intelligence</h2>',
-              '<div class="id-indexed-meta">',
-                '<span class="id-indexed-total">' + fmtNum(total) + ' emails indexed</span>',
-                folderBadge,
-              '</div>',
-            '</div>',
-            '<button class="id-reindex-btn" id="idReindexBtn">',
-              '<svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 7a5 5 0 001 3M12 7a5 5 0 00-1-3M4 12.5l-1.5-2.5 2.5-.5"/></svg>',
-              'Re-index',
-            '</button>',
-          '</div>',
-          '<div class="id-cluster-grid">', clusterCards || '<p class="id-no-clusters">No data yet.</p>', '</div>',
-        '</div>',
-      ].join('');
+      function restoreColors() {
+        highlightedK = -1;
+        G.forEachNode(function(nodeId, attrs) {
+          G.setNodeAttribute(nodeId, 'color', attrs._baseColor);
+          G.setNodeAttribute(nodeId, 'size',  attrs._baseSize);
+        });
+        renderer.refresh();
+        drawCurvedEdges();
+        listEl.querySelectorAll('.id-community-row').forEach(function(r) { r.classList.remove('active'); });
+      }
 
-      document.getElementById('idReindexBtn').addEventListener('click', function () {
-        browser.runtime.sendMessage({ action: 'resetVectorIndex' }).then(function () {
-          id.state = 'idle';
-          idRenderFolderPicker();
+      listEl.querySelectorAll('.id-community-row').forEach(function(row) {
+        row.addEventListener('click', function() {
+          var activeK = parseInt(row.getAttribute('data-k'), 10);
+          highlightedK = activeK;
+          G.forEachNode(function(nodeId, attrs) {
+            var active = attrs._k === activeK;
+            G.setNodeAttribute(nodeId, 'color', active ? attrs._baseColor : '#161b22');
+            G.setNodeAttribute(nodeId, 'size',  active ? attrs._baseSize  : 0.8);
+          });
+          renderer.refresh();
+          drawCurvedEdges();
+          listEl.querySelectorAll('.id-community-row').forEach(function(r) { r.classList.remove('active'); });
+          row.classList.add('active');
+          // No camera move — highlight happens in-place so the graph stays put
+        });
+
+        row.addEventListener('dblclick', function() {
+          var k = parseInt(row.getAttribute('data-k'), 10);
+          var rows = (byK[k] || []).map(function(pt) {
+            return { subject: pt.subject, sender_email: pt.sender_email };
+          });
+          if (rows.length && window._ip && window._ip.openCategoryReview) {
+            window._ip.openCategoryReview(rows);
+          }
         });
       });
 
-      // Wire cluster card clicks
-      shell.querySelectorAll('.id-cluster-card').forEach(function (card) {
-        card.addEventListener('click', function () {
-          var label = card.getAttribute('data-label') || '';
-          var clusterData = (clusters || []).find(function (c) { return c.label === label; });
-          var icon  = clusterData ? clusterData.icon : '📨';
-          var count = clusterData ? clusterData.count : 0;
-          idShowClusterModal(label, icon, count);
-        });
-      });
+      renderer.on('clickStage', restoreColors);
 
-    }).catch(function () {
-      shell.innerHTML = '<div class="id-empty-state"><p>Could not load intelligence data.</p><button class="id-retry-btn" id="idRetryBtn2">Retry</button></div>';
+    }).catch(function(err) {
+      console.error('[clusters]', err);
+      shell.innerHTML = '<div class="id-empty-state"><p>Could not compute cluster space.</p>' +
+        '<button class="id-retry-btn" id="idRetryBtn2">Retry</button></div>';
       var btn = document.getElementById('idRetryBtn2');
-      if (btn) btn.addEventListener('click', function () { idRenderClusters(stats); });
+      if (btn) btn.addEventListener('click', function() { idRenderClusters(stats); });
     });
   }
 
@@ -1473,38 +1805,7 @@
       '<div class="ais-page">' +
         '<div class="ais-header">' +
           '<h2 class="ais-title">Settings</h2>' +
-          '<p class="ais-desc">Manage how InboxPie indexes your mail and which AI engine answers your questions. Everything stays on your device unless you opt into a cloud provider with your own key.</p>' +
-        '</div>' +
-
-        '<div class="ais-section-label">Indexed Folders</div>' +
-        '<div class="ais-folders-help">Each folder is indexed in its own mode. <strong>Metadata</strong> reads subjects, senders &amp; domains only. <strong>Full content</strong> also reads the email body so the AI can answer about amounts and details. Select folders to act on them, or use the buttons with nothing selected to act on all.</div>' +
-        '<div class="ais-card ais-folders-card">' +
-          '<div class="ais-folders-toolbar">' +
-            '<span class="ais-folders-summary" id="aisFoldersSummary">Loading…</span>' +
-            '<div class="ais-folders-actions" id="aisFolderActions"></div>' +
-          '</div>' +
-          '<div class="ais-folders-table-wrap">' +
-            '<table class="ais-folders-table">' +
-              '<thead><tr>' +
-                '<th class="ais-check-col"><input type="checkbox" id="aisSelectAll" aria-label="Select all folders"></th>' +
-                '<th>Folder</th><th class="ais-num">Mails</th><th>Read mode</th><th>Indexed</th><th>Last scanned</th>' +
-              '</tr></thead>' +
-              '<tbody id="aisFoldersBody"><tr><td colspan="6" class="ais-folders-empty">Loading folders…</td></tr></tbody>' +
-            '</table>' +
-          '</div>' +
-        '</div>' +
-
-        '<div class="ais-section-label">Categories</div>' +
-        '<div class="ais-folders-help">Define your own categories and keywords (e.g. <strong>Investments</strong> → portfolio, mutual fund, NAV, SIP). They merge with the built-in groups in the Knowledge Map so it reflects your taxonomy.</div>' +
-        '<div class="ais-card">' +
-          '<div class="ais-card-body">' +
-            '<div id="aisCategoriesList" class="ais-cat-list"><div class="ais-folders-empty">Loading…</div></div>' +
-            '<div class="ais-cat-add">' +
-              '<input type="text" id="aisCatName" class="ais-cat-input" placeholder="Category name (e.g. Investments)">' +
-              '<input type="text" id="aisCatKeywords" class="ais-cat-input ais-cat-kw" placeholder="keywords, comma separated">' +
-              '<button class="ais-btn ais-btn-sm" id="aisCatAdd">Add</button>' +
-            '</div>' +
-          '</div>' +
+          '<p class="ais-desc">Manage which AI engine answers your questions. Everything stays on your device unless you opt into a cloud provider with your own key.</p>' +
         '</div>' +
 
         '<div class="ais-section-label">Local AI</div>' +
@@ -1556,11 +1857,6 @@
         providerCard('google', 'Google Gemini', '⬡', 'AIza...', CLOUD_MODELS.google) +
       '</div>';
 
-    // Wire up folder table + global actions (read mode is per-folder, in the table)
-    aisLoadFolderTable();
-    aisWireGlobalActions();
-    aisLoadCategories();
-    aisWireCategoryAdd();
     aisLoadEmbeddingStatus();
     aisLoadIndexingStatus();
 
@@ -1804,7 +2100,7 @@
     });
   }
 
-  function aisLoadFolderTable() {
+  function aisLoadFolderTable(providerFilter) {
     var body    = document.getElementById('aisFoldersBody');
     var summary = document.getElementById('aisFoldersSummary');
     if (!body) return;
@@ -1817,10 +2113,14 @@
       browser.runtime.sendMessage({ action: 'getFolderIndexBreakdown' }).catch(function () { return []; }),
     ]).then(function (res) {
       var rows = res[0] || [];
+      // Filter by active mail provider when called from the Indexes view
+      if (providerFilter) {
+        rows = rows.filter(function (f) { return (f.mailProvider || 'apple-mail') === providerFilter; });
+      }
       var bd   = res[1] || [];
       var bdMap = {};
       bd.forEach(function (b) { bdMap[b.folder] = b; });
-      aisAllFolders = rows.map(function (f) { return f.name; });
+      aisAllFolders = rows.map(function (f) { return String(f.id); });
 
       if (!rows.length) {
         body.innerHTML = '<tr><td colspan="6" class="ais-folders-empty">No folders scanned yet. Run a scan to populate the index.</td></tr>';
@@ -1836,15 +2136,16 @@
         totalMails   += f.mailCount || 0;
 
         var mode = f.readMode === 'content' ? 'content' : 'metadata';
-        var modeCell = '<select class="ais-fmode-select" data-folder="' + esc(f.name) + '">' +
+        var modeCell = '<select class="ais-fmode-select" data-folder="' + f.id + '" data-folder-name="' + esc(f.name) + '">' +
           '<option value="metadata"' + (mode === 'metadata' ? ' selected' : '') + '>Metadata</option>' +
           '<option value="content"'  + (mode === 'content'  ? ' selected' : '') + '>Full content</option>' +
           '</select>';
 
+        var providerLabel = f.mailProvider === 'thunderbird' ? 'Thunderbird' : 'Apple Mail';
         return '<tr>' +
-          '<td class="ais-check-col"><input type="checkbox" class="ais-row-check" data-folder="' + esc(f.name) + '"></td>' +
+          '<td class="ais-check-col"><input type="checkbox" class="ais-row-check" data-folder="' + f.id + '" data-folder-name="' + esc(f.name) + '"></td>' +
           '<td><div class="ais-fname">' + esc(f.name) + '</div>' +
-            (f.mailboxName ? '<div class="ais-fmailbox">' + esc(f.mailboxName) + '</div>' : '') + '</td>' +
+            (f.mailboxName ? '<div class="ais-fmailbox">' + esc(f.mailboxName) + ' · <span class="ais-fprovider">' + providerLabel + '</span></div>' : '') + '</td>' +
           '<td class="ais-num">' + fmtNum(f.mailCount || 0) + '</td>' +
           '<td>' + modeCell + '</td>' +
           aisIndexedCell(f.name, b.count, f.mailCount || 0) +
@@ -1857,33 +2158,34 @@
           ' · ' + fmtNum(totalIndexed) + ' / ' + fmtNum(totalMails) + ' indexed';
       }
 
-      // Row checkboxes
+      // Row checkboxes — use folder ID (globally unique) not name
       body.querySelectorAll('.ais-row-check').forEach(function (cb) {
         cb.addEventListener('change', function () {
-          var folder = cb.getAttribute('data-folder');
-          if (cb.checked) aisSelected[folder] = true; else delete aisSelected[folder];
+          var folderId = cb.getAttribute('data-folder');
+          if (cb.checked) aisSelected[folderId] = true; else delete aisSelected[folderId];
           var all = document.getElementById('aisSelectAll');
           if (all) all.checked = aisSelCount() === aisAllFolders.length && aisAllFolders.length > 0;
           aisRenderToolbar();
         });
       });
 
-      // Read-mode dropdowns — change persists + auto-rebuilds that folder in the new mode
+      // Read-mode dropdowns — change persists + auto-rebuilds that folder in the new mode (use folder ID)
       body.querySelectorAll('.ais-fmode-select').forEach(function (sel) {
         var prev = sel.value;
         sel.addEventListener('change', function () {
-          var folder = sel.getAttribute('data-folder');
+          var folderId = sel.getAttribute('data-folder');
+          var folderName = sel.getAttribute('data-folder-name');
           var next   = sel.value;
           if (next === 'content') {
             var ok = window.confirm(
-              'Read full content for "' + folder + '"?\n\n' +
+              'Read full content for "' + folderName + '"?\n\n' +
               'This rebuilds the folder\'s index from email body text so the AI can answer ' +
               'about amounts and details. It may take a while for large folders.\n\nContinue?'
             );
             if (!ok) { sel.value = prev; return; }
           }
           sel.disabled = true;
-          browser.runtime.sendMessage({ action: 'setFolderReadMode', folder: folder, mode: next })
+          browser.runtime.sendMessage({ action: 'setFolderReadMode', folder: folderId, mode: next })
             .then(function () {
               prev = next; sel.disabled = false;
               aisReindexFolders([folder], /* incremental */ false);
@@ -2053,18 +2355,308 @@
     kw.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); add(); } });
   }
 
-  // Live progress + refresh when an index run finishes, while Settings is visible.
-  function aisSettingsVisible() {
-    var v = document.getElementById('aisettingsView');
+  // ── Indexes view (Mailbox → Indexes) ─────────────────────────────────────
+
+  window.renderIndexes = function () {
+    var panel = document.getElementById('indexesView');
+    if (!panel) return;
+
+    // Read active mail provider from localStorage to filter the table
+    var activeMailProvider = localStorage.getItem('inboxpie-selected-provider') || 'apple-mail';
+    var providerLabel = activeMailProvider === 'thunderbird' ? 'Thunderbird' : 'Apple Mail';
+
+    panel.innerHTML =
+      '<div class="ais-shell" id="aisIndexesShell">' +
+        '<div class="ais-page">' +
+          '<div class="ais-header">' +
+            '<h2 class="ais-title">Indexes</h2>' +
+            '<p class="ais-desc">Each folder is indexed in its own mode. <strong>Metadata</strong> reads subjects, senders &amp; domains only. <strong>Full content</strong> also reads the email body so the AI can answer about amounts and details.</p>' +
+          '</div>' +
+          '<div class="ais-provider-filter-note">Showing folders for <strong>' + esc(providerLabel) + '</strong></div>' +
+          '<div class="ais-card ais-folders-card">' +
+            '<div class="ais-folders-toolbar">' +
+              '<span class="ais-folders-summary" id="aisFoldersSummary">Loading…</span>' +
+              '<div class="ais-folders-actions" id="aisFolderActions"></div>' +
+            '</div>' +
+            '<div class="ais-folders-table-wrap">' +
+              '<table class="ais-folders-table">' +
+                '<thead><tr>' +
+                  '<th class="ais-check-col"><input type="checkbox" id="aisSelectAll" aria-label="Select all folders"></th>' +
+                  '<th>Folder</th><th class="ais-num">Mails</th><th>Read mode</th><th>Indexed</th><th>Last scanned</th>' +
+                '</tr></thead>' +
+                '<tbody id="aisFoldersBody"><tr><td colspan="6" class="ais-folders-empty">Loading folders…</td></tr></tbody>' +
+              '</table>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+    aisLoadFolderTable(activeMailProvider);
+    aisWireGlobalActions();
+  };
+
+  // ── Groups view (Mailbox → Groups) ───────────────────────────────────────
+
+  window.renderGroups = function () {
+    var panel = document.getElementById('groupsView');
+    if (!panel) return;
+
+    panel.innerHTML =
+      '<div class="ais-shell" id="aisGroupsShell">' +
+        '<div class="ais-page">' +
+          '<div class="ais-header">' +
+            '<h2 class="ais-title">Groups</h2>' +
+            '<p class="ais-desc">Define your own categories and keywords (e.g. <strong>Investments</strong> → portfolio, mutual fund, NAV, SIP). They merge with the built-in groups in the Knowledge Map so it reflects your taxonomy.</p>' +
+          '</div>' +
+          '<div class="ais-card">' +
+            '<div class="ais-card-body">' +
+              '<div id="aisCategoriesList" class="ais-cat-list"><div class="ais-folders-empty">Loading…</div></div>' +
+              '<div class="ais-cat-add">' +
+                '<input type="text" id="aisCatName" class="ais-cat-input" placeholder="Category name (e.g. Investments)">' +
+                '<input type="text" id="aisCatKeywords" class="ais-cat-input ais-cat-kw" placeholder="keywords, comma separated">' +
+                '<button class="ais-btn ais-btn-sm" id="aisCatAdd">Add</button>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+    aisLoadCategories();
+    aisWireCategoryAdd();
+  };
+
+  // Live progress + refresh when an index run finishes, while Indexes view is visible.
+  function aisIndexesVisible() {
+    var v = document.getElementById('indexesView');
     return v && v.style.display !== 'none';
   }
   browser.runtime.onMessage.addListener(function (ev) {
-    if (!aisSettingsVisible()) return;
+    if (!aisIndexesVisible()) return;
     if (ev.action === 'vectorIndexProgress' && ev.folder) {
       aisUpdateRowProgress(ev.folder, ev.done || 0, ev.total || 0);
     } else if (ev.action === 'vectorIndexComplete' || ev.action === 'vectorIndexError') {
-      aisLoadFolderTable();
+      aisLoadFolderTable(localStorage.getItem('inboxpie-selected-provider') || 'apple-mail');
     }
   });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  BY CATEGORY view
+  // ══════════════════════════════════════════════════════════════════════════
+
+  var _catData = null; // cache until page reload
+
+  window.renderCategories = function () {
+    var panel = document.getElementById('categoriesView');
+    if (!panel) return;
+    var grid    = document.getElementById('categoriesGrid');
+    var drillEl = document.getElementById('categoriesDrill');
+    var chartEl = document.getElementById('categoriesChart');
+    var topList = document.getElementById('categoriesTopList');
+    var subtitle= document.getElementById('categoriesSubtitle');
+
+    // Hide drill, show grid
+    if (drillEl) drillEl.style.display = 'none';
+    if (grid)    grid.style.display    = '';
+
+    if (_catData) { anRenderCatUI(_catData); return; }
+
+    if (grid) grid.innerHTML = '<div class="an-loading">Loading categories…</div>';
+
+    browser.runtime.sendMessage({ action: 'getSemanticClusters' }).then(function (cats) {
+      _catData = cats || [];
+      anRenderCatUI(_catData);
+    }).catch(function () {
+      if (grid) grid.innerHTML = '<div class="an-empty">Could not load categories. Make sure emails are indexed in the Intelligence tab.</div>';
+    });
+  };
+
+  function anRenderCatUI(cats) {
+    var grid     = document.getElementById('categoriesGrid');
+    var chartEl  = document.getElementById('categoriesChart');
+    var topList  = document.getElementById('categoriesTopList');
+    var subtitle = document.getElementById('categoriesSubtitle');
+
+    if (!cats.length) {
+      if (grid) grid.innerHTML = '<div class="an-empty">No indexed emails yet. Index your folders in the Intelligence tab first.</div>';
+      return;
+    }
+
+    var total = cats.reduce(function(s, c) { return s + c.count; }, 0);
+    if (subtitle) subtitle.textContent = total.toLocaleString() + ' emails across ' + cats.length + ' categories';
+
+    // ECharts donut
+    if (chartEl && window.echarts) {
+      if (!chartEl._echartsInstance) {
+        chartEl._echartsInstance = window.echarts.init(chartEl, 'dark');
+        new ResizeObserver(function() { chartEl._echartsInstance.resize(); }).observe(chartEl);
+      }
+      var pieData = cats.slice(0, 10).map(function(c) {
+        return { name: c.icon + ' ' + c.label, value: c.count };
+      });
+      chartEl._echartsInstance.setOption({
+        tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+        legend: { show: false },
+        series: [{
+          type: 'pie', radius: ['42%', '70%'], center: ['50%', '50%'],
+          data: pieData,
+          label: { formatter: '{b}\n{d}%', fontSize: 11 },
+          emphasis: { itemStyle: { shadowBlur: 8, shadowColor: 'rgba(0,0,0,0.4)' } },
+        }]
+      });
+    }
+
+    // Top-list sidebar
+    if (topList) {
+      topList.innerHTML = cats.slice(0, 8).map(function(c) {
+        var pct = total > 0 ? Math.round(c.count / total * 100) : 0;
+        return '<div class="an-top-row">' +
+          '<span class="an-top-icon">' + (c.icon || '📨') + '</span>' +
+          '<span class="an-top-label">' + c.label + '</span>' +
+          '<span class="an-top-count">' + c.count.toLocaleString() + '</span>' +
+          '<div class="an-top-bar"><div class="an-top-bar-fill" style="width:' + pct + '%"></div></div>' +
+        '</div>';
+      }).join('');
+    }
+
+    // Category cards grid
+    if (grid) {
+      grid.innerHTML = cats.map(function(c) {
+        return '<div class="an-cat-card" data-label="' + c.label + '">' +
+          '<div class="an-cat-icon">' + (c.icon || '📨') + '</div>' +
+          '<div class="an-cat-name">' + c.label + '</div>' +
+          '<div class="an-cat-count">' + c.count.toLocaleString() + ' emails</div>' +
+          (c.topSubjects && c.topSubjects.length ? '<div class="an-cat-subjects">' + c.topSubjects.slice(0, 2).map(function(s){ return '<span class="an-cat-subject">' + s.slice(0,40) + '</span>'; }).join('') + '</div>' : '') +
+        '</div>';
+      }).join('');
+
+      grid.querySelectorAll('.an-cat-card').forEach(function(card) {
+        card.addEventListener('click', function() {
+          var label = card.getAttribute('data-label');
+          anDrillCategory(label);
+        });
+      });
+    }
+  }
+
+  function anDrillCategory(label) {
+    browser.runtime.sendMessage({ action: 'getClusterEmails', label: label }).then(function(rows) {
+      if (!rows || !rows.length) return;
+      if (window._ip && window._ip.openCategoryReview) {
+        window._ip.openCategoryReview(rows);
+      }
+    }).catch(function() {});
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  SUBSCRIPTIONS view
+  // ══════════════════════════════════════════════════════════════════════════
+
+  var _subData = null;
+  var _subFreqFilter = 'All';
+
+  window.renderSubscriptions = function () {
+    var panel = document.getElementById('subscriptionsView');
+    if (!panel) return;
+
+    if (_subData) { anRenderSubUI(_subData, _subFreqFilter); return; }
+
+    var grid = document.getElementById('subscriptionsGrid');
+    if (grid) grid.innerHTML = '<div class="an-loading">Analyzing email patterns…</div>';
+
+    browser.runtime.sendMessage({ action: 'getSubscriptionStats' }).then(function(data) {
+      _subData = data || [];
+      anRenderSubUI(_subData, _subFreqFilter);
+
+      // Wire frequency tabs
+      var tabs = document.getElementById('subscriptionsTabs');
+      if (tabs) {
+        tabs.querySelectorAll('.an-tab').forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            tabs.querySelectorAll('.an-tab').forEach(function(b) { b.classList.remove('active'); });
+            btn.classList.add('active');
+            _subFreqFilter = btn.getAttribute('data-freq');
+            anRenderSubUI(_subData, _subFreqFilter);
+          });
+        });
+      }
+    }).catch(function() {
+      if (grid) grid.innerHTML = '<div class="an-empty">Could not analyze subscriptions. Index your emails first.</div>';
+    });
+  };
+
+  function anRenderSubUI(data, freqFilter) {
+    var chartEl = document.getElementById('subscriptionsChart');
+    var statsEl = document.getElementById('subscriptionsStats');
+    var grid    = document.getElementById('subscriptionsGrid');
+    var subtitle= document.getElementById('subscriptionsSubtitle');
+
+    // Filter
+    var filtered = freqFilter === 'All'
+      ? data
+      : freqFilter === 'Newsletter'
+        ? data.filter(function(s) { return s.is_newsletter; })
+        : data.filter(function(s) { return s.frequency === freqFilter; });
+
+    if (subtitle) {
+      var newsletters = data.filter(function(s) { return s.is_newsletter; }).length;
+      subtitle.textContent = data.length + ' recurring senders detected · ' + newsletters + ' newsletters';
+    }
+
+    // Frequency distribution bar chart
+    var freqOrder = ['Daily', 'Every few days', 'Weekly', 'Bi-weekly', 'Monthly', 'Quarterly'];
+    var freqCounts = {};
+    freqOrder.forEach(function(f) { freqCounts[f] = 0; });
+    data.forEach(function(s) { if (freqCounts[s.frequency] !== undefined) freqCounts[s.frequency]++; });
+
+    if (chartEl && window.echarts) {
+      if (!chartEl._echartsInstance) {
+        chartEl._echartsInstance = window.echarts.init(chartEl, 'dark');
+        new ResizeObserver(function() { chartEl._echartsInstance.resize(); }).observe(chartEl);
+      }
+      chartEl._echartsInstance.setOption({
+        tooltip: { trigger: 'axis' },
+        grid: { left: 16, right: 16, top: 12, bottom: 40, containLabel: true },
+        xAxis: { type: 'category', data: freqOrder, axisLabel: { fontSize: 11 } },
+        yAxis: { type: 'value', minInterval: 1 },
+        series: [{
+          type: 'bar', data: freqOrder.map(function(f) { return freqCounts[f]; }),
+          itemStyle: { borderRadius: [4, 4, 0, 0], color: '#7c6af7' },
+          label: { show: true, position: 'top', fontSize: 11 }
+        }]
+      });
+    }
+
+    // Stats sidebar
+    if (statsEl) {
+      var totalEmails = data.reduce(function(s, r) { return s + r.email_count; }, 0);
+      statsEl.innerHTML =
+        '<div class="an-stat-row"><span class="an-stat-val">' + data.length + '</span><span class="an-stat-lbl">Total senders</span></div>' +
+        '<div class="an-stat-row"><span class="an-stat-val">' + data.filter(function(s) { return s.is_newsletter; }).length + '</span><span class="an-stat-lbl">Newsletters</span></div>' +
+        '<div class="an-stat-row"><span class="an-stat-val">' + totalEmails.toLocaleString() + '</span><span class="an-stat-lbl">Total emails</span></div>' +
+        '<div class="an-stat-row"><span class="an-stat-val">' + (freqCounts['Daily'] + freqCounts['Every few days']) + '</span><span class="an-stat-lbl">High frequency</span></div>';
+    }
+
+    // Cards grid
+    if (grid) {
+      if (!filtered.length) {
+        grid.innerHTML = '<div class="an-empty">No senders in this frequency category.</div>';
+        return;
+      }
+      grid.innerHTML = filtered.slice(0, 60).map(function(s) {
+        var lastDate = s.last_date_unix ? new Date(s.last_date_unix * 1000).toLocaleDateString() : '—';
+        var initial  = (s.domain || '?')[0].toUpperCase();
+        var nlBadge  = s.is_newsletter ? '<span class="an-sub-badge an-sub-badge-nl">Newsletter</span>' : '';
+        var freqBadge= '<span class="an-sub-badge an-sub-badge-freq">' + s.frequency + '</span>';
+        return '<div class="an-sub-card">' +
+          '<div class="an-sub-avatar">' + initial + '</div>' +
+          '<div class="an-sub-body">' +
+            '<div class="an-sub-domain">' + s.domain + '</div>' +
+            '<div class="an-sub-badges">' + freqBadge + nlBadge + '</div>' +
+            '<div class="an-sub-meta">Every ~' + s.avg_interval_days + ' days &nbsp;·&nbsp; ' + s.email_count + ' emails &nbsp;·&nbsp; Last: ' + lastDate + '</div>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+    }
+  }
 
 })();

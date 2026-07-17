@@ -1,9 +1,11 @@
 /**
- * Widget Renderer — generates self-contained HTML+CSS response widgets
- * that are injected as innerHTML into SmartSearch chat response bubbles.
+ * Widget Renderer — generates HTML for SmartSearch response bubbles.
+ *
+ * Chart types (bar, pie, line) emit a container div with the ECharts option
+ * JSON encoded in a data-echarts attribute. The renderer calls
+ * window.ssInitCharts(el) after insertion to initialize ECharts instances.
  *
  * Widgets use the "sw-" CSS prefix (SmartWidget).
- * All styles are inline or reference global .sw-* classes in styles.css.
  */
 
 import type { AgentResponse } from "./nlp-agent";
@@ -47,12 +49,6 @@ function relDate(dateStr: unknown): string {
   return `${Math.floor(days / 365)}y ago`;
 }
 
-function domainHue(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-  return (h >>> 0) % 360;
-}
-
 function autoFmt(key: string, val: unknown): string {
   const k = key.toLowerCase();
   if (k.includes("size")) return fmtBytes(val);
@@ -62,13 +58,146 @@ function autoFmt(key: string, val: unknown): string {
   return s.length > 42 ? s.slice(0, 40) + "…" : s;
 }
 
+// Strip currency symbols / commas so "₹3,62,797" → 362797
+function parseNumericVal(v: unknown): number {
+  if (typeof v === "number") return v;
+  if (typeof v === "string") {
+    const cleaned = v.replace(/[₹$€£¥,\s]/g, "");
+    const n = parseFloat(cleaned);
+    return isNaN(n) ? 0 : n;
+  }
+  return 0;
+}
+
+function isNumericLike(v: unknown): boolean {
+  if (typeof v === "number") return true;
+  if (typeof v === "string") {
+    const cleaned = v.replace(/[₹$€£¥,\s]/g, "");
+    return cleaned.length > 0 && !isNaN(parseFloat(cleaned)) && !/[a-zA-Z]{2,}/.test(cleaned);
+  }
+  return false;
+}
+
+/**
+ * Find which key to use as the label and which as the numeric value.
+ * Samples across multiple rows so string-amounts on row 0 don't break detection.
+ */
+function detectKeys(rows: Record<string, unknown>[]): { labelKey: string; valKey: string } {
+  const keys = Object.keys(rows[0] ?? {});
+  const sample = rows.slice(0, Math.min(5, rows.length));
+
+  const valKey = keys.find((k) =>
+    sample.some((r) => isNumericLike(r[k])) &&
+    sample.every((r) => r[k] == null || isNumericLike(r[k]) || r[k] === ""),
+  ) ?? "";
+
+  const labelKey = keys.find((k) => k !== valKey && typeof rows[0][k] === "string") ?? keys[0] ?? "";
+  return { labelKey, valKey };
+}
+
+// ── ECharts container helpers ─────────────────────────────────────────────────
+
+// Unique ID for each chart so ECharts can find the element
+let _chartId = 0;
+function nextChartId(): string {
+  return `sw-chart-${Date.now()}-${++_chartId}`;
+}
+
+function chartContainer(id: string, option: object, prose: string, height = 300): string {
+  const encoded = encodeURIComponent(JSON.stringify(option));
+  return `<div class="sw-widget sw-chart-widget">
+  <div class="sw-chart-prose">${esc(prose)}</div>
+  <div id="${id}" class="sw-echarts-host" style="width:100%;height:${height}px" data-echarts-option="${encoded}"></div>
+</div>`;
+}
+
 // ── Widget builders ───────────────────────────────────────────────────────────
+
+function buildBarChart(rows: Record<string, unknown>[], text: string): string {
+  if (!rows.length) return buildTextAnswer(text);
+
+  const { labelKey, valKey } = detectKeys(rows);
+  const labels = rows.slice(0, 20).map((r) => String(r[labelKey] ?? ""));
+  const values = rows.slice(0, 20).map((r) => parseNumericVal(r[valKey]));
+  const id = nextChartId();
+
+  const option = {
+    tooltip: { trigger: "axis", formatter: (p: any[]) => `${p[0].name}: ${Number(p[0].value).toLocaleString()}` },
+    grid: { left: 16, right: 24, top: 12, bottom: 60, containLabel: true },
+    xAxis: {
+      type: "category",
+      data: labels,
+      axisLabel: { rotate: labels.some((l) => l.length > 6) ? 30 : 0, fontSize: 12 },
+    },
+    yAxis: { type: "value", axisLabel: { formatter: (v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v) } },
+    series: [{ type: "bar", data: values, itemStyle: { borderRadius: [4, 4, 0, 0] }, color: "#7c6af7" }],
+  };
+
+  return chartContainer(id, option, text, Math.max(260, Math.min(380, labels.length * 36)));
+}
+
+function buildPieChart(rows: Record<string, unknown>[], text: string): string {
+  if (!rows.length) return buildTextAnswer(text);
+
+  const { labelKey, valKey } = detectKeys(rows);
+  const data = rows.slice(0, 12).map((r) => ({
+    name: String(r[labelKey] ?? ""),
+    value: parseNumericVal(r[valKey]),
+  }));
+  const id = nextChartId();
+
+  const option = {
+    tooltip: { trigger: "item", formatter: "{b}: {c} ({d}%)" },
+    legend: { orient: "vertical", right: 8, top: "center", textStyle: { fontSize: 12 } },
+    series: [{
+      type: "pie",
+      radius: ["35%", "65%"],
+      center: ["38%", "50%"],
+      data,
+      emphasis: { itemStyle: { shadowBlur: 8, shadowOffsetX: 0, shadowColor: "rgba(0,0,0,0.4)" } },
+      label: { show: false },
+    }],
+  };
+
+  return chartContainer(id, option, text, 300);
+}
+
+function buildLineChart(rows: Record<string, unknown>[], text: string): string {
+  if (!rows.length) return buildTextAnswer(text);
+
+  const { labelKey, valKey } = detectKeys(rows);
+  const labels = rows.map((r) => String(r[labelKey] ?? ""));
+  const values = rows.map((r) => parseNumericVal(r[valKey]));
+  const id = nextChartId();
+
+  const option = {
+    tooltip: { trigger: "axis" },
+    grid: { left: 16, right: 24, top: 16, bottom: 48, containLabel: true },
+    xAxis: {
+      type: "category",
+      data: labels,
+      axisLabel: { rotate: labels.some((l) => l.length > 6) ? 30 : 0, fontSize: 12 },
+    },
+    yAxis: { type: "value", axisLabel: { formatter: (v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v) } },
+    series: [{
+      type: "line",
+      data: values,
+      smooth: true,
+      lineStyle: { width: 2.5, color: "#7c6af7" },
+      areaStyle: { color: { type: "linear", x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: "rgba(124,106,247,0.35)" }, { offset: 1, color: "rgba(124,106,247,0)" }] } },
+      symbol: "circle",
+      symbolSize: 6,
+      itemStyle: { color: "#7c6af7" },
+    }],
+  };
+
+  return chartContainer(id, option, text, Math.max(240, Math.min(340, labels.length * 28)));
+}
 
 function buildStatCard(rows: Record<string, unknown>[], text: string): string {
   const row = rows[0] ?? {};
   const keys = Object.keys(row);
 
-  // Primary value: prefer message_count / total_* / any numeric
   const numKey =
     keys.find((k) => k === "message_count") ??
     keys.find((k) => k === "total_size") ??
@@ -77,16 +206,12 @@ function buildStatCard(rows: Record<string, unknown>[], text: string): string {
     keys[0];
 
   const mainVal = numKey
-    ? numKey.includes("size")
-      ? fmtBytes(row[numKey])
-      : fmtNum(row[numKey])
+    ? numKey.includes("size") ? fmtBytes(row[numKey]) : fmtNum(row[numKey])
     : "—";
 
-  // Label: first string key that isn't the numeric one
   const labelKey = keys.find((k) => k !== numKey && typeof row[k] === "string") ?? "";
   const labelVal = labelKey ? esc(String(row[labelKey])) : "";
 
-  // Sub-stats: remaining numerics
   const subParts = keys
     .filter((k) => k !== numKey && k !== labelKey && typeof row[k] === "number")
     .slice(0, 3)
@@ -97,38 +222,6 @@ function buildStatCard(rows: Record<string, unknown>[], text: string): string {
   ${labelVal ? `<div class="sw-stat-label">${labelVal}</div>` : ""}
   ${subParts.length ? `<div class="sw-stat-sub">${subParts.join(" &nbsp;·&nbsp; ")}</div>` : ""}
   <div class="sw-stat-prose">${esc(text)}</div>
-</div>`;
-}
-
-function buildBarChart(rows: Record<string, unknown>[], text: string): string {
-  if (!rows.length) return buildTextAnswer(text);
-
-  const keys = Object.keys(rows[0]);
-  const labelKey = keys.find((k) => typeof rows[0][k] === "string") ?? keys[0];
-  const valKey = keys.find((k) => k !== labelKey && typeof rows[0][k] === "number") ?? "";
-  const maxVal = valKey ? Math.max(...rows.map((r) => Number(r[valKey]) || 0)) : 1;
-
-  const bars = rows
-    .slice(0, 12)
-    .map((row) => {
-      const label = String(row[labelKey] ?? "");
-      const val = valKey ? Number(row[valKey]) || 0 : 0;
-      const pct = maxVal > 0 ? ((val / maxVal) * 100).toFixed(1) : "0";
-      const hue = domainHue(label);
-      const displayVal = valKey?.includes("size") ? fmtBytes(val) : fmtNum(val);
-      const shortLabel = label.length > 30 ? label.slice(0, 28) + "…" : label;
-
-      return `<div class="sw-bar-row">
-  <span class="sw-bar-label" title="${esc(label)}">${esc(shortLabel)}</span>
-  <div class="sw-bar-track"><div class="sw-bar-fill" style="width:${pct}%;background:hsl(${hue},52%,50%)"></div></div>
-  <span class="sw-bar-val">${esc(displayVal)}</span>
-</div>`;
-    })
-    .join("");
-
-  return `<div class="sw-widget sw-bar-chart">
-  <div class="sw-chart-prose">${esc(text)}</div>
-  <div class="sw-bars">${bars}</div>
 </div>`;
 }
 
@@ -145,10 +238,9 @@ function buildDataTable(rows: Record<string, unknown>[], text: string): string {
     })
     .join("");
 
-  const footer =
-    rows.length > 25
-      ? `<div class="sw-table-footer">Showing 25 of ${fmtNum(rows.length)} rows</div>`
-      : "";
+  const footer = rows.length > 25
+    ? `<div class="sw-table-footer">Showing 25 of ${fmtNum(rows.length)} rows</div>`
+    : "";
 
   return `<div class="sw-widget sw-data-table">
   <div class="sw-chart-prose">${esc(text)}</div>
@@ -169,16 +261,20 @@ function buildTextAnswer(text: string): string {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export function renderWidget(response: AgentResponse): string {
-  const rows      = response.rows ?? [];
-  const text      = response.answer_text || "—";
+  const rows       = response.rows ?? [];
+  const text       = response.answer_text || "—";
   const limitation = (response as any).data_limitation as string | undefined;
 
   let html = "";
   switch (response.response_type) {
-    case "stat_card":
-      html = rows.length ? buildStatCard(rows, text) : buildTextAnswer(text); break;
     case "bar_chart":
       html = rows.length ? buildBarChart(rows, text) : buildTextAnswer(text); break;
+    case "pie_chart":
+      html = rows.length ? buildPieChart(rows, text)  : buildTextAnswer(text); break;
+    case "line_chart":
+      html = rows.length ? buildLineChart(rows, text) : buildTextAnswer(text); break;
+    case "stat_card":
+      html = rows.length ? buildStatCard(rows, text)  : buildTextAnswer(text); break;
     case "data_table":
       html = rows.length ? buildDataTable(rows, text) : buildTextAnswer(text); break;
     default:

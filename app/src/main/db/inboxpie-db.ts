@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS mailboxes (
   name           TEXT NOT NULL,
   source_db_path TEXT,
   apple_id       TEXT UNIQUE,
+  mail_provider  TEXT NOT NULL DEFAULT 'apple-mail',
   created_at     TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -206,6 +207,13 @@ export class InboxPieDB {
         this.db.exec("ALTER TABLE folders ADD COLUMN read_mode TEXT NOT NULL DEFAULT 'metadata'");
       }
     } catch { /* ignore — fresh install gets the column from SCHEMA */ }
+    // Add mail_provider column to existing mailboxes tables
+    try {
+      const mbCols = this.db.prepare("PRAGMA table_info(mailboxes)").all() as Array<{ name: string }>;
+      if (!mbCols.some((c) => c.name === "mail_provider")) {
+        this.db.exec("ALTER TABLE mailboxes ADD COLUMN mail_provider TEXT NOT NULL DEFAULT 'apple-mail'");
+      }
+    } catch { /* ignore — fresh install gets the column from SCHEMA */ }
     // Add icon / builtin columns to an existing categories table
     try {
       const catCols = this.db.prepare("PRAGMA table_info(categories)").all() as Array<{ name: string }>;
@@ -281,20 +289,28 @@ export class InboxPieDB {
 
   // ── Mailboxes ────────────────────────────────────────────────────────────────
 
-  upsertMailbox(id: string, name: string, sourceDbPath?: string): void {
+  upsertMailbox(id: string, name: string, sourceDbPath?: string, mailProvider = "apple-mail"): void {
+    // Extract the UUID from the prefixed ID. For Apple Mail (am_<uuid>), store the UUID in apple_id.
+    // For Thunderbird (tb_<serverKey>), leave apple_id null.
+    let appleId: string | null = null;
+    if (mailProvider === "apple-mail" && id.startsWith("am_")) {
+      appleId = id.slice(3); // Extract UUID from "am_<uuid>"
+    }
+
     this.get().prepare(`
-      INSERT INTO mailboxes(id, name, source_db_path, apple_id, updated_at)
-      VALUES(?,?,?,?,datetime('now'))
+      INSERT INTO mailboxes(id, name, source_db_path, apple_id, mail_provider, updated_at)
+      VALUES(?,?,?,?,?,datetime('now'))
       ON CONFLICT(id) DO UPDATE SET
         name           = excluded.name,
         source_db_path = COALESCE(excluded.source_db_path, source_db_path),
+        mail_provider  = excluded.mail_provider,
         updated_at     = excluded.updated_at
-    `).run(id, name, sourceDbPath ?? null, id);
+    `).run(id, name, sourceDbPath ?? null, appleId, mailProvider);
   }
 
-  getMailboxes(): Array<{ id: string; name: string; sourceDbPath: string | null }> {
-    return (this.get().prepare("SELECT id, name, source_db_path FROM mailboxes").all() as any[])
-      .map(r => ({ id: r.id, name: r.name, sourceDbPath: r.source_db_path }));
+  getMailboxes(): Array<{ id: string; name: string; sourceDbPath: string | null; mailProvider: string }> {
+    return (this.get().prepare("SELECT id, name, source_db_path, mail_provider FROM mailboxes").all() as any[])
+      .map(r => ({ id: r.id, name: r.name, sourceDbPath: r.source_db_path, mailProvider: r.mail_provider }));
   }
 
   // ── Folders ──────────────────────────────────────────────────────────────────
@@ -603,14 +619,14 @@ export class InboxPieDB {
   }
 
   getFolderStats(): Array<{
-    id: number; name: string; mailboxId: string; mailboxName: string;
+    id: number; name: string; mailboxId: string; mailboxName: string; mailProvider: string;
     indexed: FolderIndexStatus; readMode: "metadata" | "content";
     mailCount: number; lastScanned: string | null;
     indexedMetaCount: number; indexedBodyCount: number;
   }> {
     return (this.get().prepare(`
       SELECT f.id, f.name, f.indexed, f.read_mode AS readMode, f.mailbox_id AS mailboxId,
-             mb.name AS mailboxName,
+             mb.name AS mailboxName, mb.mail_provider AS mailProvider,
              COUNT(m.id) AS mailCount,
              SUM(CASE WHEN m.indexed_meta = 'yes' THEN 1 ELSE 0 END) AS indexedMetaCount,
              SUM(CASE WHEN m.indexed_body = 'yes' THEN 1 ELSE 0 END) AS indexedBodyCount,
@@ -626,6 +642,7 @@ export class InboxPieDB {
       name:             r.name,
       mailboxId:        r.mailboxId,
       mailboxName:      r.mailboxName,
+      mailProvider:     r.mailProvider ?? "apple-mail",
       indexed:          r.indexed as FolderIndexStatus,
       readMode:         (r.readMode === "content" ? "content" : "metadata") as "metadata" | "content",
       mailCount:        r.mailCount ?? 0,
@@ -635,24 +652,40 @@ export class InboxPieDB {
     }));
   }
 
-  /** Set a folder's AI read mode (by folder name, across mailboxes). */
-  setFolderReadMode(name: string, mode: "metadata" | "content"): void {
+  /** Set a folder's AI read mode (by folder ID, which is globally unique). */
+  setFolderReadMode(folderId: number | string, mode: "metadata" | "content"): void {
+    // Accept both number and string for flexibility (frontend may pass as string from data attribute)
+    const id = typeof folderId === "string" ? parseInt(folderId, 10) : folderId;
     this.get().prepare(
-      "UPDATE folders SET read_mode = ?, updated_at = datetime('now') WHERE name = ?"
-    ).run(mode, name);
+      "UPDATE folders SET read_mode = ?, updated_at = datetime('now') WHERE id = ?"
+    ).run(mode, id);
   }
 
-  /** Map of folder name → read mode for the given folder names (default metadata). */
-  getFolderReadModes(names: string[]): Record<string, "metadata" | "content"> {
+  /** Map of folder ID → read mode for the given folder IDs (default metadata). */
+  getFolderReadModes(folderIds: (string | number)[]): Record<string, "metadata" | "content"> {
     const out: Record<string, "metadata" | "content"> = {};
-    if (!names.length) return out;
-    const placeholders = names.map(() => "?").join(",");
+    if (!folderIds.length) return out;
+    const placeholders = folderIds.map(() => "?").join(",");
+    const ids = folderIds.map((id) => (typeof id === "string" ? parseInt(id, 10) : id));
     const rows = this.get().prepare(
-      `SELECT name, read_mode FROM folders WHERE name IN (${placeholders})`
-    ).all(...names) as any[];
-    for (const r of rows) out[r.name] = r.read_mode === "content" ? "content" : "metadata";
+      `SELECT id, read_mode FROM folders WHERE id IN (${placeholders})`
+    ).all(...ids) as any[];
+    for (const r of rows) out[String(r.id)] = r.read_mode === "content" ? "content" : "metadata";
     // Folders with no row yet default to metadata
-    for (const n of names) if (!(n in out)) out[n] = "metadata";
+    for (const id of folderIds) if (!(String(id) in out)) out[String(id)] = "metadata";
+    return out;
+  }
+
+  /** Map of folder ID → folder name for the given folder IDs. */
+  getFolderNames(folderIds: (string | number)[]): Record<string, string> {
+    const out: Record<string, string> = {};
+    if (!folderIds.length) return out;
+    const placeholders = folderIds.map(() => "?").join(",");
+    const ids = folderIds.map((id) => (typeof id === "string" ? parseInt(id, 10) : id));
+    const rows = this.get().prepare(
+      `SELECT id, name FROM folders WHERE id IN (${placeholders})`
+    ).all(...ids) as any[];
+    for (const r of rows) out[String(r.id)] = r.name;
     return out;
   }
 
@@ -702,22 +735,55 @@ export class InboxPieDB {
    * Clears mails, folders, and both audit tables. Keeps mailboxes (account
    * identities) and preferences. Returns counts of what was removed.
    */
-  resetAllData(): { mails: number; folders: number } {
+  resetAllData(): { mails: number; folders: number; mailboxes: number } {
     const db = this.get();
-    const mailCount   = (db.prepare("SELECT COUNT(*) AS n FROM mails").get()   as any)?.n ?? 0;
-    const folderCount = (db.prepare("SELECT COUNT(*) AS n FROM folders").get() as any)?.n ?? 0;
-    db.exec("BEGIN");
+    const mailCount     = (db.prepare("SELECT COUNT(*) AS n FROM mails").get()     as any)?.n ?? 0;
+    const folderCount   = (db.prepare("SELECT COUNT(*) AS n FROM folders").get()   as any)?.n ?? 0;
+    const mailboxCount  = (db.prepare("SELECT COUNT(*) AS n FROM mailboxes").get() as any)?.n ?? 0;
+
     try {
+      // Temporarily disable FK constraints to allow clean deletion
+      db.exec("PRAGMA foreign_keys = OFF");
+      db.exec("BEGIN");
+
+      // Delete in dependency order (doesn't matter with FK off, but clear for intent):
+      // 1. Audit logs (reference mailboxes/folders)
       db.exec("DELETE FROM index_audit");
       db.exec("DELETE FROM scan_audit");
+      // 2. Mail data (mails → folders → mailboxes)
       db.exec("DELETE FROM mails");
       db.exec("DELETE FROM folders");
+      db.exec("DELETE FROM mailboxes");
+
+      // 3. Clear app/scan state preferences, but KEEP AI configuration
+      //    Keeps: ai_key_*, ai_model_*, ai_provider
+      //    Clears: active_mail_provider, app_ready, index_*, is_*, categories_seeded, sandbox_ready
+      const keysToDelete = [
+        "active_mail_provider",
+        "app_ready",
+        "index_mode",
+        "index_ongoing",
+        "index_paused",
+        "index_paused_folders",
+        "is_packages_downloaded",
+        "is_permissions_granted",
+        "categories_seeded",
+        "sandbox_ready",
+      ];
+      for (const key of keysToDelete) {
+        db.prepare("DELETE FROM preferences WHERE key = ?").run(key);
+      }
+
       db.exec("COMMIT");
     } catch (e) {
       db.exec("ROLLBACK");
       throw e;
+    } finally {
+      // Re-enable FK constraints
+      db.exec("PRAGMA foreign_keys = ON");
     }
-    return { mails: mailCount, folders: folderCount };
+
+    return { mails: mailCount, folders: folderCount, mailboxes: mailboxCount };
   }
 
 }

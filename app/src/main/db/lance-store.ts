@@ -412,6 +412,37 @@ class LanceStore {
     }
   }
 
+  async getVectorRows(limit = 2000): Promise<Array<{
+    vector: number[]; subject: string; sender_email: string;
+    sender_name: string; domain: string; folder: string; date_unix: number;
+  }>> {
+    await this.open();
+    if (!this.table) return [];
+    try {
+      const rows = await (this.table as any).query()
+        .select(["vector", "subject", "sender_email", "sender_name", "domain", "folder", "date_unix"])
+        .toArray() as Record<string, unknown>[];
+      const all = rows.map((r) => ({
+        vector:       Array.from(r["vector"] as number[]),
+        subject:      String(r["subject"]      ?? ""),
+        sender_email: String(r["sender_email"] ?? ""),
+        sender_name:  String(r["sender_name"]  ?? ""),
+        domain:       String(r["domain"]       ?? ""),
+        folder:       String(r["folder"]       ?? ""),
+        date_unix:    Number(r["date_unix"]    ?? 0),
+      }));
+      if (all.length <= limit) return all;
+      // Random subsample — shuffle and take first `limit`
+      for (let i = all.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [all[i], all[j]] = [all[j]!, all[i]!];
+      }
+      return all.slice(0, limit);
+    } catch {
+      return [];
+    }
+  }
+
   async topSenders(opts: { limit?: number; yearFrom?: number; yearTo?: number } = {}): Promise<Array<{
     sender_name: string; sender_email: string; domain: string;
     email_count: number; unread_count: number; last_seen_unix: number; total_bytes: number;

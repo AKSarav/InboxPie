@@ -1,7 +1,11 @@
 import { appleMailProvider } from "./apple-mail";
+import { thunderbirdProvider } from "./thunderbird";
 import type { MailProvider, MailProviderRegistry } from "./provider";
 
-const registry = new Map<string, MailProvider>([[appleMailProvider.id, appleMailProvider]]);
+const registry = new Map<string, MailProvider>([
+  [appleMailProvider.id,   appleMailProvider],
+  [thunderbirdProvider.id, thunderbirdProvider],
+]);
 
 let activeProviderId: string = appleMailProvider.id;
 
