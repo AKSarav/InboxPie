@@ -33,7 +33,7 @@
       <div class="onboarding-loader">
         <div class="onboarding-loader-fill"></div>
       </div>
-      <p class="onboarding-note">Local only &middot; metadata only &middot; nothing leaves your machine</p>
+      <p class="onboarding-note">Local only &middot; metadata only &middot; </p>
     </div>
   </div>
 
@@ -186,7 +186,7 @@
           <div class="provider-step-footer">
             <p class="account-privacy-note">
               <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 1L2 4v4c0 3.3 2.4 6.4 6 7 3.6-.6 6-3.7 6-7V4L8 1z"/></svg>
-              Desktop app &middot; metadata only &middot; nothing leaves your machine
+              Desktop app &middot; metadata only &middot; 
             </p>
           </div>
         </div>
@@ -231,7 +231,7 @@
             </button>
             <p class="account-privacy-note">
               <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 1L2 4v4c0 3.3 2.4 6.4 6 7 3.6-.6 6-3.7 6-7V4L8 1z"/></svg>
-              Desktop app &middot; metadata only &middot; nothing leaves your machine
+              Desktop app &middot; metadata only &middot; 
             </p>
           </div>
         </div>
@@ -266,7 +266,7 @@
             <!-- Privacy note: left side in full-screen mode -->
             <p class="account-privacy-note">
               <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M8 1L2 4v4c0 3.3 2.4 6.4 6 7 3.6-.6 6-3.7 6-7V4L8 1z"/></svg>
-              Desktop app &middot; nothing leaves your machine &middot; reading mode in Settings
+              Desktop app &middot;  &middot; reading mode in Settings
             </p>
             <!-- Scan CTA: right side, icon on the RIGHT of the label -->
             <button id="startScanBtn" class="btn btn-primary" disabled>
@@ -354,7 +354,7 @@
         </button>
       </div>
 
-      <!-- Mailbox: Indexes + Groups — shown after scan -->
+      <!-- Mailbox: Indexes + Groups + Virtual Box — shown after scan -->
       <div class="nav-section" id="navMailbox" style="display:none">
         <div class="nav-section-label">Mailbox</div>
         <button class="tab nav-item" data-view="indexes" data-label="Indexes">
@@ -371,19 +371,30 @@
           </svg>
           Groups
         </button>
+        <button class="tab nav-item" data-view="virtualbox" data-label="Virtual Box">
+          <svg class="nav-item-icon" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 5a2 2 0 012-2h10a2 2 0 012 2v2H3V5z"/><path d="M3 7h14v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/>
+            <path d="M8 11h4M10 9v4"/>
+          </svg>
+          Virtual Box
+          <span class="nav-vb-count" id="navVirtualBoxCount" style="display:none"></span>
+        </button>
       </div>
 
       <!-- Intelligence: SmartSearch + KnowledgeMap — shown after scan -->
       <div class="nav-section" id="navIntelligence" style="display:none">
         <div class="nav-section-label">Intelligence <span class="nav-beta-tag">Beta</span></div>
-        <button class="tab nav-item" data-view="smartsearch" data-label="SmartSearch">
+        <button class="tab nav-item" data-view="smartsearch" data-label="AgentChat">
           <svg class="nav-item-icon" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="8.5" cy="8.5" r="5.5"/><path d="M15.5 15.5l-3.8-3.8"/>
-            <path d="M6.5 8.5h4M8.5 6.5v4"/>
+            <!-- Agent brain circuit + chat bubble -->
+            <path d="M3 5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H6l-3 3V5z"/>
+            <circle cx="7.5" cy="8.5" r="1" fill="currentColor" stroke="none"/>
+            <circle cx="10"  cy="8.5" r="1" fill="currentColor" stroke="none"/>
+            <circle cx="12.5" cy="8.5" r="1" fill="currentColor" stroke="none"/>
           </svg>
-          SmartSearch
+          AgentChat
         </button>
-        <button class="tab nav-item" data-view="knowledgemap" data-label="Clusters">
+        <button class="tab nav-item" data-view="knowledgemap" data-label="Galaxy">
           <svg class="nav-item-icon" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="10" cy="4"  r="2"/><circle cx="3"  cy="15" r="2"/><circle cx="17" cy="15" r="2"/>
             <circle cx="10" cy="11" r="2"/>
@@ -393,7 +404,7 @@
             <line x1="10" y1="6"  x2="4"  y2="13"/>
             <line x1="10" y1="6"  x2="16" y2="13"/>
           </svg>
-          Clusters
+          Galaxy
         </button>
       </div>
 
@@ -532,7 +543,7 @@
           </div>
           <p class="landing-text">Scan Apple Mail locally to generate<br>a sunburst report of all your emails.</p>
           <p class="landing-text" style="font-size:12px;margin-top:8px;color:var(--text-muted);">
-            Desktop app &middot; metadata only &middot; nothing leaves your machine
+            Desktop app &middot; metadata only &middot; 
           </p>
         </div>
 
@@ -678,6 +689,7 @@
         <!-- ── Mailbox panels ── -->
         <div id="indexesView" class="view-panel view-panel-intelligence" style="display:none;"></div>
         <div id="groupsView" class="view-panel view-panel-intelligence" style="display:none;"></div>
+        <div id="virtualboxView" class="view-panel view-panel-intelligence" style="display:none;"></div>
 
         <!-- ── Intelligence panels ── -->
         <div id="smartsearchView" class="view-panel view-panel-intelligence" style="display:none;"></div>
@@ -715,6 +727,7 @@
       <div class="modal-actions selection-review-actions">
         <button type="button" id="selectionReviewExport" class="btn btn-secondary">Export CSV</button>
         <button type="button" id="selectionReviewClear" class="btn btn-secondary">Clear Selection</button>
+        <button type="button" id="selectionAddToVirtualBox" class="btn btn-primary">Add to Virtual Box</button>
       </div>
     </div>
   </div>

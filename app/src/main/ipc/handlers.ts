@@ -1,4 +1,4 @@
-import { ipcMain, shell, safeStorage, app, type BrowserWindow } from "electron";
+import { ipcMain, shell, safeStorage, type BrowserWindow } from "electron";
 import fs   from "node:fs";
 import os   from "node:os";
 import path from "node:path";
@@ -7,6 +7,7 @@ import type { ProgressEvent, RpcAction } from "../../../shared/message-record";
 import { checkOllama, runAgentQuery, checkCloudProvider } from "../agent/nlp-agent";
 import { checkEmbeddingModel, isEmbeddingReady } from "../agent/embeddings";
 import { buildVectorIndex }           from "../agent/indexer";
+import { buildGraphIndexJob }         from "../agent/graph-extractor";
 import { lanceStore }                 from "../db/lance-store";
 import { renderWidget }               from "../agent/widget-renderer";
 import { enrichmentDb }               from "../db/enrichment";
@@ -14,6 +15,32 @@ import { inboxPieDb }                 from "../db/inboxpie-db";
 import { mailProviders }              from "../mail";
 import { debugAccountResolution, fetchMessagesForFolders, killActiveScans } from "../mail/apple-mail";
 import { isThunderbirdInstalled } from "../mail/thunderbird";
+
+// ── Knowledge graph helpers ────────────────────────────────────────────────────
+
+const TYPE_PALETTE: Record<string, string> = {
+  ORG:    "#818cf8",  // indigo
+  PERSON: "#10b981",  // emerald
+  PRODUCT:"#f59e0b",  // amber
+  TOPIC:  "#f43f5e",  // rose
+  PLACE:  "#14b8a6",  // teal
+  EVENT:  "#f97316",  // orange
+  Entity: "#a855f7",  // purple (fallback)
+};
+
+/** Resolve the configured AI provider + model + decrypted API key. Returns null if not configured. */
+function getResolvedAISettings(): { provider: string; model: string; apiKey?: string } | null {
+  const provider = inboxPieDb.getPreference("ai_provider", "ollama") ?? "ollama";
+  const model    = inboxPieDb.getPreference(`ai_model_${provider}`, null);
+  if (!model) return null;
+  let apiKey: string | undefined;
+  if (provider !== "ollama") {
+    const enc = inboxPieDb.getPreference(`ai_key_${provider}`, null);
+    if (!enc) return null;
+    try { apiKey = decryptKey(enc); } catch { return null; }
+  }
+  return { provider, model, apiKey };
+}
 
 // ── Semantic cluster definitions ───────────────────────────────────────────────
 
@@ -79,36 +106,6 @@ function maskKey(raw: string): string {
   return raw.slice(0, 4) + "••••••••" + raw.slice(-4);
 }
 
-// ── Index log writer ───────────────────────────────────────────────────────────
-
-interface IndexLogEntry {
-  mode: "metadata" | "content";
-  mailboxId: string | null;
-  folders: string[];
-  total: number;
-  indexed: number;
-  errors: number;
-  durationMs: number;
-  error?: string;
-}
-
-function writeIndexLog(entry: IndexLogEntry): void {
-  try {
-    const logsDir = path.join(app.getPath("userData"), "logs");
-    fs.mkdirSync(logsDir, { recursive: true });
-    const ts = new Date().toISOString().replace(/[:.]/g, "-");
-    const logPath = path.join(logsDir, `index-${ts}.json`);
-    const payload = {
-      timestamp: new Date().toISOString(),
-      ...entry,
-      skipped: entry.total - entry.indexed - entry.errors,
-    };
-    fs.writeFileSync(logPath, JSON.stringify(payload, null, 2), "utf-8");
-    console.log(`[index-log] Written to ${logPath}`);
-  } catch (e) {
-    console.warn("[index-log] Failed to write log:", (e as Error).message);
-  }
-}
 
 /**
  * Index a set of folders honouring each folder's own read_mode (folder-level modes).
@@ -158,8 +155,28 @@ async function runFolderIndexJob(
     for (const f of contentFolderNames) byFolderName.set(f, { mode: "content", msgs: contentMsgs.filter((m: any) => m.folder === f) });
   }
 
+  // Virtual Box is always the source of truth — only index emails explicitly added.
+  // If Virtual Box is empty, nothing gets indexed (not a bug, expected behaviour).
+  {
+    const includedIds = new Set<string>(
+      (inboxPieDb["get"]() as any)
+        .prepare("SELECT id FROM mails WHERE include_for_index='yes'")
+        .all()
+        .map((r: any) => String(r.id))
+    );
+    for (const [folder, entry] of byFolderName) {
+      const before = entry.msgs.length;
+      entry.msgs = entry.msgs.filter((m: any) => includedIds.has(String(m.id)));
+      if (before !== entry.msgs.length)
+        console.log(`[VirtualBox] "${folder}": ${before} → ${entry.msgs.length} (virtual box filter)`);
+    }
+    emit("indexFilterApplied", { included: includedIds.size });
+  }
+
   const grandTotal = [...byFolderName.values()].reduce((s, v) => s + v.msgs.length, 0);
   emit("vectorIndexStarted", { total: grandTotal });
+
+  const numericFolderIds = folderIds.map((id) => parseInt(id, 10));
 
   // Full rebuild clears the folders' existing vectors + SQLite flags up front.
   if (!incremental && folderIds.length) {
@@ -169,20 +186,60 @@ async function runFolderIndexJob(
       const db = inboxPieDb["get"]();
       const ph = folderIds.map(() => "?").join(",");
       db.prepare(`UPDATE mails SET indexed_meta='no', indexed_body='no', updated_at=datetime('now')
-                  WHERE folder_id IN (${ph})`).run(...folderIds.map((id) => parseInt(id, 10)));
+                  WHERE folder_id IN (${ph})`).run(...numericFolderIds);
+      // Also reset graph tracking so full rebuild re-extracts graph entities too
+      db.prepare(`UPDATE mails SET graph_indexed='todo', updated_at=datetime('now')
+                  WHERE folder_id IN (${ph})`).run(...numericFolderIds);
     } catch { /* non-fatal */ }
   }
+
+  const folderLabel = [...byFolderName.keys()].join(", ") || "(no folders)";
+  console.log(`[InboxPie Vector] Starting: ${folderLabel} (${grandTotal} mails total, ${byFolderName.size} folder(s))`);
 
   let indexed = 0, errors = 0;
   for (const [folder, { mode, msgs }] of byFolderName) {
     if (indexCancelRequested) break;
     if (!msgs.length) continue;
+    console.log(`[InboxPie Vector] Indexing "${folder}": ${msgs.length} mails (mode=${mode})`);
     const res = await buildVectorIndex(msgs, mode, (p) => {
       emit("vectorIndexProgress", { folder, done: p.done, total: p.total, indexed: p.indexed, errors: p.errors });
     }, () => indexCancelRequested);
     try { inboxPieDb.markMailsVectorIndexed(res.indexedIds, mode); } catch { /* non-fatal */ }
     indexed += res.indexed;
     errors  += res.errors;
+    console.log(`[InboxPie Vector] "${folder}" done: ${res.indexed} indexed, ${res.errors} errors`);
+  }
+  console.log(`[InboxPie Vector] Phase complete: ${indexed} indexed, ${errors} errors, ${grandTotal} total`);
+
+  // ── Phase 2: Knowledge Graph extraction ─────────────────────────────────────
+  const aiSettings = getResolvedAISettings();
+  if (!indexCancelRequested && aiSettings) {
+    const graphStats = inboxPieDb.getGraphIndexStats(numericFolderIds);
+    const graphTodo = graphStats.todo + graphStats.inprogress;
+    if (graphTodo > 0) {
+      console.log(`[InboxPie Graph] Phase 2 starting: ${graphTodo} mails pending in ${folderLabel} — ${aiSettings.provider}/${aiSettings.model}`);
+      emit("graphIndexStarted", { total: graphTodo });
+      try {
+        await buildGraphIndexJob(
+          aiSettings,
+          (p) => emit("graphIndexProgress", { done: p.done, total: p.total }),
+          () => indexCancelRequested,
+          numericFolderIds,
+        );
+        const gStats = inboxPieDb.getGraphIndexStats(numericFolderIds);
+        console.log(`[InboxPie Graph] Phase 2 complete: ${gStats.complete}/${gStats.total} mails graph-indexed`);
+        emit("graphIndexComplete", { indexed: gStats.complete, total: gStats.total });
+      } catch (e) {
+        const msg = (e as Error)?.message ?? String(e);
+        console.error(`[InboxPie Graph] Phase 2 error: ${msg}`);
+        emit("graphIndexError", { error: msg });
+      }
+    } else {
+      console.log(`[InboxPie Graph] Phase 2 skipped: no pending mails in ${folderLabel}`);
+    }
+  } else if (!indexCancelRequested && !aiSettings) {
+    console.log("[InboxPie Graph] Phase 2 skipped: no AI model configured");
+    emit("graphIndexSkipped", { reason: "No AI model configured" });
   }
 
   return { indexed, errors, total: grandTotal };
@@ -441,7 +498,8 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
           }
           providers[p] = { hasKey: !!enc, maskedKey, model };
         }
-        return { activeProvider, providers };
+        const ollamaModel = inboxPieDb.getPreference("ai_model_ollama", null) || "";
+        return { activeProvider, providers, ollamaModel };
       }
 
       case "saveAISettings": {
@@ -554,15 +612,11 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
         _currentIndexFolders = pausedFolders;
         _autoIndexBlocked = false;  // user explicitly resuming
         const rAuditId  = inboxPieDb.startIndexAudit(null, pausedFolders);
-        const rStartedAt = Date.now();
         getMainWindow()?.webContents.send("inboxpie:event", { action: "vectorIndexStarted", total: 0 });
         enqueueIndexJob(async () => {
           try {
             const result = await runFolderIndexJob(pausedFolders, /* incremental */ true, getMainWindow);
             inboxPieDb.completeIndexAudit(rAuditId, result.indexed, result.errors);
-            writeIndexLog({ mode: "metadata", mailboxId: null, folders: pausedFolders,
-              total: result.total, indexed: result.indexed, errors: result.errors,
-              durationMs: Date.now() - rStartedAt });
             const stats = await lanceStore.getStats();
             getMainWindow()?.webContents.send("inboxpie:event", { action: "vectorIndexComplete", ...stats });
           } catch (e) {
@@ -602,7 +656,6 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
         _currentIndexFolders = folders;
 
         const auditId = inboxPieDb.startIndexAudit(null, folders);
-        const startedAt = Date.now();
 
         getMainWindow()?.webContents.send("inboxpie:event", {
           action: "vectorIndexStarted", total: initialMsgs.length,
@@ -612,21 +665,11 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
           try {
             const result = await runFolderIndexJob(folders, /* incremental */ true, getMainWindow, initialMsgs);
             inboxPieDb.completeIndexAudit(auditId, result.indexed, result.errors);
-            writeIndexLog({
-              mode: "metadata", mailboxId: null, folders,
-              total: result.total, indexed: result.indexed, errors: result.errors,
-              durationMs: Date.now() - startedAt,
-            });
             const stats = await lanceStore.getStats();
             getMainWindow()?.webContents.send("inboxpie:event", { action: "vectorIndexComplete", ...stats });
           } catch (e) {
             const errMsg = (e as Error).message;
             inboxPieDb.failIndexAudit(auditId, errMsg);
-            writeIndexLog({
-              mode: "metadata", mailboxId: null, folders,
-              total: initialMsgs.length, indexed: 0, errors: initialMsgs.length,
-              durationMs: Date.now() - startedAt, error: errMsg,
-            });
             getMainWindow()?.webContents.send("inboxpie:event", { action: "vectorIndexError", error: errMsg });
           }
         });
@@ -658,10 +701,18 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
         return { success: true };
       }
 
+      case "setAllFoldersContentMode":
+        inboxPieDb.setAllFoldersContentMode();
+        return { success: true };
+
       case "deleteFolders": {
         // Remove folders entirely: their vectors + mails + scan history + folder rows.
+        // The UI sends folder IDs; resolve them to names for lanceStore + DB lookups.
         const { folders: delFolders } = message as any;
-        const names = (delFolders as string[]) ?? [];
+        const ids = (delFolders as string[]) ?? [];
+        if (!ids.length) return { success: true, mails: 0, folders: 0 };
+        const idToName = inboxPieDb.getFolderNames(ids);
+        const names = Object.values(idToName).filter(Boolean);
         if (!names.length) return { success: true, mails: 0, folders: 0 };
         await lanceStore.deleteByFolders(names);
         const removed = inboxPieDb.deleteFolders(names);
@@ -684,7 +735,6 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
         inboxPieDb.setPreference("index_paused_folders", "[]");
 
         const auditId  = inboxPieDb.startIndexAudit(null, auditFolders);
-        const startedAt = Date.now();
 
         getMainWindow()?.webContents.send("inboxpie:event", {
           action: "vectorIndexStarted", total: 0,
@@ -694,11 +744,6 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
           try {
             const result = await runFolderIndexJob(auditFolders, isIncremental, getMainWindow);
             inboxPieDb.completeIndexAudit(auditId, result.indexed, result.errors);
-            writeIndexLog({
-              mode: "metadata", mailboxId: null, folders: auditFolders,
-              total: result.total, indexed: result.indexed, errors: result.errors,
-              durationMs: Date.now() - startedAt,
-            });
             const stats = await lanceStore.getStats();
             getMainWindow()?.webContents.send("inboxpie:event", { action: "vectorIndexComplete", ...stats });
           } catch (e) {
@@ -1018,6 +1063,64 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
         return { points, clusters: clusters2d, withinEdges, crossEdges };
       }
 
+      // ── Knowledge Graph ───────────────────────────────────────────────────────
+
+      case "getKnowledgeGraph": {
+        const data = inboxPieDb.getKnowledgeGraphData(500);
+        return {
+          nodes: data.nodes.map((n) => ({ ...n, color: TYPE_PALETTE[n.type] ?? "#a855f7" })),
+          edges: data.edges,
+          stats: data.stats,
+          folders: data.folders,
+        };
+      }
+
+      case "getEmailsForNode": {
+        const { nodeId } = message as any;
+        return inboxPieDb.getEmailsForNode(nodeId as string, 100);
+      }
+
+      case "getGraphIndexStatus": {
+        const gStats = inboxPieDb.getGraphIndexStats();
+        const _db = (inboxPieDb as any)["get"]();
+        const totalNodes = (_db.prepare("SELECT COUNT(*) AS n FROM graph_nodes").get() as any)?.n ?? 0;
+        const totalEdges = (_db.prepare("SELECT COUNT(*) AS n FROM graph_edges").get() as any)?.n ?? 0;
+        console.log("DEBUG",gStats, totalNodes, totalEdges)
+        return { ...gStats, totalNodes, totalEdges };
+      }
+
+      case "getIndexRunHistory":
+        return inboxPieDb.getIndexRunHistory();
+
+      case "rebuildGraphIndex": {
+        inboxPieDb.resetGraphIndex();
+        const gAiSettings = getResolvedAISettings();
+        if (!gAiSettings) return { ok: false, reason: "No AI model configured" };
+        const gTotal = inboxPieDb.getGraphIndexStats().todo;
+        const gEmit = (action: string, payload: Record<string, unknown> = {}) =>
+          getMainWindow()?.webContents.send("inboxpie:event", { action, ...payload });
+        gEmit("graphIndexStarted", { total: gTotal });
+        enqueueIndexJob(async () => {
+          try {
+            await buildGraphIndexJob(
+              gAiSettings,
+              (p) => gEmit("graphIndexProgress", { done: p.done, total: p.total }),
+              () => indexCancelRequested,
+            );
+            const gStats = inboxPieDb.getGraphIndexStats();
+            gEmit("graphIndexComplete", { indexed: gStats.complete, total: gStats.total });
+          } catch (e) {
+            gEmit("graphIndexError", { error: (e as Error)?.message ?? String(e) });
+          }
+        });
+        return { ok: true, total: gTotal };
+      }
+
+      case "resetGraphIndex": {
+        inboxPieDb.resetGraphIndex();
+        return { ok: true };
+      }
+
       case "getSubscriptionStats": {
         const rows = await lanceStore.getAllRows();
         if (!rows.length) return [];
@@ -1108,6 +1211,191 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
       case "setPreference": {
         const { key, value } = message as any;
         inboxPieDb.setPreference(key, value);
+        return { success: true };
+      }
+
+      // ── Virtual Box — direct index (no Apple Mail scan) ──────────────────────
+
+      case "buildVirtualBoxIndex": {
+        const { incremental } = message as any;
+        const vbMails = inboxPieDb.getVirtualBoxMailsForIndexing(10000);
+
+        const emitVb = (action: string, payload: Record<string, unknown> = {}) =>
+          getMainWindow()?.webContents.send("inboxpie:event", { action, ...payload });
+
+        if (!vbMails.length) {
+          emitVb("vectorIndexError", { error: "Virtual Box is empty — add emails via Subscriptions or the selection review." });
+          return { ok: false, reason: "empty" };
+        }
+
+        // Emit started immediately so the UI progress section activates before the job queues
+        emitVb("vectorIndexStarted", { total: vbMails.length });
+        console.log(`[VirtualBox] Build index queued: ${vbMails.length} emails (incremental=${!!incremental})`);
+
+        const vbFolderLabels = [...new Set(vbMails.map((m: any) => String(m["folder"] ?? "")).filter(Boolean))];
+        const vbAuditId = inboxPieDb.startIndexAudit(null, vbFolderLabels);
+
+        enqueueIndexJob(async () => {
+          try {
+            if (!incremental) {
+              await lanceStore.reset();
+              try {
+                inboxPieDb["get"]().prepare(
+                  "UPDATE mails SET indexed_meta='no', indexed_body='no', graph_indexed='todo' WHERE include_for_index='yes'"
+                ).run();
+              } catch { /* non-fatal */ }
+            }
+
+            // ── Fetch body content from Apple Mail for VB emails only ──────────────
+            // Group VB mails by folder for targeted emlx fetch (avoids full inbox scan)
+            const folderToVbMails = new Map<string, Array<Record<string, unknown>>>();
+            for (const m of vbMails) {
+              const f = String(m["folder"] ?? "");
+              if (!folderToVbMails.has(f)) folderToVbMails.set(f, []);
+              folderToVbMails.get(f)!.push(m);
+            }
+
+            // Cross-reference key: subject + sender email + date (day only)
+            const makeKey = (subj: string, sender: string, date: string) =>
+              `${subj.toLowerCase().trim().slice(0, 120)}|${sender.toLowerCase().trim()}|${date.slice(0, 10)}`;
+
+            const keyToVbId = new Map<string, string>();
+            for (const m of vbMails) {
+              const k = makeKey(String(m["subject"] ?? ""), String(m["sender_email"] ?? ""), String(m["date"] ?? ""));
+              keyToVbId.set(k, String(m["id"]));
+            }
+
+            const bodyTexts: Array<{ id: string; body_text: string }> = [];
+            const idToBodyPreview = new Map<string, string>();
+
+            for (const [folder] of folderToVbMails) {
+              if (!folder) continue;
+              try {
+                const fetched = fetchMessagesForFolders([folder], true);
+                for (const fm of fetched) {
+                  const k = makeKey(fm.subject ?? "", fm.senderEmail ?? "", fm.date ?? "");
+                  const vbId = keyToVbId.get(k);
+                  if (!vbId) continue;
+                  if (fm.body_display) bodyTexts.push({ id: vbId, body_text: fm.body_display });
+                  if (fm.body_preview) idToBodyPreview.set(vbId, fm.body_preview);
+                }
+              } catch (e) {
+                console.warn(`[VirtualBox] body fetch failed for "${folder}":`, (e as Error)?.message);
+              }
+            }
+
+            if (bodyTexts.length) {
+              try { inboxPieDb.saveBodyTexts(bodyTexts); } catch (e) {
+                console.warn("[VirtualBox] saveBodyTexts failed:", (e as Error)?.message);
+              }
+              console.log(`[VirtualBox] Saved body text for ${bodyTexts.length} emails`);
+            }
+
+            // Enrich VB mail records with body_preview so buildVectorIndex uses content mode
+            const enrichedMails = vbMails.map((m) => ({
+              ...m,
+              body_preview: idToBodyPreview.get(String(m["id"])) ?? "",
+            }));
+
+            // ── Phase 1: Embed ─────────────────────────────────────────────────────
+            const res = await buildVectorIndex(enrichedMails, "content", (p) => {
+              emitVb("vectorIndexProgress", { done: p.done, total: p.total, indexed: p.indexed, errors: p.errors });
+            }, () => indexCancelRequested);
+            try { inboxPieDb.markMailsVectorIndexed(res.indexedIds, "content"); } catch { /* non-fatal */ }
+            inboxPieDb.completeIndexAudit(vbAuditId, res.indexed, res.errors);
+            const stats = await lanceStore.getStats();
+            emitVb("vectorIndexComplete", { ...stats });
+            console.log(`[VirtualBox] Phase 1 done: ${res.indexed} indexed, ${res.errors} errors`);
+
+            // ── Phase 2: Knowledge Graph extraction ────────────────────────────────
+            const aiSettings = getResolvedAISettings();
+            if (!indexCancelRequested && aiSettings) {
+              // Scope graph job to only the folders that contain VB emails
+              const vbFolderIds = (inboxPieDb["get"]() as any)
+                .prepare("SELECT DISTINCT folder_id FROM mails WHERE include_for_index='yes'")
+                .all()
+                .map((r: any) => Number(r.folder_id));
+
+              const graphStats = inboxPieDb.getGraphIndexStats(vbFolderIds, true);
+              const graphTodo  = graphStats.todo + graphStats.inprogress;
+              if (graphTodo > 0) {
+                console.log(`[VirtualBox] Phase 2 starting: ${graphTodo} mails pending — ${aiSettings.provider}/${aiSettings.model}`);
+                emitVb("graphIndexStarted", { total: graphTodo });
+                try {
+                  await buildGraphIndexJob(
+                    aiSettings,
+                    (p) => emitVb("graphIndexProgress", { done: p.done, total: p.total }),
+                    () => indexCancelRequested,
+                    vbFolderIds,
+                    true,   // virtualBoxOnly — only process include_for_index='yes' mails
+                  );
+                  const gStats = inboxPieDb.getGraphIndexStats(vbFolderIds, true);
+                  console.log(`[VirtualBox] Phase 2 done: ${gStats.complete}/${gStats.total} graph-indexed`);
+                  emitVb("graphIndexComplete", { indexed: gStats.complete, total: gStats.total });
+                } catch (e) {
+                  const msg = (e as Error)?.message ?? String(e);
+                  console.error(`[VirtualBox] Phase 2 error: ${msg}`);
+                  emitVb("graphIndexError", { error: msg });
+                }
+              } else {
+                console.log("[VirtualBox] Phase 2 skipped: no pending graph mails");
+              }
+            } else if (!aiSettings) {
+              console.log("[VirtualBox] Phase 2 skipped: no AI provider configured");
+            }
+          } catch (e) {
+            const vbErrMsg = (e as Error)?.message ?? String(e);
+            inboxPieDb.failIndexAudit(vbAuditId, vbErrMsg);
+            emitVb("vectorIndexError", { error: vbErrMsg });
+          }
+        });
+
+        return { ok: true, total: vbMails.length };
+      }
+
+      // ── Virtual Box — data queries ────────────────────────────────────────────
+
+      case "getVirtualBoxMails":
+        return inboxPieDb.getVirtualBoxMails(20000);
+
+      case "getVirtualBoxStats":
+        return inboxPieDb.getVirtualBoxStats();
+
+      case "getInclusionRules":
+        return inboxPieDb.getInclusionRules();
+
+      case "addInclusionDomain": {
+        inboxPieDb.addInclusionDomain((message as any).domain);
+        return { success: true, stats: inboxPieDb.getVirtualBoxStats() };
+      }
+
+      case "removeInclusionDomain": {
+        inboxPieDb.removeInclusionDomain((message as any).domain);
+        return { success: true, stats: inboxPieDb.getVirtualBoxStats() };
+      }
+
+      case "addInclusionSender": {
+        inboxPieDb.addInclusionSender((message as any).sender);
+        return { success: true, stats: inboxPieDb.getVirtualBoxStats() };
+      }
+
+      case "removeInclusionSender": {
+        inboxPieDb.removeInclusionSender((message as any).sender);
+        return { success: true, stats: inboxPieDb.getVirtualBoxStats() };
+      }
+
+      case "addInclusionMails": {
+        inboxPieDb.addInclusionMails((message as any).mailIds ?? []);
+        return { success: true, stats: inboxPieDb.getVirtualBoxStats() };
+      }
+
+      case "removeInclusionMails": {
+        inboxPieDb.removeInclusionMails((message as any).mailIds ?? []);
+        return { success: true, stats: inboxPieDb.getVirtualBoxStats() };
+      }
+
+      case "clearAllInclusions": {
+        inboxPieDb.clearAllInclusions();
         return { success: true };
       }
 

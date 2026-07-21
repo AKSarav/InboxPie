@@ -32,6 +32,8 @@
   
   /** Filter folders for view rendering (subset of scanned data). Empty = show all. */
   let viewFilterFolderKeys = new Set();
+  // Expose live reference so intelligence.js can read the active filter without polling.
+  window._ipGetViewFilter = function () { return viewFilterFolderKeys; };
   /** Folders present in current scan results (for filter dropdown). */
   let scannedFolderList = [];
 
@@ -1097,6 +1099,7 @@
       // Expose to intelligence.js (ADR 001: progressive enrichment)
       window._ip = window._ip || {};
       window._ip.messages = allMessages;
+      window._ip.getFilteredMessages = getFilteredMessages;
       window._ip.openSenderReview = function (email) {
         var pool = getFilteredMessages();
         pool.filter(function (m) { return m.senderEmail === email; })
@@ -1210,7 +1213,7 @@
 
     // Full-page views (mailbox + intelligence): hide scan header/stats/export chrome
     const isFullPage = view === "smartsearch" || view === "knowledgemap" || view === "aisettings"
-                    || view === "indexes" || view === "groups";
+                    || view === "indexes" || view === "groups" || view === "virtualbox";
     const statsBar   = $("#statsBar");
     const exportBar  = $("#exportBar");
     const header     = $("#header");
@@ -1235,6 +1238,7 @@
       else if (view === "smartsearch")  { if (window.renderSmartSearch)  window.renderSmartSearch(); }
       else if (view === "knowledgemap") { if (window.renderKnowledgeMap) window.renderKnowledgeMap(); }
       else if (view === "aisettings")   { if (window.renderAISettings)   window.renderAISettings(); }
+      else if (view === "virtualbox")   { if (window.renderVirtualBox)   window.renderVirtualBox(); }
     }
     updateBulkButtons();
   }
@@ -2533,6 +2537,23 @@
     });
   }
 
+  function showToast(msg) {
+    var t = document.createElement("div");
+    t.className = "vb-toast";
+    t.textContent = msg;
+    document.body.appendChild(t);
+    requestAnimationFrame(() => { t.classList.add("vb-toast-in"); });
+    setTimeout(() => { t.classList.remove("vb-toast-in"); setTimeout(() => t.remove(), 300); }, 2500);
+  }
+
+  function updateVirtualBoxNavCount(n) {
+    var el = document.getElementById("navVirtualBoxCount");
+    if (!el) return;
+    if (n > 0) { el.textContent = String(n); el.style.display = ""; }
+    else el.style.display = "none";
+  }
+  window.updateVirtualBoxNavCount = updateVirtualBoxNavCount;
+
   // ══════════════════════════════════════════
   //  SELECTION REVIEW
   // ══════════════════════════════════════════
@@ -2552,6 +2573,18 @@
     $("#selectionReviewExport").onclick = () => {
       exportSelectedCSV();
     };
+    const vbBtn = $("#selectionAddToVirtualBox");
+    if (vbBtn) {
+      vbBtn.onclick = () => {
+        const ids = Array.from(selectedIds).map(String);
+        if (!ids.length) return;
+        browser.runtime.sendMessage({ action: "addInclusionMails", mailIds: ids }).then((res) => {
+          const n = ids.length;
+          showToast(n + " email" + (n !== 1 ? "s" : "") + " added to Virtual Box");
+          if (res && res.stats) updateVirtualBoxNavCount(res.stats.total);
+        });
+      };
+    }
   }
 
   function renderSelectionReview() {

@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   decodeRfc2047,
   extractBodyPreview,
+  extractBodyText,
   folderTypeFromName as folderTypeFromNameShared,
   macSecsToDateParts,
   parseDateString,
@@ -668,6 +669,7 @@ function parseEmlxFile(emlxPath: string, includeBody: boolean): MessageRecord | 
     tags:         [],
     size:         fs.statSync(emlxPath).size,
     body_preview: includeBody ? extractBodyPreview(messageBytes) : undefined,
+    body_display: includeBody ? extractBodyText(messageBytes, 50_000) : undefined,
   };
 }
 

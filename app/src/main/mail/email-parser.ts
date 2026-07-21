@@ -190,6 +190,29 @@ export function extractBodyPreview(messageBytes: Buffer, maxChars = 4000): strin
   return text.replace(/\s+/g, " ").slice(0, maxChars);
 }
 
+/**
+ * Like extractBodyPreview but preserves paragraph structure (newlines kept) for
+ * human-readable display in the Virtual Box detail panel. Not used for embedding.
+ */
+export function extractBodyText(messageBytes: Buffer, maxChars = 50_000): string {
+  const raw = messageBytes.toString("binary");
+  const headerEnd = findHeaderEnd(raw);
+  if (headerEnd === -1) return "";
+  const headersStr = raw.slice(0, headerEnd);
+  const body = raw.slice(headerEnd + (raw[headerEnd] === "\r" ? 4 : 2));
+  const headers = parseHeaders(headersStr);
+  const contentType = headers.get("content-type") ?? "text/plain";
+  const { plain, html } = extractMimeParts(body, contentType, raw);
+  const text = plain.trim() || htmlToText(html);
+  // Normalise line endings, collapse runs of 3+ blank lines → 2, preserve paragraph breaks
+  return text
+    .replace(/\r\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]+/g, " ")   // collapse horizontal whitespace, keep newlines
+    .slice(0, maxChars)
+    .trim();
+}
+
 /** Find the position of the blank line separating headers from body. */
 function findHeaderEnd(raw: string): number {
   const crlfcrlf = raw.indexOf("\r\n\r\n");

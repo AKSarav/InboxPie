@@ -31,6 +31,28 @@ export type FolderIndexStatus = "todo" | "inprogress" | "complete" | "failed";
 export type MailIndexStatus   = "todo" | "inprogress" | "complete";
 export type AuditStatus       = "inprogress" | "success" | "failed";
 
+export interface GraphNode {
+  id:        string;
+  label:     string;
+  type:      string;   // PERSON | ORG | PRODUCT | TOPIC | PLACE | EVENT | Entity
+  frequency: number;
+  folderIds?: number[];
+}
+
+export interface GraphEdge {
+  id:            string;
+  subjectNodeId: string;
+  predicate:     string;
+  objectNodeId:  string;
+  weight:        number;
+}
+
+export interface Triplet {
+  subject:   string;
+  predicate: string;
+  object:    string;
+}
+
 export interface MailInsert {
   id:        string;
   mailboxId: string;
@@ -118,8 +140,35 @@ CREATE TABLE IF NOT EXISTS mails (
                    CHECK (indexed IN ('todo','inprogress','complete')),
   indexed_meta     TEXT NOT NULL DEFAULT 'no',  -- 'yes' once subject/sender/domain embedded
   indexed_body     TEXT NOT NULL DEFAULT 'no',  -- 'yes' once email body text embedded
+  graph_indexed    TEXT NOT NULL DEFAULT 'todo'
+                   CHECK (graph_indexed IN ('todo','inprogress','complete')),
   created_at       TEXT,
   updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS graph_nodes (
+  id         TEXT PRIMARY KEY,
+  label      TEXT NOT NULL,
+  type       TEXT NOT NULL DEFAULT 'Entity',
+  frequency  INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS graph_edges (
+  id              TEXT PRIMARY KEY,
+  subject_node_id TEXT NOT NULL REFERENCES graph_nodes(id),
+  predicate       TEXT NOT NULL,
+  object_node_id  TEXT NOT NULL REFERENCES graph_nodes(id),
+  weight          REAL NOT NULL DEFAULT 1.0,
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS graph_mail_nodes (
+  mail_id    TEXT    NOT NULL REFERENCES mails(id) ON DELETE CASCADE,
+  folder_id  INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+  mailbox_id TEXT    NOT NULL REFERENCES mailboxes(id) ON DELETE CASCADE,
+  node_id    TEXT    NOT NULL REFERENCES graph_nodes(id),
+  PRIMARY KEY (mail_id, node_id)
 );
 
 CREATE TABLE IF NOT EXISTS preferences (
@@ -127,6 +176,7 @@ CREATE TABLE IF NOT EXISTS preferences (
   value      TEXT NOT NULL,
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
 
 -- Intelligence categories (name → keywords[]) used for Knowledge Map grouping.
 -- Built-in defaults are seeded with builtin=1 (editable); user categories are builtin=0
@@ -170,6 +220,8 @@ CREATE INDEX IF NOT EXISTS idx_mails_indexed ON mails(indexed);
 CREATE INDEX IF NOT EXISTS idx_mails_sender  ON mails(sender);
 CREATE INDEX IF NOT EXISTS idx_mails_domain  ON mails(domain);
 CREATE INDEX IF NOT EXISTS idx_folders_mb    ON folders(mailbox_id);
+CREATE INDEX IF NOT EXISTS idx_gmn_node      ON graph_mail_nodes(node_id);
+CREATE INDEX IF NOT EXISTS idx_gmn_folder    ON graph_mail_nodes(folder_id);
 `;
 
 // ── DB class ───────────────────────────────────────────────────────────────────
@@ -222,6 +274,43 @@ export class InboxPieDB {
         if (!catCols.some((c) => c.name === "builtin")) this.db.exec("ALTER TABLE categories ADD COLUMN builtin INTEGER NOT NULL DEFAULT 0");
       }
     } catch { /* ignore — fresh install gets columns from SCHEMA */ }
+    // Add graph_indexed tracking column to existing mails tables.
+    // NOTE: idx_mails_graph_indexed is intentionally NOT in SCHEMA because for existing
+    // installs the mails table already exists without the column; running CREATE INDEX
+    // before ALTER TABLE would throw "no such column" and abort db.exec(SCHEMA).
+    try {
+      const mailColsG = this.db.prepare("PRAGMA table_info(mails)").all() as Array<{ name: string }>;
+      if (!mailColsG.some((c) => c.name === "graph_indexed")) {
+        this.db.exec("ALTER TABLE mails ADD COLUMN graph_indexed TEXT NOT NULL DEFAULT 'todo'");
+      }
+      // Always create the index (IF NOT EXISTS handles both new and existing installs)
+      this.db.exec("CREATE INDEX IF NOT EXISTS idx_mails_graph_indexed ON mails(graph_indexed)");
+    } catch { /* ignore — fresh install gets the column from SCHEMA */ }
+    // Add subject_entities / body_entities to existing mails tables (added to SCHEMA later)
+    try {
+      const mailColsE = this.db.prepare("PRAGMA table_info(mails)").all() as Array<{ name: string }>;
+      if (!mailColsE.some((c) => c.name === "subject_entities")) {
+        this.db.exec("ALTER TABLE mails ADD COLUMN subject_entities TEXT");
+      }
+      if (!mailColsE.some((c) => c.name === "body_entities")) {
+        this.db.exec("ALTER TABLE mails ADD COLUMN body_entities TEXT");
+      }
+    } catch { /* ignore — fresh install gets the columns from SCHEMA */ }
+    // Add include_for_index column for Virtual Box selective indexing
+    try {
+      const mailColsV = this.db.prepare("PRAGMA table_info(mails)").all() as Array<{ name: string }>;
+      if (!mailColsV.some((c) => c.name === "include_for_index")) {
+        this.db.exec("ALTER TABLE mails ADD COLUMN include_for_index TEXT NOT NULL DEFAULT 'no'");
+      }
+      this.db.exec("CREATE INDEX IF NOT EXISTS idx_mails_include ON mails(include_for_index)");
+    } catch { /* ignore — fresh install gets the column from SCHEMA */ }
+    // Add body_text column for Virtual Box content display
+    try {
+      const mailColsB = this.db.prepare("PRAGMA table_info(mails)").all() as Array<{ name: string }>;
+      if (!mailColsB.some((c) => c.name === "body_text")) {
+        this.db.exec("ALTER TABLE mails ADD COLUMN body_text TEXT");
+      }
+    } catch { /* ignore — fresh install gets the column from SCHEMA */ }
   }
 
   close(): void {
@@ -513,6 +602,200 @@ export class InboxPieDB {
     ).run();
   }
 
+  // ── Mails — graph index tracking ─────────────────────────────────────────────
+
+  getPendingGraphMails(limit = 50, folderIds?: number[], virtualBoxOnly = false): PendingMail[] {
+    const vbClause = virtualBoxOnly ? " AND include_for_index='yes'" : "";
+    if (folderIds && folderIds.length) {
+      const ph = folderIds.map(() => "?").join(",");
+      return this.get().prepare(`
+        SELECT id, subject, mailbox_id AS mailboxId, folder_id AS folderId, sender
+        FROM mails
+        WHERE graph_indexed = 'todo' AND folder_id IN (${ph})${vbClause}
+        ORDER BY created_at ASC
+        LIMIT ?
+      `).all(...folderIds, limit) as unknown as PendingMail[];
+    }
+    return this.get().prepare(`
+      SELECT id, subject, mailbox_id AS mailboxId, folder_id AS folderId, sender
+      FROM mails
+      WHERE graph_indexed = 'todo'${vbClause}
+      ORDER BY created_at ASC
+      LIMIT ?
+    `).all(limit) as unknown as PendingMail[];
+  }
+
+  markMailGraphIndexing(id: string): void {
+    this.get().prepare(
+      "UPDATE mails SET graph_indexed = 'inprogress', updated_at = datetime('now') WHERE id = ?"
+    ).run(id);
+  }
+
+  markMailGraphComplete(id: string, nodeIds: string[], folderId: number, mailboxId: string): void {
+    const db = this.get();
+    db.prepare(
+      "UPDATE mails SET graph_indexed = 'complete', updated_at = datetime('now') WHERE id = ?"
+    ).run(id);
+    if (nodeIds.length) {
+      const stmt = db.prepare(
+        "INSERT OR IGNORE INTO graph_mail_nodes(mail_id, folder_id, mailbox_id, node_id) VALUES(?,?,?,?)"
+      );
+      db.exec("BEGIN");
+      try {
+        for (const nid of nodeIds) stmt.run(id, folderId, mailboxId, nid);
+        db.exec("COMMIT");
+      } catch (e) {
+        db.exec("ROLLBACK");
+        throw e;
+      }
+    }
+  }
+
+  markMailGraphFailed(id: string): void {
+    this.get().prepare(
+      "UPDATE mails SET graph_indexed = 'todo', updated_at = datetime('now') WHERE id = ?"
+    ).run(id);
+  }
+
+  upsertGraphNode(id: string, label: string, type: string): void {
+    this.get().prepare(`
+      INSERT INTO graph_nodes(id, label, type, frequency, updated_at)
+      VALUES (?, ?, ?, 1, datetime('now'))
+      ON CONFLICT(id) DO UPDATE SET
+        frequency  = frequency + 1,
+        type       = CASE WHEN excluded.type != 'Entity' THEN excluded.type ELSE type END,
+        updated_at = datetime('now')
+    `).run(id, label, type);
+  }
+
+  upsertGraphEdge(id: string, subjectId: string, predicate: string, objectId: string): void {
+    this.get().prepare(`
+      INSERT INTO graph_edges(id, subject_node_id, predicate, object_node_id, weight, updated_at)
+      VALUES (?, ?, ?, ?, 1.0, datetime('now'))
+      ON CONFLICT(id) DO UPDATE SET
+        weight     = weight + 1.0,
+        updated_at = datetime('now')
+    `).run(id, subjectId, predicate, objectId);
+  }
+
+  getEmailsForNode(nodeId: string, limit = 100): Array<{
+    mailId: string; subject: string | null; sender: string | null;
+    date: string | null; folderName: string;
+  }> {
+    return this.get().prepare(`
+      SELECT m.id        AS mailId,
+             m.subject,
+             m.sender,
+             m.created_at AS date,
+             f.name       AS folderName
+      FROM mails m
+      JOIN graph_mail_nodes gmn ON gmn.mail_id = m.id
+      JOIN folders f            ON f.id = m.folder_id
+      WHERE gmn.node_id = ?
+      ORDER BY m.created_at DESC
+      LIMIT ?
+    `).all(nodeId, limit) as any[];
+  }
+
+  getKnowledgeGraphData(limit = 500): {
+    nodes: GraphNode[];
+    edges: GraphEdge[];
+    stats: { totalNodes: number; totalEdges: number; graphIndexed: number; total: number };
+    folders: { id: number; name: string }[];
+  } {
+    const db = this.get();
+    const nodes = db.prepare(
+      "SELECT id, label, type, frequency FROM graph_nodes ORDER BY frequency DESC LIMIT ?"
+    ).all(limit) as unknown as GraphNode[];
+
+    const gStats = this.getGraphIndexStats();
+    const totalNodes = (db.prepare("SELECT COUNT(*) AS n FROM graph_nodes").get() as any)?.n ?? 0;
+    const totalEdges = (db.prepare("SELECT COUNT(*) AS n FROM graph_edges").get() as any)?.n ?? 0;
+    const stats = { totalNodes, totalEdges, graphIndexed: gStats.complete, total: gStats.total };
+
+    if (!nodes.length) return { nodes: [], edges: [], stats, folders: [] };
+
+    // Folders that have graph-indexed mails
+    const folders = db.prepare(`
+      SELECT DISTINCT f.id, f.name
+      FROM graph_mail_nodes gmn
+      JOIN folders f ON f.id = gmn.folder_id
+      ORDER BY f.name
+    `).all() as Array<{ id: number; name: string }>;
+
+    // Node → folder membership (single batched query)
+    const nodeIds = nodes.map((n) => n.id);
+    const ph = nodeIds.map(() => "?").join(",");
+    const nodeFolderRows = db.prepare(
+      `SELECT DISTINCT node_id, folder_id FROM graph_mail_nodes WHERE node_id IN (${ph})`
+    ).all(...nodeIds) as Array<{ node_id: string; folder_id: number }>;
+
+    const nodeToFolders: Record<string, number[]> = {};
+    for (const row of nodeFolderRows) {
+      (nodeToFolders[row.node_id] ??= []).push(row.folder_id);
+    }
+    const nodesWithFolders = nodes.map((n) => ({ ...n, folderIds: nodeToFolders[n.id] ?? [] }));
+
+    const edges = db.prepare(`
+      SELECT e.id,
+             e.subject_node_id AS subjectNodeId,
+             e.predicate,
+             e.object_node_id  AS objectNodeId,
+             e.weight
+      FROM graph_edges e
+      WHERE e.subject_node_id IN (SELECT id FROM graph_nodes ORDER BY frequency DESC LIMIT ?)
+        AND e.object_node_id  IN (SELECT id FROM graph_nodes ORDER BY frequency DESC LIMIT ?)
+    `).all(limit, limit) as unknown as GraphEdge[];
+
+    return { nodes: nodesWithFolders, edges, stats, folders };
+  }
+
+  getGraphIndexStats(folderIds?: number[], virtualBoxOnly = false): { total: number; todo: number; inprogress: number; complete: number } {
+    const vbClause = virtualBoxOnly ? " AND include_for_index='yes'" : "";
+    let row: any;
+    if (folderIds && folderIds.length) {
+      const ph = folderIds.map(() => "?").join(",");
+      row = this.get().prepare(`
+        SELECT
+          COUNT(*) AS total,
+          SUM(graph_indexed = 'todo')       AS todo,
+          SUM(graph_indexed = 'inprogress') AS inprogress,
+          SUM(graph_indexed = 'complete')   AS complete
+        FROM mails WHERE folder_id IN (${ph})${vbClause}
+      `).get(...folderIds) as any;
+    } else {
+      row = this.get().prepare(`
+        SELECT
+          COUNT(*) AS total,
+          SUM(graph_indexed = 'todo')       AS todo,
+          SUM(graph_indexed = 'inprogress') AS inprogress,
+          SUM(graph_indexed = 'complete')   AS complete
+        FROM mails WHERE 1=1${vbClause}
+      `).get() as any;
+    }
+    return {
+      total:      row?.total      ?? 0,
+      todo:       row?.todo       ?? 0,
+      inprogress: row?.inprogress ?? 0,
+      complete:   row?.complete   ?? 0,
+    };
+  }
+
+  resetGraphIndex(): void {
+    const db = this.get();
+    db.exec("BEGIN");
+    try {
+      db.exec("DELETE FROM graph_mail_nodes");
+      db.exec("DELETE FROM graph_edges");
+      db.exec("DELETE FROM graph_nodes");
+      db.prepare("UPDATE mails SET graph_indexed = 'todo', updated_at = datetime('now')").run();
+      db.exec("COMMIT");
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+
   // ── Queries ──────────────────────────────────────────────────────────────────
 
   /** Aggregated sender stats, ordered by message count descending. */
@@ -622,14 +905,15 @@ export class InboxPieDB {
     id: number; name: string; mailboxId: string; mailboxName: string; mailProvider: string;
     indexed: FolderIndexStatus; readMode: "metadata" | "content";
     mailCount: number; lastScanned: string | null;
-    indexedMetaCount: number; indexedBodyCount: number;
+    indexedMetaCount: number; indexedBodyCount: number; graphIndexedCount: number;
   }> {
     return (this.get().prepare(`
       SELECT f.id, f.name, f.indexed, f.read_mode AS readMode, f.mailbox_id AS mailboxId,
              mb.name AS mailboxName, mb.mail_provider AS mailProvider,
              COUNT(m.id) AS mailCount,
-             SUM(CASE WHEN m.indexed_meta = 'yes' THEN 1 ELSE 0 END) AS indexedMetaCount,
-             SUM(CASE WHEN m.indexed_body = 'yes' THEN 1 ELSE 0 END) AS indexedBodyCount,
+             SUM(CASE WHEN m.indexed_meta = 'yes' THEN 1 ELSE 0 END)        AS indexedMetaCount,
+             SUM(CASE WHEN m.indexed_body = 'yes' THEN 1 ELSE 0 END)        AS indexedBodyCount,
+             SUM(CASE WHEN m.graph_indexed = 'complete' THEN 1 ELSE 0 END)  AS graphIndexedCount,
              (SELECT MAX(sa.completed_at) FROM scan_audit sa
               WHERE sa.folder_id = f.id AND sa.status = 'success') AS lastScanned
       FROM folders f
@@ -638,17 +922,18 @@ export class InboxPieDB {
       GROUP BY f.id
       ORDER BY mailCount DESC
     `).all() as any[]).map((r) => ({
-      id:               r.id,
-      name:             r.name,
-      mailboxId:        r.mailboxId,
-      mailboxName:      r.mailboxName,
-      mailProvider:     r.mailProvider ?? "apple-mail",
-      indexed:          r.indexed as FolderIndexStatus,
-      readMode:         (r.readMode === "content" ? "content" : "metadata") as "metadata" | "content",
-      mailCount:        r.mailCount ?? 0,
-      indexedMetaCount: r.indexedMetaCount ?? 0,
-      indexedBodyCount: r.indexedBodyCount ?? 0,
-      lastScanned:      r.lastScanned ?? null,
+      id:                r.id,
+      name:              r.name,
+      mailboxId:         r.mailboxId,
+      mailboxName:       r.mailboxName,
+      mailProvider:      r.mailProvider ?? "apple-mail",
+      indexed:           r.indexed as FolderIndexStatus,
+      readMode:          (r.readMode === "content" ? "content" : "metadata") as "metadata" | "content",
+      mailCount:         r.mailCount ?? 0,
+      indexedMetaCount:  r.indexedMetaCount ?? 0,
+      indexedBodyCount:  r.indexedBodyCount ?? 0,
+      graphIndexedCount: r.graphIndexedCount ?? 0,
+      lastScanned:       r.lastScanned ?? null,
     }));
   }
 
@@ -750,7 +1035,11 @@ export class InboxPieDB {
       // 1. Audit logs (reference mailboxes/folders)
       db.exec("DELETE FROM index_audit");
       db.exec("DELETE FROM scan_audit");
-      // 2. Mail data (mails → folders → mailboxes)
+      // 2. Graph tables (reference mails/folders/mailboxes)
+      db.exec("DELETE FROM graph_mail_nodes");
+      db.exec("DELETE FROM graph_edges");
+      db.exec("DELETE FROM graph_nodes");
+      // 3. Mail data (mails → folders → mailboxes)
       db.exec("DELETE FROM mails");
       db.exec("DELETE FROM folders");
       db.exec("DELETE FROM mailboxes");
@@ -784,6 +1073,181 @@ export class InboxPieDB {
     }
 
     return { mails: mailCount, folders: folderCount, mailboxes: mailboxCount };
+  }
+
+  // ── Virtual Box — selective intelligence indexing ────────────────────────────
+
+  isSelectiveIndexingEnabled(): boolean {
+    return this.getPreference("selective_indexing_enabled") === "yes";
+  }
+
+  enableSelectiveIndexing(): void {
+    this.setPreference("selective_indexing_enabled", "yes");
+  }
+
+  getInclusionRules(): { domains: string[]; senders: string[]; mailIds: string[] } {
+    const parse = (key: string): string[] => {
+      try { const v = JSON.parse(this.getPreference(key, "[]") ?? "[]"); return Array.isArray(v) ? v.map(String) : []; }
+      catch { return []; }
+    };
+    return {
+      domains: parse("index_inclusion_domains"),
+      senders: parse("index_inclusion_senders"),
+      mailIds: parse("index_inclusion_mail_ids"),
+    };
+  }
+
+  addInclusionDomain(domain: string): void {
+    const rules = this.getInclusionRules();
+    if (!rules.domains.includes(domain)) rules.domains.push(domain);
+    this.setPreference("index_inclusion_domains", JSON.stringify(rules.domains));
+    this.get().prepare("UPDATE mails SET include_for_index='yes' WHERE LOWER(domain)=LOWER(?)").run(domain);
+    this.enableSelectiveIndexing();
+  }
+
+  removeInclusionDomain(domain: string): void {
+    const rules = this.getInclusionRules();
+    rules.domains = rules.domains.filter((d) => d !== domain);
+    this.setPreference("index_inclusion_domains", JSON.stringify(rules.domains));
+    this.syncInclusionFlags();
+  }
+
+  addInclusionSender(sender: string): void {
+    const rules = this.getInclusionRules();
+    if (!rules.senders.includes(sender)) rules.senders.push(sender);
+    this.setPreference("index_inclusion_senders", JSON.stringify(rules.senders));
+    this.get().prepare("UPDATE mails SET include_for_index='yes' WHERE LOWER(sender)=LOWER(?)").run(sender);
+    this.enableSelectiveIndexing();
+  }
+
+  removeInclusionSender(sender: string): void {
+    const rules = this.getInclusionRules();
+    rules.senders = rules.senders.filter((s) => s !== sender);
+    this.setPreference("index_inclusion_senders", JSON.stringify(rules.senders));
+    this.syncInclusionFlags();
+  }
+
+  addInclusionMails(mailIds: string[]): void {
+    if (!mailIds.length) return;
+    const rules = this.getInclusionRules();
+    const existing = new Set(rules.mailIds);
+    for (const id of mailIds) existing.add(id);
+    rules.mailIds = [...existing];
+    this.setPreference("index_inclusion_mail_ids", JSON.stringify(rules.mailIds));
+    const ph = mailIds.map(() => "?").join(",");
+    this.get().prepare(`UPDATE mails SET include_for_index='yes' WHERE id IN (${ph})`).run(...mailIds);
+    this.enableSelectiveIndexing();
+  }
+
+  removeInclusionMails(mailIds: string[]): void {
+    if (!mailIds.length) return;
+    const rules = this.getInclusionRules();
+    const removeSet = new Set(mailIds);
+    rules.mailIds = rules.mailIds.filter((id) => !removeSet.has(id));
+    this.setPreference("index_inclusion_mail_ids", JSON.stringify(rules.mailIds));
+    const ph = mailIds.map(() => "?").join(",");
+    this.get().prepare(`UPDATE mails SET include_for_index='no' WHERE id IN (${ph})`).run(...mailIds);
+    // Re-apply domain/sender rules in case any removed mail still matches a rule
+    this.syncInclusionFlags();
+  }
+
+  syncInclusionFlags(): void {
+    const db = this.get();
+    const rules = this.getInclusionRules();
+    db.exec("BEGIN");
+    try {
+      db.prepare("UPDATE mails SET include_for_index='no'").run();
+      for (const d of rules.domains)  db.prepare("UPDATE mails SET include_for_index='yes' WHERE LOWER(domain)=LOWER(?)").run(d);
+      for (const s of rules.senders)  db.prepare("UPDATE mails SET include_for_index='yes' WHERE LOWER(sender)=LOWER(?)").run(s);
+      if (rules.mailIds.length) {
+        const ph = rules.mailIds.map(() => "?").join(",");
+        db.prepare(`UPDATE mails SET include_for_index='yes' WHERE id IN (${ph})`).run(...rules.mailIds);
+      }
+      db.exec("COMMIT");
+    } catch (e) { db.exec("ROLLBACK"); throw e; }
+  }
+
+  getVirtualBoxMailsForIndexing(limit = 10000): Array<Record<string, unknown>> {
+    return this.get().prepare(`
+      SELECT m.id,
+             m.subject,
+             m.sender        AS sender_email,
+             m.domain,
+             m.size,
+             m.created_at   AS date,
+             m.indexed_meta,
+             f.name         AS folder
+      FROM mails m
+      JOIN folders f ON f.id = m.folder_id
+      WHERE m.include_for_index = 'yes'
+      ORDER BY m.created_at DESC
+      LIMIT ?
+    `).all(limit) as any[];
+  }
+
+  getVirtualBoxMails(limit = 20000): Array<{
+    id: string; subject: string; sender: string; domain: string;
+    size: number; created_at: string;
+    indexed_meta: string; indexed_body: string; graph_indexed: string;
+    folder_id: number; subject_entities: string | null; body_text: string | null;
+  }> {
+    return this.get().prepare(`
+      SELECT id, subject, sender, domain, size, created_at,
+             indexed_meta, indexed_body, graph_indexed, folder_id, subject_entities, body_text
+      FROM mails
+      WHERE include_for_index = 'yes'
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(limit) as any[];
+  }
+
+  getIndexRunHistory(limit = 30): Array<{
+    id: number; status: string;
+    indexed_count: number; failed_count: number;
+    error: string | null; started_at: string; completed_at: string | null; folders: string | null;
+  }> {
+    try {
+      return this.get().prepare(
+        "SELECT id, status, indexed_count, failed_count, error, started_at, completed_at, folders FROM index_audit ORDER BY id DESC LIMIT ?"
+      ).all(limit) as any[];
+    } catch { return []; }
+  }
+
+  saveBodyTexts(records: Array<{ id: string; body_text: string }>): void {
+    const db   = this.get();
+    const stmt = db.prepare("UPDATE mails SET body_text = ? WHERE id = ?");
+    db.exec("BEGIN");
+    try {
+      for (const r of records) {
+        if (r.body_text) stmt.run(r.body_text, r.id);
+      }
+      db.exec("COMMIT");
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+
+  getVirtualBoxStats(): { total: number; vectorDone: number; graphDone: number } {
+    const row = this.get().prepare(`
+      SELECT COUNT(*) AS total,
+             SUM(CASE WHEN indexed_meta='yes' THEN 1 ELSE 0 END) AS vectorDone,
+             SUM(CASE WHEN graph_indexed='complete' THEN 1 ELSE 0 END) AS graphDone
+      FROM mails WHERE include_for_index='yes'
+    `).get() as any;
+    return { total: row?.total ?? 0, vectorDone: row?.vectorDone ?? 0, graphDone: row?.graphDone ?? 0 };
+  }
+
+  setAllFoldersContentMode(): void {
+    this.get().prepare("UPDATE folders SET read_mode = 'content'").run();
+  }
+
+  clearAllInclusions(): void {
+    const db = this.get();
+    db.prepare("UPDATE mails SET include_for_index='no'").run();
+    for (const key of ["index_inclusion_domains", "index_inclusion_senders", "index_inclusion_mail_ids", "selective_indexing_enabled"]) {
+      db.prepare("DELETE FROM preferences WHERE key=?").run(key);
+    }
   }
 
 }

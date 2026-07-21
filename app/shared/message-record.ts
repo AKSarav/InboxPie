@@ -23,6 +23,7 @@ export interface MessageRecord {
   tags: string[];
   size: number;
   body_preview?: string;
+  body_display?: string;
 }
 
 export interface MailAccount {
@@ -126,10 +127,30 @@ export type RpcAction =
   | { action: "buildVectorIndex"; messages: MessageRecord[] }
   | { action: "reindexFolders"; folders: string[]; incremental?: boolean }
   | { action: "setFolderReadMode"; folder: string; mode: "metadata" | "content" }
+  | { action: "setAllFoldersContentMode" }
   | { action: "deleteFolders"; folders: string[] }
   | { action: "resetVectorIndex" }
   | { action: "getSubscriptionStats" }
-  | { action: "resetAllData" };
+  | { action: "resetAllData" }
+  // Knowledge Graph
+  | { action: "getKnowledgeGraph" }
+  | { action: "getEmailsForNode"; nodeId: string }
+  | { action: "getGraphIndexStatus" }
+  | { action: "rebuildGraphIndex" }
+  | { action: "resetGraphIndex" }
+  // Virtual Box — selective intelligence indexing
+  | { action: "buildVirtualBoxIndex"; incremental?: boolean }
+  | { action: "getIndexRunHistory" }
+  | { action: "getVirtualBoxMails" }
+  | { action: "getVirtualBoxStats" }
+  | { action: "getInclusionRules" }
+  | { action: "addInclusionDomain";  domain: string }
+  | { action: "removeInclusionDomain"; domain: string }
+  | { action: "addInclusionSender";  sender: string }
+  | { action: "removeInclusionSender"; sender: string }
+  | { action: "addInclusionMails";   mailIds: string[] }
+  | { action: "removeInclusionMails"; mailIds: string[] }
+  | { action: "clearAllInclusions" };
 
 export type ProgressEvent =
   | { action: "progress"; count: number }
@@ -141,4 +162,10 @@ export type ProgressEvent =
   | { action: "vectorIndexProgress"; done: number; total: number; indexed: number; errors: number; folder?: string }
   | { action: "vectorIndexComplete"; total: number; folders: string[]; domains: number; years: number[] }
   | { action: "vectorIndexError"; error: string }
-  | { action: "agentStep"; tool: string; label: string; detail?: string; elapsed?: number };
+  | { action: "agentStep"; tool: string; label: string; detail?: string; elapsed?: number }
+  // Graph index progress events
+  | { action: "graphIndexStarted";  total: number }
+  | { action: "graphIndexProgress"; done: number; total: number }
+  | { action: "graphIndexComplete"; indexed: number; total: number }
+  | { action: "graphIndexSkipped";  reason: string }
+  | { action: "graphIndexError";    error: string };

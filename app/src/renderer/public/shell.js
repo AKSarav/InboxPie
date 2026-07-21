@@ -558,6 +558,10 @@
 
     selectedFolderPaths = new Set();
     var indexedFolderPaths = new Set();
+    var _folderChart   = null;
+    var _folderNodes   = [];
+    var _folderNodeIdx = {};
+    var _allFolders    = [];
     list.innerHTML = '<div class="account-loading"><svg class="account-loading-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>Loading folders…</div>';
     scanBtn.disabled = true;
 
@@ -593,14 +597,14 @@
         }
       });
 
-      renderFolderList(folders);
+      renderFolderGraph(folders);
       updateScanBtn(folders);
       scanBtn.disabled = false;
 
       // Quick-select buttons — use onclick so they're always fresh for the current folders
       if (allBtn) allBtn.onclick = function () {
         folders.forEach(function (f) { selectedFolderPaths.add(f.path); });
-        renderFolderList(folders);
+        renderFolderGraph(folders);
         updateScanBtn(folders);
       };
       if (inboxBtn) inboxBtn.onclick = function () {
@@ -608,12 +612,12 @@
         folders.forEach(function (f) {
           if (f.type === "inbox") selectedFolderPaths.add(f.path);
         });
-        renderFolderList(folders);
+        renderFolderGraph(folders);
         updateScanBtn(folders);
       };
       if (noneBtn) noneBtn.onclick = function () {
         selectedFolderPaths = new Set();
-        renderFolderList(folders);
+        renderFolderGraph(folders);
         updateScanBtn(folders);
       };
 
@@ -640,140 +644,176 @@
       list.innerHTML = '<div class="account-error">Could not load folders: ' + escHtml(String(err && err.message ? err.message : err)) + '</div>';
     });
 
-    function renderFolderList(folders) {
-      list.innerHTML = "";
-
-      var SYSTEM_TYPES = ["inbox", "sent", "drafts", "archives", "trash", "junk"];
-      var SYSTEM_ORDER = ["inbox", "sent", "archives", "drafts", "trash", "junk"];
-
-      // System folders in defined order
-      var systemFolders = SYSTEM_ORDER
-        .map(function (t) { return folders.filter(function (f) { return f.type === t; }); })
-        .reduce(function (acc, arr) { return acc.concat(arr); }, []);
-
-      // Custom folders alphabetically
-      var customFolders = folders
-        .filter(function (f) { return !SYSTEM_TYPES.includes(f.type); })
-        .sort(function (a, b) { return a.name.localeCompare(b.name); });
-
-      if (systemFolders.length > 0) {
-        var sysSection = document.createElement("div");
-        sysSection.className = "folder-grid-section";
-        var sysHeader = document.createElement("div");
-        sysHeader.className = "folder-grid-header";
-        sysHeader.textContent = "System Folders";
-        sysSection.appendChild(sysHeader);
-        var sysGrid = document.createElement("div");
-        sysGrid.className = "folder-grid folder-grid-system";
-        systemFolders.forEach(function (f) { sysGrid.appendChild(buildFolderCard(f, folders)); });
-        sysSection.appendChild(sysGrid);
-        list.appendChild(sysSection);
-      }
-
-      if (customFolders.length > 0) {
-        var customSection = document.createElement("div");
-        customSection.className = "folder-grid-section";
-        var customHeader = document.createElement("div");
-        customHeader.className = "folder-grid-header";
-        customHeader.textContent = "Folders (" + customFolders.length + ")";
-        customSection.appendChild(customHeader);
-        var customGrid = document.createElement("div");
-        customGrid.className = "folder-grid folder-grid-custom";
-        customFolders.forEach(function (f) { customGrid.appendChild(buildFolderCard(f, folders)); });
-        customSection.appendChild(customGrid);
-        list.appendChild(customSection);
-      }
+    function getFolderNodeColor(f) {
+      var sys = { inbox:'#3b82f6', sent:'#14b8a6', archives:'#8b5cf6',
+                  drafts:'#f59e0b', trash:'#ef4444', junk:'#64748b' };
+      if (sys[f.type]) return sys[f.type];
+      var palette = ['#a5b4fc','#7dd3fc','#5eead4','#86efac','#fde68a',
+                     '#fdba74','#fca5a5','#f9a8d4','#e879f9','#c4b5fd',
+                     '#93c5fd','#6ee7b7'];
+      var h = 0;
+      for (var i = 0; i < (f.name || '').length; i++) h = (h * 31 + f.name.charCodeAt(i)) >>> 0;
+      return palette[h % palette.length];
     }
 
-    function buildFolderCard(folder, allFolders) {
-      var isChecked = selectedFolderPaths.has(folder.path);
-      var isIndexed = indexedFolderPaths.has((folder.path || "").toLowerCase());
-      var count     = folder.totalCount;
-      var unread    = folder.unreadCount || 0;
-      var type      = folder.type || "custom";
-      var isSystem  = ["inbox","sent","drafts","archives","trash","junk"].includes(type);
-
-      var card = document.createElement("label");
-      card.className = "folder-card folder-card-" + escHtml(type) +
-        (isChecked ? " folder-card-selected" : "") +
-        (isSystem  ? " folder-card-system"   : " folder-card-sm");
-      card.setAttribute("for", "fc-" + escHtml(folder.path));
-
-      var countDisplay = count != null ? count.toLocaleString() : "—";
-
-      // Check mark is absolute-positioned top-right; icon + name + count centered
-      card.innerHTML =
-        '<span class="folder-card-check-mark" aria-hidden="true">' +
-          '<svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="1,5.5 3.8,8.5 9,2"/></svg>' +
-        '</span>' +
-        '<input type="checkbox" id="fc-' + escHtml(folder.path) + '" class="folder-cb-hidden"' +
-          (isChecked ? ' checked' : '') + '>' +
-        '<span class="folder-card-icon folder-icon-' + escHtml(type) + '" aria-hidden="true">' +
-          escHtml((folder.name || '?').charAt(0).toUpperCase()) +
-        '</span>' +
-        '<div class="folder-card-name">' + escHtml(folder.name) + '</div>' +
-        '<div class="folder-card-count">' + countDisplay + '</div>' +
-        (isIndexed ? '<span class="folder-indexed-badge">Indexed</span>' : '');
-
-      var cb = card.querySelector("input");
-      if (cb) {
-        cb.addEventListener("change", function () {
-          if (cb.checked) {
-            selectedFolderPaths.add(folder.path);
-            card.classList.add("folder-card-selected");
-          } else {
-            selectedFolderPaths.delete(folder.path);
-            card.classList.remove("folder-card-selected");
-          }
-          updateScanBtn(allFolders);
-        });
-      }
-
-      return card;
-    }
-
-    function getFolderIcon(type, large) {
-      var sz = large ? "20" : "16";
-      var s  = 'fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"';
-      var icons = {
-        inbox:
-          '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" ' + s + '>' +
-          '<path d="M22 12h-6l-2 3h-4l-2-3H2"/>' +
-          '<path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/>' +
-          '</svg>',
-        sent:
-          '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" ' + s + '>' +
-          '<line x1="22" y1="2" x2="11" y2="13"/>' +
-          '<polygon points="22 2 15 22 11 13 2 9 22 2"/>' +
-          '</svg>',
-        drafts:
-          '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" ' + s + '>' +
-          '<path d="M12 20h9"/>' +
-          '<path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/>' +
-          '</svg>',
-        archives:
-          '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" ' + s + '>' +
-          '<polyline points="21 8 21 21 3 21 3 8"/>' +
-          '<rect x="1" y="3" width="22" height="5"/>' +
-          '<line x1="10" y1="12" x2="14" y2="12"/>' +
-          '</svg>',
-        trash:
-          '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" ' + s + '>' +
-          '<polyline points="3 6 5 6 21 6"/>' +
-          '<path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2"/>' +
-          '</svg>',
-        junk:
-          '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" ' + s + '>' +
-          '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>' +
-          '<line x1="12" y1="9" x2="12" y2="13"/>' +
-          '<line x1="12" y1="17" x2="12.01" y2="17"/>' +
-          '</svg>',
-        custom:
-          '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" ' + s + '>' +
-          '<path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>' +
-          '</svg>',
+    function buildFolderNodeStyle(baseColor, isSelected) {
+      return {
+        color: baseColor,
+        borderColor: isSelected ? '#00e5c9' : 'rgba(255,255,255,0.08)',
+        borderWidth: isSelected ? 5 : 1,
+        shadowBlur: isSelected ? 24 : 0,
+        shadowColor: 'rgba(0,229,201,0.6)',
+        opacity: 1
       };
-      return icons[type] || icons.custom;
+    }
+
+    function renderFolderGraph(allFoldersList) {
+      _allFolders = allFoldersList;
+      var SYS_TYPES = ['inbox','sent','drafts','archives','trash','junk'];
+      var maxCount  = 1;
+      allFoldersList.forEach(function(f) { if ((f.totalCount || 0) > maxCount) maxCount = f.totalCount; });
+
+      _folderNodes   = [];
+      _folderNodeIdx = {};
+      allFoldersList.forEach(function(f, i) {
+        var count      = f.totalCount || 0;
+        var isSystem   = SYS_TYPES.indexOf(f.type) >= 0;
+        var isSelected = selectedFolderPaths.has(f.path);
+        var isIndexed  = indexedFolderPaths.has((f.path || '').toLowerCase());
+        var logRatio   = count > 0 ? Math.log(count + 1) / Math.log(maxCount + 1) : 0;
+        var sz = isSystem ? Math.round(44 + logRatio * 46) : Math.round(28 + logRatio * 34);
+        sz = Math.max(24, Math.min(90, sz));
+        var color = getFolderNodeColor(f);
+        _folderNodeIdx[f.path] = i;
+        _folderNodes.push({
+          id: String(i),
+          name: f.name,
+          _path: f.path,
+          _count: count,
+          _type: f.type,
+          _isIndexed: isIndexed,
+          _baseColor: color,
+          _selected: isSelected,
+          symbolSize: sz,
+          itemStyle: buildFolderNodeStyle(color, isSelected),
+          emphasis: { scale: 1.1, itemStyle: { borderColor: '#e2e8f0', borderWidth: 3 } },
+          blur:     { itemStyle: { opacity: 0.07 }, label: { show: false } }
+        });
+      });
+
+      if (!_folderChart) {
+        list.style.position = 'relative';
+        list.style.padding  = '0';
+        list.style.overflow = 'hidden';
+        list.innerHTML =
+          '<div id="folderGraphCanvas" style="position:absolute;inset:0;"></div>' +
+          '<div style="position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:10;width:min(280px,60%)">' +
+            '<input id="folderGraphSearch" type="text" placeholder="Search folders…" ' +
+              'style="width:100%;box-sizing:border-box;padding:6px 16px;' +
+              'background:rgba(5,9,20,0.85);border:1px solid rgba(129,140,248,0.3);border-radius:18px;' +
+              'color:#dde6f4;font-size:12px;outline:none;font-family:inherit;backdrop-filter:blur(8px);">' +
+          '</div>';
+        var canvas = document.getElementById('folderGraphCanvas');
+        _folderChart = echarts.init(canvas, null, { renderer: 'canvas' });
+        new ResizeObserver(function() { if (_folderChart) _folderChart.resize(); }).observe(canvas);
+
+        var _searchEl = document.getElementById('folderGraphSearch');
+        if (_searchEl) {
+          _searchEl.addEventListener('input', function() {
+            var q = this.value.trim().toLowerCase();
+            if (!q) {
+              _folderChart.dispatchAction({ type: 'downplay', seriesIndex: 0 });
+              return;
+            }
+            var matches = [];
+            _folderNodes.forEach(function(n, i) {
+              if (n.name.toLowerCase().indexOf(q) >= 0) matches.push(i);
+            });
+            _folderChart.dispatchAction({ type: 'downplay', seriesIndex: 0 });
+            if (matches.length) _folderChart.dispatchAction({ type: 'highlight', seriesIndex: 0, dataIndex: matches });
+          });
+          // Prevent click on search input from deselecting nodes in chart
+          _searchEl.addEventListener('click', function(ev) { ev.stopPropagation(); });
+        }
+
+        _folderChart.on('click', function(params) {
+          // Click on blank canvas → clear search and restore
+          if (!params || params.dataType !== 'node') {
+            var s = document.getElementById('folderGraphSearch');
+            if (s && s.value) { s.value = ''; _folderChart.dispatchAction({ type: 'downplay', seriesIndex: 0 }); }
+            return;
+          }
+          var path        = params.data._path;
+          var nowSelected = !selectedFolderPaths.has(path);
+          if (nowSelected) selectedFolderPaths.add(path);
+          else             selectedFolderPaths.delete(path);
+          var idx = _folderNodeIdx[path];
+          if (idx !== undefined) {
+            var n       = _folderNodes[idx];
+            n._selected = nowSelected;
+            n.itemStyle = buildFolderNodeStyle(n._baseColor, nowSelected);
+          }
+          _folderChart.setOption({ series: [{ data: _folderNodes }] });
+          updateScanBtn(_allFolders);
+        });
+
+        _folderChart.setOption({
+          backgroundColor: 'transparent',
+          tooltip: {
+            trigger: 'item',
+            backgroundColor: 'rgba(5,9,20,0.92)',
+            borderColor: 'rgba(129,140,248,0.3)',
+            borderWidth: 1,
+            padding: [8, 12],
+            textStyle: { color: '#dde6f4', fontSize: 12, fontFamily: 'Inter, system-ui, sans-serif' },
+            formatter: function(params) {
+              if (!params || params.dataType !== 'node') return '';
+              var d = params.data;
+              var parts = [
+                '<b style="font-size:13px;color:#e2e8f0">' + escHtml(d.name) + '</b>',
+                '<span style="color:#94a3b8">' + (d._count || 0).toLocaleString() + ' emails</span>'
+              ];
+              if (d._isIndexed) parts.push('<span style="color:#34d399;font-size:11px">✓ Already indexed</span>');
+              if (d._selected)  parts.push('<span style="color:#00e5c9;font-size:11px">✓ Selected for scan</span>');
+              return parts.join('<br>');
+            }
+          },
+          series: [{
+            type: 'graph',
+            layout: 'force',
+            animation: true,
+            animationDuration: 800,
+            roam: true,
+            draggable: true,
+            cursor: 'pointer',
+            force: { repulsion: 280, gravity: 0.18, edgeLength: 0, layoutAnimation: true, friction: 0.65 },
+            label: {
+              show: true,
+              position: 'bottom',
+              distance: 6,
+              color: '#dde6f4',
+              fontSize: 10,
+              fontFamily: 'Inter, system-ui, sans-serif',
+              formatter: function(params) {
+                var d      = params.data;
+                var prefix = d._selected ? '{sel|✓ }' : '';
+                var count  = d._count ? '\n{ct|' + d._count.toLocaleString() + '}' : '';
+                return prefix + '{nm|' + d.name + '}' + count;
+              },
+              rich: {
+                sel: { color: '#00e5c9', fontWeight: '700', fontSize: 12, fontFamily: 'Inter, system-ui, sans-serif' },
+                nm:  { color: '#dde6f4', fontSize: 10, fontFamily: 'Inter, system-ui, sans-serif' },
+                ct:  { color: '#7a8fa8', fontSize: 9,  fontFamily: 'Inter, system-ui, sans-serif' }
+              }
+            },
+            emphasis: { focus: 'self', blurScope: 'global', scale: true },
+            data: _folderNodes,
+            links: []
+          }]
+        });
+      } else {
+        _folderChart.setOption({ series: [{ data: _folderNodes }] });
+      }
     }
 
     function updateScanBtn(folders) {
@@ -880,6 +920,7 @@
 
   var _indexDismissed = false;
   var _lastIdx = { done: 0, total: 0, folder: "" };
+  var _phase = "vector"; // "vector" | "graph"
 
   function _setMiniProgress(pct) {
     var fill  = document.getElementById("indexingMiniBarFill");
@@ -890,6 +931,7 @@
 
   function showIndexingOverlay(total) {
     _indexDismissed = false;
+    _phase = "vector";
     _lastIdx = { done: 0, total: total || 0, folder: "" };
     var mini = document.getElementById("indexingMiniBar");
     if (mini) { mini.style.display = "none"; mini.style.opacity = ""; mini.style.transition = ""; }
@@ -921,7 +963,9 @@
         var folderRow  = document.getElementById("indexingFolderRow");
         var folderName = document.getElementById("indexingFolderName");
         if (fill)  fill.style.width  = pct + "%";
-        if (stats) stats.textContent = Number(done).toLocaleString() + " / " + Number(total).toLocaleString() + " emails";
+        if (stats) stats.textContent = _phase === "graph"
+          ? "Graph: " + Number(done).toLocaleString() + " / " + Number(total).toLocaleString() + " emails"
+          : Number(done).toLocaleString() + " / " + Number(total).toLocaleString() + " emails";
         if (pctEl) pctEl.textContent = pct + "%";
         if (folder && folderRow && folderName) {
           folderRow.style.display = "";
@@ -980,7 +1024,30 @@
     _indexDismissed = false;
   }
 
-  // Global listener — vectorIndex events arrive regardless of current screen
+  // Transition the overlay/mini bar from vector phase to graph phase without closing.
+  function _switchToGraphPhase() {
+    _phase = "graph";
+    _lastIdx = { done: 0, total: 0, folder: "" };
+    var el = document.getElementById("indexingOverlay");
+    if (el && el.style.display !== "none") {
+      var fill      = document.getElementById("indexingBarFill");
+      var stats     = document.getElementById("indexingStatsText");
+      var pctEl     = document.getElementById("indexingPctText");
+      var folderRow = document.getElementById("indexingFolderRow");
+      if (fill)      fill.style.width       = "0%";
+      if (stats)     stats.textContent      = "Building Knowledge Graph…";
+      if (pctEl)     pctEl.textContent      = "0%";
+      if (folderRow) folderRow.style.display = "none";
+    }
+    var mini = document.getElementById("indexingMiniBar");
+    if (mini && mini.style.display !== "none") {
+      var label = document.getElementById("indexingMiniLabel");
+      if (label) label.textContent = "Graph phase";
+      _setMiniProgress(0);
+    }
+  }
+
+  // Global listener — index events arrive regardless of current screen
   browser.runtime.onMessage.addListener(function (msg) {
     if (!msg) return;
     switch (msg.action) {
@@ -991,9 +1058,22 @@
         updateIndexingOverlay(msg.done || 0, msg.total || 0, msg.folder || "");
         break;
       case "vectorIndexComplete":
-        hideIndexingOverlay(true);
+        _switchToGraphPhase();
         break;
       case "vectorIndexError":
+        hideIndexingOverlay(false);
+        break;
+      case "graphIndexStarted":
+        _lastIdx.total = msg.total || 0;
+        break;
+      case "graphIndexProgress":
+        updateIndexingOverlay(msg.done || 0, msg.total || 0, "");
+        break;
+      case "graphIndexComplete":
+      case "graphIndexSkipped":
+        hideIndexingOverlay(true);
+        break;
+      case "graphIndexError":
         hideIndexingOverlay(false);
         break;
     }
