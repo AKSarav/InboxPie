@@ -1026,31 +1026,31 @@
   }
 
   function buildSizeBarChartOption() {
+    const bucketColors = ["#ef4444", "#f97316", "#eab308", "#3b82f6"];
     const buckets = [
-      { key: "0-1MB", label: "0–1 MB", min: 0, max: 1_000_000 },
-      { key: "1-10MB", label: "1–10 MB", min: 1_000_000, max: 10_000_000 },
-      { key: "10-100MB", label: "10–100 MB", min: 10_000_000, max: 100_000_000 },
-      { key: "100MB+", label: "100 MB+", min: 100_000_000, max: Infinity }
+      { label: "0–1 MB", min: 0, max: 1_000_000 },
+      { label: "1–10 MB", min: 1_000_000, max: 10_000_000 },
+      { label: "10–100 MB", min: 10_000_000, max: 100_000_000 },
+      { label: "100 MB+", min: 100_000_000, max: Infinity }
     ];
 
-    const counts = buckets.map(b =>
-      allMessages.filter(m => (m.size || 0) >= b.min && (m.size || 0) < b.max).length
-    );
+    const data = buckets.map((b, i) => ({
+      name: b.label,
+      value: allMessages.filter(m => (m.size || 0) >= b.min && (m.size || 0) < b.max).length,
+      itemStyle: { color: bucketColors[i % bucketColors.length] }
+    })).filter(d => d.value > 0);
 
     return {
-      tooltip: { trigger: "axis" },
-      grid: { left: "10%", right: "10%", top: "12px", bottom: "40px", containLabel: true },
-      xAxis: {
-        type: "category",
-        data: buckets.map(b => b.label),
-        axisLabel: { fontSize: 11 }
-      },
-      yAxis: { type: "value", minInterval: 1 },
+      backgroundColor: "transparent",
+      tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${p.value.toLocaleString()} emails (${p.percent}%)` },
+      legend: { show: false },
       series: [{
-        type: "bar",
-        data: counts,
-        itemStyle: { borderRadius: [4, 4, 0, 0], color: colorFor(0) },
-        label: { show: true, position: "top", fontSize: 11 }
+        type: "pie",
+        radius: ["38%", "68%"],
+        center: ["50%", "50%"],
+        data: data,
+        label: { formatter: "{b}\n{d}%", fontSize: 11 },
+        emphasis: { itemStyle: { shadowBlur: 8, shadowColor: "rgba(0,0,0,0.4)" } }
       }]
     };
   }
@@ -1063,26 +1063,27 @@
     });
 
     const sorted = Object.entries(domains)
-      .sort((a, b) => b[1] - a[1]);
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 12);
 
-    const chartHeight = Math.max(400, sorted.length * 25);
+    const data = sorted.map(([domain, count], i) => ({
+      name: domain,
+      value: count,
+      itemStyle: { color: colorFor(i) }
+    }));
 
     return {
-      tooltip: { trigger: "axis" },
-      grid: { left: "15%", right: "5%", top: "12px", bottom: "12px", containLabel: true },
-      xAxis: {
-        type: "category",
-        data: sorted.map(([d]) => d),
-        axisLabel: { fontSize: 11, margin: 8 }
-      },
-      yAxis: { type: "value", minInterval: 1 },
+      backgroundColor: "transparent",
+      tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${p.value.toLocaleString()} emails (${p.percent}%)` },
+      legend: { show: false },
       series: [{
-        type: "bar",
-        data: sorted.map(([, c]) => c),
-        itemStyle: { borderRadius: [4, 4, 0, 0], color: colorFor(1) },
-        label: { show: true, position: "right", fontSize: 10 }
-      }],
-      height: chartHeight
+        type: "pie",
+        radius: ["38%", "68%"],
+        center: ["50%", "50%"],
+        data: data,
+        label: { formatter: "{b}\n{d}%", fontSize: 11 },
+        emphasis: { itemStyle: { shadowBlur: 8, shadowColor: "rgba(0,0,0,0.4)" } }
+      }]
     };
   }
 
@@ -1094,26 +1095,27 @@
     });
 
     const sorted = Object.entries(senders)
-      .sort((a, b) => b[1] - a[1]);
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 12);
 
-    const chartHeight = Math.max(400, sorted.length * 25);
+    const data = sorted.map(([sender, count], i) => ({
+      name: sender,
+      value: count,
+      itemStyle: { color: colorFor(i) }
+    }));
 
     return {
-      tooltip: { trigger: "axis" },
-      grid: { left: "15%", right: "5%", top: "12px", bottom: "12px", containLabel: true },
-      xAxis: {
-        type: "category",
-        data: sorted.map(([s]) => s),
-        axisLabel: { fontSize: 11, margin: 8 }
-      },
-      yAxis: { type: "value", minInterval: 1 },
+      backgroundColor: "transparent",
+      tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${p.value.toLocaleString()} emails (${p.percent}%)` },
+      legend: { show: false },
       series: [{
-        type: "bar",
-        data: sorted.map(([, c]) => c),
-        itemStyle: { borderRadius: [4, 4, 0, 0], color: colorFor(2) },
-        label: { show: true, position: "right", fontSize: 10 }
-      }],
-      height: chartHeight
+        type: "pie",
+        radius: ["38%", "68%"],
+        center: ["50%", "50%"],
+        data: data,
+        label: { formatter: "{b}\n{d}%", fontSize: 11 },
+        emphasis: { itemStyle: { shadowBlur: 8, shadowColor: "rgba(0,0,0,0.4)" } }
+      }]
     };
   }
 
@@ -1868,17 +1870,12 @@
     if (chart) {
       chart.on("click", (params) => {
         if (params.value && params.value > 0) {
-          const buckets = [
-            { key: "0-1MB", label: "0–1 MB", min: 0, max: 1_000_000 },
-            { key: "1-10MB", label: "1–10 MB", min: 1_000_000, max: 10_000_000 },
-            { key: "10-100MB", label: "10–100 MB", min: 10_000_000, max: 100_000_000 },
-            { key: "100MB+", label: "100 MB+", min: 100_000_000, max: Infinity }
-          ];
-          const bucketIndex = buckets.findIndex(b => b.label === params.name);
-          if (bucketIndex >= 0) selectSizeInsight(
-            document.querySelector(`[data-size-kind="${["bucket", "domain", "sender", "large"][bucketIndex]}"]`),
-            knownMessages
-          );
+          const bucketLabels = ["0–1 MB", "1–10 MB", "10–100 MB", "100 MB+"];
+          const bucketIndex = bucketLabels.indexOf(params.name);
+          if (bucketIndex >= 0) {
+            const btn = document.querySelector(`[data-size-kind="${["bucket", "domain", "sender", "large"][bucketIndex]}"]`);
+            if (btn) selectSizeInsight(btn, knownMessages);
+          }
         }
       });
     }
