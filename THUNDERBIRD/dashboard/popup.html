@@ -129,6 +129,20 @@
         </svg>
         Timeline
       </button>
+      <button class="tab" data-view="subscriptions">
+        <svg class="tab-icon" viewBox="0 0 20 20" aria-hidden="true">
+          <path d="M3 4h14c1 0 2 1 2 2v8c0 1-1 2-2 2H3c-1 0-2-1-2-2V6c0-1 1-2 2-2z"></path>
+          <path d="M3 6l7 5 7-5"></path>
+        </svg>
+        Subscriptions
+      </button>
+      <button class="tab" data-view="settings">
+        <svg class="tab-icon" viewBox="0 0 20 20" aria-hidden="true">
+          <circle cx="10" cy="10" r="1.5"></circle>
+          <path d="M10 3v3M10 14v3M3 10h3M14 10h3M5 5l2 2M13 13l2 2M15 5l-2 2M7 13l-2 2"></path>
+        </svg>
+        Settings
+      </button>
     </div>
 
     <main id="mainContent">
@@ -224,6 +238,41 @@
           <div id="timelineControls" class="timeline-controls"></div>
           <div id="timelineChart" class="timeline-chart"></div>
           <div id="timelineInsights" class="timeline-insights"></div>
+        </div>
+      </div>
+
+      <div id="subscriptionsView" class="view-panel" style="display:none;">
+        <div class="timeline-dashboard">
+          <div class="timeline-header">
+            <div>
+              <h2>Subscriptions</h2>
+              <p>Recurring senders and newsletters</p>
+            </div>
+          </div>
+          <div id="chart-subscriptions-container" class="chart-container"></div>
+          <div id="subscriptionsFreqTabs" class="subscriptions-freq-tabs"></div>
+          <div id="subscriptionsCards" class="subscriptions-cards"></div>
+        </div>
+      </div>
+
+      <div id="settingsView" class="view-panel" style="display:none;">
+        <div class="settings-dashboard">
+          <div class="settings-header">
+            <h2>Settings</h2>
+            <p>Manage categories and preferences</p>
+          </div>
+          <div class="settings-section">
+            <div class="settings-section-head">
+              <h3>Categories</h3>
+              <p>Organize emails with smart categories</p>
+            </div>
+            <div class="settings-add-category">
+              <input type="text" id="aisCatName" class="search-input" placeholder="Category name (e.g., Finance)">
+              <input type="text" id="aisCatKeywords" class="search-input" placeholder="Keywords (comma-separated, e.g., invoice, payment)">
+              <button type="button" id="aisCatAdd" class="btn btn-primary">Add Category</button>
+            </div>
+            <div id="aisCategoriesList" class="ais-categories-list"></div>
+          </div>
         </div>
       </div>
     </main>
