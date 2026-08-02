@@ -599,6 +599,17 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 .modal-box .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
 .badge-safe { display: inline-block; background: var(--success); color: white; font-size: 10px; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
 
+/* Chart containers for ECharts visualizations */
+.chart-container {
+  height: 250px;
+  margin-bottom: 20px;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  padding: 12px;
+  box-sizing: border-box;
+}
+.chart-container canvas, .chart-container svg { max-height: 100%; max-width: 100%; }
+
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg-primary); }
