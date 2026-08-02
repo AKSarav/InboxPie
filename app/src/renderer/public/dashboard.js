@@ -21,6 +21,10 @@
     query: "",
     sort: "date-desc",
   };
+  const reviewCheckedIds = new Set();
+  /** Virtual scroll tuning for the selection review table — must match .selection-review-row height in CSS. */
+  const SR_ROW_HEIGHT = 54;
+  const SR_VIRTUAL_BUFFER = 8;
   let privacyMaskEnabled = false;
   const DEFAULT_FOLDER_TYPES = ["inbox", "sent", "archives", "junk"];
   /** Selected scan folders as `${accountId}::${path}` keys. */
@@ -1124,6 +1128,10 @@
         if (selectedIds.size > 0) showSelectionReviewModal();
       };
 
+      // Used by the Browse view (intelligence.js) to open a message and show toasts
+      window._ip.openMessageInThunderbird = openMessageInThunderbird;
+      window._ip.showToast = showToast;
+
       // Show Mailbox + Intelligence nav sections
       var navMailbox = document.getElementById("navMailbox");
       if (navMailbox) navMailbox.style.display = "block";
@@ -1239,6 +1247,7 @@
       else if (view === "knowledgemap") { if (window.renderKnowledgeMap) window.renderKnowledgeMap(); }
       else if (view === "aisettings")   { if (window.renderAISettings)   window.renderAISettings(); }
       else if (view === "virtualbox")   { if (window.renderVirtualBox)   window.renderVirtualBox(); }
+      else if (view === "browse")       { if (window.renderBrowse)       window.renderBrowse(); }
     }
     updateBulkButtons();
   }
@@ -2559,6 +2568,7 @@
   // ══════════════════════════════════════════
   function showSelectionReviewModal() {
     if (selectedIds.size === 0) return;
+    reviewCheckedIds.clear();
     const modal = $("#selectionReviewModal");
     modal.style.display = "flex";
     renderSelectionReview();
@@ -2576,7 +2586,7 @@
     const vbBtn = $("#selectionAddToVirtualBox");
     if (vbBtn) {
       vbBtn.onclick = () => {
-        const ids = Array.from(selectedIds).map(String);
+        const ids = Array.from(reviewCheckedIds);
         if (!ids.length) return;
         browser.runtime.sendMessage({ action: "addInclusionMails", mailIds: ids }).then((res) => {
           const n = ids.length;
@@ -2590,12 +2600,22 @@
   function renderSelectionReview() {
     const selected = getReviewedSelectedMessages();
     const table = $("#selectionReviewTable");
-    const totalBytes = selected.reduce((sum, m) => sum + messageSize(m), 0);
-    const unread = selected.filter((m) => !m.read).length;
-    const accounts = new Set(selected.map((m) => m.account || m.accountId));
+    const hasQuery = reviewState.query.trim().length > 0;
 
-    $("#selectionReviewSummary").textContent =
-      `${selectedIds.size.toLocaleString()} selected · ${unread.toLocaleString()} unread · ${formatBytes(totalBytes)} known size · ${accounts.size} account${accounts.size === 1 ? "" : "s"}`;
+    // Title + summary change based on whether a search is active
+    const titleEl = $("#selectionReviewTitle");
+    if (titleEl) titleEl.textContent = hasQuery ? "Search results" : "Review selected emails";
+
+    if (hasQuery) {
+      $("#selectionReviewSummary").textContent =
+        `${selectedIds.size.toLocaleString()} selected · ${selected.length.toLocaleString()} matched`;
+    } else {
+      const totalBytes = selected.reduce((sum, m) => sum + messageSize(m), 0);
+      const unread = selected.filter((m) => !m.read).length;
+      const accounts = new Set(selected.map((m) => m.account || m.accountId));
+      $("#selectionReviewSummary").textContent =
+        `${selectedIds.size.toLocaleString()} selected · ${unread.toLocaleString()} unread · ${formatBytes(totalBytes)} known size · ${accounts.size} account${accounts.size === 1 ? "" : "s"}`;
+    }
 
     const search = $("#selectionReviewSearch");
     const sort = $("#selectionReviewSort");
@@ -2610,20 +2630,9 @@
       renderSelectionReview();
     };
 
-    $("#selectionReviewUnselectMatches").disabled = selected.length === 0;
-    $("#selectionReviewUnselectMatches").textContent = `Unselect Matches (${selected.length.toLocaleString()})`;
-    $("#selectionReviewUnselectMatches").onclick = () => {
-      selected.forEach((m) => removeSelectedId(String(m.id)));
-      updateStats();
-      if (selectedIds.size === 0) {
-        $("#selectionReviewModal").style.display = "none";
-        switchView(currentView);
-      } else {
-        renderSelectionReview();
-        switchView(currentView);
-        $("#selectionReviewModal").style.display = "flex";
-      }
-    };
+    // Search no longer has its own Keep only/Exclude buttons — the checkbox-driven
+    // "Exclude checked"/"Keep only checked" footer actions (combined with select-all)
+    // cover the same job without a redundant second set of controls.
 
     if (selectedIds.size === 0) {
       setSafeHtml(table, `<div class="selection-empty">No messages selected.</div>`);
@@ -2635,15 +2644,34 @@
       return;
     }
 
-    const visible = selected.slice(0, 500);
+    // Virtual scroll: only the rows currently in view are ever rendered, but
+    // select-all / checkbox-sync operate on the full filtered+sorted list so
+    // "select all" genuinely covers everything, not just what's on screen.
+    const allIds = selected.map((m) => String(m.id));
+    const allChecked = allIds.length > 0 && allIds.every((id) => reviewCheckedIds.has(id));
+    const someChecked = allIds.some((id) => reviewCheckedIds.has(id));
+    const totalHeight = selected.length * SR_ROW_HEIGHT;
+
     setSafeHtml(table, `
       <div class="selection-review-table-head">
-        <span>Subject</span><span>Sender</span><span>Date</span><span>Size</span><span></span>
+        <span class="sr-col-check"><input type="checkbox" id="srSelectAll" ${allChecked ? "checked" : ""}></span>
+        <span>Subject</span><span>Sender</span><span>Date</span><span>Size</span>
       </div>
-      ${visible.map((m) => `
-        <div class="selection-review-row" data-id="${escAttr(String(m.id))}">
+      <div class="sr-virtual-spacer" id="srVirtualSpacer" style="height:${totalHeight}px;"></div>
+    `);
+
+    const selAllCb = table.querySelector("#srSelectAll");
+    if (selAllCb && someChecked && !allChecked) selAllCb.indeterminate = true;
+    const spacer = table.querySelector("#srVirtualSpacer");
+    const headEl = table.querySelector(".selection-review-table-head");
+
+    function _rowHtml(m, idx) {
+      const mid = String(m.id);
+      return `
+        <div class="selection-review-row${reviewCheckedIds.has(mid) ? " sr-row-checked" : ""}" data-id="${escAttr(mid)}" style="top:${idx * SR_ROW_HEIGHT}px;">
+          <div class="sr-col-check"><input type="checkbox" class="sr-row-cb" data-id="${escAttr(mid)}" ${reviewCheckedIds.has(mid) ? "checked" : ""}></div>
           <div class="selection-subject">
-            <button type="button" class="selection-open-link" data-open-message="${escAttr(String(m.id))}" title="Open in Thunderbird">${escHtml(m.subject || "(No Subject)")}</button>
+            <button type="button" class="selection-open-link" data-open-message="${escAttr(mid)}" title="Open in Thunderbird">${escHtml(m.subject || "(No Subject)")}</button>
             <span>${escHtml(displayFolderName("", m.folder) || "Unknown folder")} · ${escHtml(displayAccount(m.account || ""))}</span>
           </div>
           <div class="selection-sender">
@@ -2652,27 +2680,94 @@
           </div>
           <div class="selection-date">${escHtml(formatDate(m.date))}</div>
           <div class="selection-size">${formatBytes(messageSize(m))}</div>
-          <button type="button" class="btn btn-secondary selection-unselect-btn" data-review-remove="${escAttr(String(m.id))}">
-            <span aria-hidden="true">×</span> Unselect
-          </button>
-        </div>`).join("")}
-      ${selected.length > visible.length ? `<div class="selection-review-more">Showing first ${visible.length.toLocaleString()} of ${selected.length.toLocaleString()} matches. Narrow with search to inspect more.</div>` : ""}
-    `);
+        </div>`;
+    }
 
-    table.querySelectorAll("[data-review-remove]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        removeSelectedId(btn.dataset.reviewRemove);
-        updateStats();
-        if (selectedIds.size === 0) {
-          $("#selectionReviewModal").style.display = "none";
-          switchView(currentView);
-        } else {
-          renderSelectionReview();
-          switchView(currentView);
-          $("#selectionReviewModal").style.display = "flex";
-        }
+    let rafPending = false;
+    function _renderVirtualRows() {
+      rafPending = false;
+      const headH = headEl ? headEl.offsetHeight : 0;
+      const relTop = Math.max(0, table.scrollTop - headH);
+      const startIndex = Math.max(0, Math.floor(relTop / SR_ROW_HEIGHT) - SR_VIRTUAL_BUFFER);
+      const visibleCount = Math.ceil(table.clientHeight / SR_ROW_HEIGHT) + SR_VIRTUAL_BUFFER * 2;
+      const endIndex = Math.min(selected.length, startIndex + visibleCount);
+      let html = "";
+      for (let i = startIndex; i < endIndex; i++) html += _rowHtml(selected[i], i);
+      setSafeHtml(spacer, html);
+    }
+    function _scheduleRenderVirtualRows() {
+      if (rafPending) return;
+      rafPending = true;
+      requestAnimationFrame(_renderVirtualRows);
+    }
+    table.onscroll = _scheduleRenderVirtualRows;
+    _renderVirtualRows();
+
+    // Select-all: operates on the full filtered/sorted list, not just the rendered window.
+    if (selAllCb) {
+      selAllCb.addEventListener("change", () => {
+        allIds.forEach((id) => selAllCb.checked ? reviewCheckedIds.add(id) : reviewCheckedIds.delete(id));
+        _updateCheckedActions();
+        _renderVirtualRows();
       });
+    }
+
+    // Per-row checkbox — delegated on the spacer since rows are recreated as the user scrolls.
+    spacer.addEventListener("change", (e) => {
+      const cb = e.target.closest(".sr-row-cb");
+      if (!cb) return;
+      const id = cb.dataset.id;
+      cb.checked ? reviewCheckedIds.add(id) : reviewCheckedIds.delete(id);
+      const row = cb.closest(".selection-review-row");
+      if (row) row.classList.toggle("sr-row-checked", cb.checked);
+      const allNow = allIds.every((vid) => reviewCheckedIds.has(vid));
+      const someNow = allIds.some((vid) => reviewCheckedIds.has(vid));
+      if (selAllCb) { selAllCb.checked = allNow; selAllCb.indeterminate = someNow && !allNow; }
+      _updateCheckedActions();
     });
+
+    function _updateCheckedActions() {
+      const n = reviewCheckedIds.size;
+      const actionsEl = $("#selectionReviewCheckedActions");
+      const excBtn    = $("#selectionReviewExcludeChecked");
+      const keepBtn2  = $("#selectionReviewKeepChecked");
+      const vbBtn2    = $("#selectionAddToVirtualBox");
+      if (!actionsEl) return;
+      actionsEl.style.display = n > 0 ? "" : "none";
+      if (excBtn)   excBtn.textContent  = `Exclude checked (${n.toLocaleString()})`;
+      if (keepBtn2) keepBtn2.textContent = `Keep only checked (${n.toLocaleString()})`;
+      if (vbBtn2)   vbBtn2.textContent   = `Add selected to VirtualBox (${n.toLocaleString()})`;
+    }
+    _updateCheckedActions();
+
+    // Footer: Exclude checked
+    const excCheckedBtn = $("#selectionReviewExcludeChecked");
+    if (excCheckedBtn) {
+      excCheckedBtn.onclick = () => {
+        const toRemove = Array.from(reviewCheckedIds);
+        toRemove.forEach((id) => removeSelectedId(id));
+        reviewCheckedIds.clear();
+        updateStats();
+        showToast(`Excluded ${toRemove.length.toLocaleString()} · ${selectedIds.size.toLocaleString()} remaining`);
+        if (selectedIds.size === 0) { $("#selectionReviewModal").style.display = "none"; switchView(currentView); }
+        else { renderSelectionReview(); switchView(currentView); $("#selectionReviewModal").style.display = "flex"; }
+      };
+    }
+
+    // Footer: Keep only checked
+    const keepCheckedBtn = $("#selectionReviewKeepChecked");
+    if (keepCheckedBtn) {
+      keepCheckedBtn.onclick = () => {
+        const keepIds = new Set(reviewCheckedIds);
+        const removedCount = Array.from(selectedIds).filter((id) => !keepIds.has(String(id))).length;
+        Array.from(selectedIds).forEach((id) => { if (!keepIds.has(String(id))) removeSelectedId(id); });
+        reviewCheckedIds.clear();
+        updateStats();
+        showToast(`Kept ${keepIds.size.toLocaleString()} · removed ${removedCount.toLocaleString()} from selection`);
+        if (selectedIds.size === 0) { $("#selectionReviewModal").style.display = "none"; switchView(currentView); }
+        else { renderSelectionReview(); switchView(currentView); $("#selectionReviewModal").style.display = "flex"; }
+      };
+    }
   }
 
   function removeSelectedId(rawId) {

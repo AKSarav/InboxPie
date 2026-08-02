@@ -226,11 +226,23 @@ class LanceStore {
 
       console.log(`[lanceStore] search (${useHybrid ? "hybrid" : "vector"}) returned ${rows.length} row(s)`);
       if (rows.length > 0) {
+        if (useHybrid) console.log(`[lanceStore] hybrid row columns: ${Object.keys(rows[0]!).join(", ")}`);
         const top3 = rows.slice(0, 3).map(r =>
-          `"${String(r["subject"] ?? "").slice(0, 50)}" dist=${Number(r["_distance"] ?? -1).toFixed(4)}`
+          `"${String(r["subject"] ?? "").slice(0, 50)}" dist=${Number(r["_distance"] ?? -1).toFixed(4)} rel=${Number(r["_relevance_score"] ?? -1).toFixed(4)}`
         );
         console.log(`[lanceStore] top results:\n  ${top3.join("\n  ")}`);
       }
+
+      // Hybrid (RRF-reranked) results carry a `_relevance_score` column (0..1, higher = better)
+      // instead of `_distance` — the reranker doesn't preserve raw vector distance. Vector-only
+      // results keep using cosine `_distance` (0 = identical, converted to a 0..1 score).
+      const scoreOf = (r: Record<string, unknown>): number => {
+        if (useHybrid) {
+          const rel = r["_relevance_score"] ?? r["_score"];
+          if (typeof rel === "number") return Math.max(0, Math.min(1, rel));
+        }
+        return Math.max(0, 1 - Number(r["_distance"] ?? 1));
+      };
 
       return rows.map((r) => ({
         id:           String(r["id"]           ?? ""),
@@ -245,11 +257,78 @@ class LanceStore {
         is_read:      Number(r["is_read"]      ?? 0),
         size:         Number(r["size"]         ?? 0),
         text_indexed: String(r["text_indexed"] ?? ""),
-        score:        Math.max(0, 1 - Number(r["_distance"] ?? 1)),
+        score:        scoreOf(r),
       }));
     } catch (e) {
       console.error("[lanceStore] search error:", e);
       return [];
+    }
+  }
+
+  /**
+   * Exhaustive BM25 full-text match over the FULL table — no top-K limit like
+   * search()'s vector/hybrid path. search() always chains through `.nearestTo()`
+   * (ANN), which has an implicit top-K even for its fused BM25 leg; this method
+   * deliberately skips `.nearestTo()` entirely, so LanceDB's BM25 index (already
+   * built via ensureFtsIndex()) returns every matching row, not just the
+   * ANN-ranked top-N. That's what fixes "only 150 of 215 FastTag emails
+   * considered" — the ANN leg alone can silently exclude real matches before a
+   * downstream reranker ever sees them. `score` is a neutral placeholder;
+   * callers should merge this with search()'s candidates and let a reranker
+   * assign real relevance. Falls back to a raw LIKE scan if the FTS index isn't
+   * available for any reason, so this never hard-fails search.
+   *
+   * Uses fuzzy matching (edit-distance 2): brand/product names in real email
+   * text often don't match the literal spelling a user or LLM types — e.g.
+   * "FastTag" (typed) vs "FASTag" (ICICI's actual stylization) differ by one
+   * character and are DIFFERENT TOKENS to exact BM25, so a bare-string query
+   * silently returns 0 rows even though the term is genuinely present.
+   * Verified against production data: fuzziness=2 recovers all matches that
+   * fuzziness=0/1 miss for this exact case.
+   */
+  async searchExhaustive(term: string, opts: { limit?: number } = {}): Promise<SearchResult[]> {
+    await this.open();
+    if (!this.table || !term.trim()) return [];
+    const limit = opts.limit ?? 1000; // safety ceiling only, not a meaningful cap
+    const toResult = (r: Record<string, unknown>): SearchResult => ({
+      id:           String(r["id"]           ?? ""),
+      subject:      String(r["subject"]      ?? ""),
+      sender_email: String(r["sender_email"] ?? ""),
+      sender_name:  String(r["sender_name"]  ?? ""),
+      domain:       String(r["domain"]       ?? ""),
+      folder:       String(r["folder"]       ?? ""),
+      folder_type:  String(r["folder_type"]  ?? ""),
+      date_unix:    Number(r["date_unix"]    ?? 0),
+      year:         Number(r["year"]         ?? 0),
+      is_read:      Number(r["is_read"]      ?? 0),
+      size:         Number(r["size"]         ?? 0),
+      text_indexed: String(r["text_indexed"] ?? ""),
+      score:        0.5,
+    });
+
+    try {
+      await this.ensureFtsIndex();
+      const fuzzyQuery = new lancedb.MatchQuery(term.trim(), "text_indexed", { fuzziness: 2 });
+      const rows = await (this.table as any).query()
+        .fullTextSearch(fuzzyQuery)
+        .limit(limit)
+        .toArray() as Record<string, unknown>[];
+      console.log(`[lanceStore] searchExhaustive("${term}") → ${rows.length} row(s) (BM25 fuzzy)`);
+      return rows.map(toResult);
+    } catch (e) {
+      console.warn(`[lanceStore] searchExhaustive BM25 path failed, falling back to LIKE scan:`, (e as Error).message);
+      try {
+        const esc = (s: string) => s.replace(/'/g, "''");
+        const rows = await (this.table as any).query()
+          .where(`LOWER(text_indexed) LIKE LOWER('%${esc(term.trim())}%')`)
+          .limit(limit)
+          .toArray() as Record<string, unknown>[];
+        console.log(`[lanceStore] searchExhaustive("${term}") → ${rows.length} row(s) (LIKE fallback)`);
+        return rows.map(toResult);
+      } catch (e2) {
+        console.error("[lanceStore] searchExhaustive fallback also failed:", e2);
+        return [];
+      }
     }
   }
 

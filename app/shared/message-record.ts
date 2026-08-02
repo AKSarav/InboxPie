@@ -24,6 +24,10 @@ export interface MessageRecord {
   size: number;
   body_preview?: string;
   body_display?: string;
+
+  // NEW: Provider-native identifier for reliable content fetching
+  provider?: string;        // 'apple-mail', 'thunderbird', 'gmail', 'o365'
+  identifier_id?: string;   // Provider-native ID: ROWID (Apple), message key (TB), UID (Gmail), Item ID (O365)
 }
 
 export interface MailAccount {
@@ -95,7 +99,7 @@ export type RpcAction =
   | { action: "topDomains"; limit?: number }
   // SmartSearch chat
   | { action: "checkOllama" }
-  | { action: "chatQuery"; userMessage: string; history: Array<{ role: string; content: string }>; model?: string; provider?: string; folders?: string[]; mode?: "fast" | "deep" }
+  | { action: "chatQuery"; userMessage: string; history: Array<{ role: string; content: string }>; model?: string; provider?: string; mode?: "fast" | "deep" }
   | { action: "cancelChatQuery" }
   // AI provider settings (BYOK)
   | { action: "getAISettings" }
@@ -118,6 +122,7 @@ export type RpcAction =
   | { action: "getCluster2D" }
   // Vector index / semantic RAG
   | { action: "checkEmbedding" }
+  | { action: "checkReranker" }
   | { action: "getSetupStatus" }
   | { action: "markAppReady" }
   | { action: "getIndexingStatus" }
@@ -143,6 +148,7 @@ export type RpcAction =
   | { action: "getIndexRunHistory" }
   | { action: "getVirtualBoxMails" }
   | { action: "getVirtualBoxStats" }
+  | { action: "smartSearchVirtualBox"; query: string; limit?: number }
   | { action: "getInclusionRules" }
   | { action: "addInclusionDomain";  domain: string }
   | { action: "removeInclusionDomain"; domain: string }

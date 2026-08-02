@@ -15,6 +15,8 @@ export default defineConfig({
           // Compiled as a separate file so worker_threads can reference it by path.
           // Output lands at out/main/embedding-worker.js alongside index.js.
           "embedding-worker": resolve(__dirname, "src/main/agent/embedding-worker.ts"),
+          // Same pattern — cross-encoder reranker worker (out/main/reranker-worker.js).
+          "reranker-worker": resolve(__dirname, "src/main/agent/reranker-worker.ts"),
         },
       },
     },

@@ -70,10 +70,12 @@
     if (enterBtn) enterBtn.addEventListener("click", function () { stopSetupPoll(); enterApp(); });
     if (skipBtn)  skipBtn.addEventListener("click",  function () { stopSetupPoll(); enterApp(); });
 
-    // Listen for live embedding progress events (fired from main process prewarm)
+    // Listen for live embedding/reranker progress events (fired from main process prewarm)
     browser.runtime.onMessage.addListener(function (msg) {
-      if (!msg || msg.action !== "embeddingProgress") return;
-      applyEmbeddingProgress(msg);
+      if (!msg) return;
+      if (msg.action === "embeddingProgress") applyEmbeddingProgress(msg);
+      else if (msg.action === "rerankerProgress") applyRerankerProgress(msg);
+      else return;
       // Re-derive overall state from the latest full status merged with live progress
       if (_setupStatus) updateSetupUI(_setupStatus);
     });
@@ -119,6 +121,35 @@
     } else if (msg.phase === "error") {
       setTaskStatus(task, badge, "error", "Failed");
       if (desc) desc.textContent = "Download failed: " + (msg.error || "unknown error");
+    }
+  }
+
+  // Map a live rerankerProgress event onto the UI without waiting for a full poll
+  function applyRerankerProgress(msg) {
+    var task   = document.getElementById("setupTaskReranker");
+    var badge  = document.getElementById("setupBadgeReranker");
+    var desc   = document.getElementById("setupDescReranker");
+    var barW   = document.getElementById("setupBarReranker");
+    var fill   = document.getElementById("setupBarFillReranker");
+    var pctEl  = document.getElementById("setupPctReranker");
+    if (!task) return;
+
+    if (msg.phase === "ready") {
+      setTaskStatus(task, badge, "done", "Ready");
+      if (desc)  desc.textContent  = "bge-reranker-base loaded in memory";
+      if (barW)  barW.style.display = "none";
+    } else if (msg.phase === "downloading") {
+      setTaskStatus(task, badge, "active", "Downloading");
+      if (barW)  barW.style.display = "";
+      var pct = msg.pct || 0;
+      if (fill)  fill.style.width = pct + "%";
+      if (pctEl) pctEl.textContent = pct + "%";
+    } else if (msg.phase === "error") {
+      // Optional model — search still works via hybrid ranking without it, so this
+      // isn't fatal, just surfaced honestly rather than hidden.
+      setTaskStatus(task, badge, "warn", "Unavailable");
+      if (desc) desc.textContent = "Download failed — AgentChat search will use hybrid ranking instead (" + (msg.error || "unknown error") + ")";
+      if (barW) barW.style.display = "none";
     }
   }
 

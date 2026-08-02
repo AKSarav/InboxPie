@@ -14,11 +14,14 @@
  */
 
 import { createReactAgent } from "@langchain/langgraph/prebuilt";
+import { MemorySaver } from "@langchain/langgraph";
 import { tool } from "@langchain/core/tools";
-import { HumanMessage, AIMessage } from "@langchain/core/messages";
+import { HumanMessage, AIMessage, type BaseMessage } from "@langchain/core/messages";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
 import { embedText }   from "./embeddings";
+import { rerank }      from "./reranker";
 import { lanceStore }  from "../db/lance-store";
 import { createLLM, loadOllamaThinkingModels } from "./llm-providers";
 import type { AgentResponse, AgentStep } from "./nlp-agent";
@@ -80,7 +83,7 @@ function dateContext(): string {
 // ── Tool 1: semantic_search ───────────────────────────────────────────────────
 
 const semanticSearch = tool(
-  async ({ query, year_from, year_to, folder_type, folder, domain, sender_email, limit }) => {
+  async ({ query, year_from, year_to, folder_type, folder, domain, sender_email, limit, keyword }) => {
     const stats = await lanceStore.getStats();
     if (stats.total === 0) {
       return JSON.stringify({
@@ -93,8 +96,14 @@ const semanticSearch = tool(
       const embedStart = Date.now();
       const queryVec   = await embedText(query);
       console.log(`${ts()} [SmartSearch] embedding ready dim=${queryVec.length} (${Date.now() - embedStart}ms), searching…`);
-      const results = await lanceStore.search(queryVec, {
-        limit:       limit ?? 25,
+
+      // Stage 1 — broad recall: hybrid vector+BM25 search over the whole index.
+      // This is deliberately generous; it's just the candidate pool for reranking,
+      // not the final answer, so a higher cap here costs little (local query).
+      const requestedLimit = limit ?? 150;
+      const candidatePool  = Math.max(requestedLimit, 100);
+      const candidates = await lanceStore.search(queryVec, {
+        limit:       candidatePool,
         yearFrom:    year_from,
         yearTo:      year_to,
         folderType:  folder_type,
@@ -103,12 +112,81 @@ const semanticSearch = tool(
         senderEmail: sender_email,
         queryText:   query,
       });
-      console.log(`${ts()} [SmartSearch] semantic_search("${query}") → ${results.length} result(s)`);
-      if (results.length === 0) {
+      console.log(`${ts()} [SmartSearch] stage-1 hybrid search → ${candidates.length} candidate(s)`);
+
+      // Stage 1b — exhaustive literal match: LanceDB's ANN index always has an
+      // implicit top-K (that's the "only 150 of 215 FastTag emails" bug), so a
+      // specific named topic/brand can be silently excluded from the candidate
+      // pool before reranking ever runs. A plain (non-ANN) filtered scan has no
+      // such limit — merge its results in so nothing is excluded before stage 2
+      // gets to judge relevance. Runs unconditionally (falling back to `query`
+      // when the model doesn't set `keyword`) rather than depending on the LLM
+      // reliably populating the optional field — a smaller/local model won't
+      // always do that, which was silently defeating this fix.
+      const exhaustiveTerm = (keyword && keyword.trim()) || query;
+      let mergedCandidates = candidates;
+      const exhaustive = await lanceStore.searchExhaustive(exhaustiveTerm);
+      console.log(`${ts()} [SmartSearch] stage-1b exhaustive("${exhaustiveTerm}") → ${exhaustive.length} row(s)`);
+      if (exhaustive.length > 0) {
+        const byId = new Map(candidates.map((r) => [r.id, r]));
+        for (const r of exhaustive) if (!byId.has(r.id)) byId.set(r.id, r);
+        mergedCandidates = [...byId.values()];
+      }
+
+      if (mergedCandidates.length === 0) {
         return JSON.stringify({ results: [], message: `No emails found for: "${query}"` });
       }
-      const mapped = results.map((r) => {
-        const body = extractBody(r.text_indexed ?? "");
+
+      // Stage 2 — cross-encoder rerank: bi-encoder cosine similarity and BM25 are
+      // both approximations; the reranker reads (query, email) TOGETHER and gives
+      // a much more trustworthy relevance score. This is also what fixes the original
+      // bias problem — instead of guessing a result COUNT, we threshold on genuine
+      // relevance, so "list all my X emails" returns however many actually qualify,
+      // not an arbitrary top-N.
+      //
+      // NOT used to exclude candidates (see below) — kept only to flag low-confidence
+      // results in the note. Observed on real data: exact brand-name matches (e.g.
+      // "ICICI Bank FASTag transaction alert" for query "FastTag") scoring below this
+      // bar and being silently dropped, meaning the cross-encoder's absolute score
+      // scale isn't reliably calibrated for email text. A threshold filter on an
+      // uncalibrated score can only ever destroy correct results, never add missing
+      // ones, so it's not safe to use as a hard gate.
+      const RELEVANCE_THRESHOLD = 0.35;
+      let scored: Array<{ r: (typeof mergedCandidates)[number]; score: number }>;
+      let rerankFailed = false;
+      let rerankError  = "";
+      let rerankMs     = 0;
+      try {
+        const rerankStart = Date.now();
+        const rerankScores = await rerank(query, mergedCandidates.map((r) => r.text_indexed ?? ""));
+        rerankMs = Date.now() - rerankStart;
+        console.log(`${ts()} [SmartSearch] reranked ${mergedCandidates.length} candidate(s) (${rerankMs}ms)`);
+        scored = mergedCandidates.map((r, i) => ({ r, score: rerankScores[i] ?? 0 }));
+        scored.sort((a, b) => b.score - a.score);
+        // No filter here by design: the reranker orders and scores results, but every
+        // candidate a recall stage (vector, hybrid BM25, or exhaustive keyword match)
+        // found is kept. Confidence is surfaced per-row via the "relevance" percentage
+        // instead of being used to silently remove rows.
+      } catch (e) {
+        // Reranker model missing/failed to load — fall back to stage-1 hybrid order
+        // rather than breaking search entirely. Every candidate is kept in that case.
+        rerankError = (e as Error).message;
+        console.warn(`${ts()} [SmartSearch] reranker unavailable, using hybrid order:`, rerankError);
+        rerankFailed = true;
+        scored = mergedCandidates.map((r) => ({ r, score: r.score }));
+      }
+
+      // Absolute safety cap on the final payload — not a relevance cutoff, just a
+      // token-budget guard for pathologically broad queries where most of the
+      // candidate pool passes the threshold.
+      const OUTPUT_CAP = 500;
+      const finalMatches = scored.slice(0, OUTPUT_CAP);
+
+      // Full body content is expensive in tokens — attach it only to the top handful
+      // of results. Everything else still carries subject/sender/date/relevance,
+      // which is enough to count or list, just not to quote from.
+      const CONTENT_CAP = 15;
+      const mapped = finalMatches.map(({ r, score }, i) => {
         const row: Record<string, unknown> = {
           sender:    r.sender_name || r.sender_email,
           email:     r.sender_email,
@@ -118,13 +196,48 @@ const semanticSearch = tool(
           year:      r.year,
           folder:    r.folder,
           is_read:   r.is_read === 1,
-          relevance: `${Math.round(r.score * 100)}%`,
+          relevance: `${Math.round(score * 100)}%`,
         };
-        if (body) row["content"] = body.slice(0, 1500);
+        if (i < CONTENT_CAP) {
+          const body = extractBody(r.text_indexed ?? "");
+          if (body) row["content"] = body.slice(0, 1500);
+        }
         return row;
       });
-      console.log(`${ts()} [SmartSearch] top: ${mapped.slice(0, 3).map(r => `"${r.subject}" (${r.relevance})`).join(" | ")}`);
-      return JSON.stringify({ results: mapped });
+      console.log(`${ts()} [SmartSearch] ${mergedCandidates.length} candidate(s) → returning ${mapped.length}; top: ${mapped.slice(0, 3).map(r => `"${r["subject"]}" (${r["relevance"]})`).join(" | ")}`);
+
+      const notes: string[] = [];
+      if (rerankFailed) {
+        notes.push("The relevance reranker was unavailable, so these results are ordered by initial search score rather than a verified relevance check — treat counts as approximate.");
+      } else if (candidates.length >= candidatePool) {
+        // Even the stage-1 candidate pool may have been truncated for a very broad query.
+        notes.push(`The search candidate pool was capped at ${candidatePool}; if this seems incomplete for an exact count, call semantic_search again with a higher "limit".`);
+      } else {
+        notes.push(`All ${scored.length} results shown are the complete matching set from the searched candidates (vector similarity + keyword + exhaustive term match) — not an arbitrary top-N.`);
+      }
+      if (scored.length > OUTPUT_CAP) {
+        notes.push(`${scored.length} candidates matched but only the top ${OUTPUT_CAP} are included here to keep the response manageable.`);
+      }
+      if (!rerankFailed) {
+        const lowConfidenceCount = scored.filter((x) => x.score < RELEVANCE_THRESHOLD).length;
+        if (lowConfidenceCount > 0) {
+          notes.push(`${lowConfidenceCount} of these scored below the usual relevance confidence bar — use each result's "relevance" percentage to judge how certain a match it is; low scores aren't discarded since the reranker's absolute scale isn't fully calibrated for email text, but weight them accordingly.`);
+        }
+      }
+
+      return JSON.stringify({
+        results: mapped,
+        note: notes.join(" "),
+        // Surfaced to the UI (not just the LLM) so reranking is visibly happening
+        // or visibly failing, instead of silently falling back to hybrid order.
+        rerank: {
+          applied:    !rerankFailed,
+          candidates: mergedCandidates.length,
+          passed:     scored.length,
+          ms:         rerankMs,
+          error:      rerankFailed ? rerankError : undefined,
+        },
+      });
     } catch (e) {
       console.error(`${ts()} [SmartSearch] semantic_search tool error:`, e);
       return JSON.stringify({ error: "search_failed", message: (e as Error).message });
@@ -132,7 +245,7 @@ const semanticSearch = tool(
   },
   {
     name:        "semantic_search",
-    description: "Find emails by MEANING or TOPIC. Use for: 'NPS investments', 'purchase receipts', 'travel bookings', 'FD matured'. Returns a JSON object with a 'results' array. Each result may include a 'content' field (full email body) when Full Content indexing is enabled.",
+    description: "Find emails by MEANING or TOPIC. Use for: 'NPS investments', 'purchase receipts', 'travel bookings', 'FD matured'. Internally: broad hybrid (vector+BM25) recall, then every candidate is re-scored by a cross-encoder reranker and only genuinely relevant ones are returned — so the 'results' array is the actual matching set, not an arbitrary top-N, and is safe to use for counting or listing completely. Always read the 'note' field: it tells you whether the candidate pool itself was capped (rare, only for very broad queries) or the reranker was unavailable, in which case treat any count as approximate. Each result may include a 'content' field (full email body, only on the top ~15 most relevant) when Full Content indexing is enabled.",
     schema: z.object({
       query:        z.string().describe("Natural language topic, e.g. 'NPS national pension system investment statement'"),
       year_from:    z.number().optional().describe("Filter emails from this year onwards"),
@@ -141,7 +254,8 @@ const semanticSearch = tool(
       folder:       z.string().optional().describe("Specific folder path, e.g. 'INBOX' or 'Archive'"),
       domain:       z.string().optional().describe("Sender domain to pre-filter, e.g. 'ppfas.com'. Use only when you are CERTAIN of the exact domain."),
       sender_email: z.string().optional().describe("Exact sender email to pre-filter"),
-      limit:        z.number().optional(),
+      limit:        z.number().optional().describe("Size of the initial candidate pool to consider (default 150, minimum 100 always used). Results returned are only the ones that pass the relevance reranker, so this rarely needs raising — do so (e.g. 300-500) only if the 'note' field says the candidate pool itself was capped."),
+      keyword:      z.string().optional().describe("A short literal term (1-3 words) to also exhaustively match verbatim in email text — set this for named topics/brands/services (e.g. 'FastTag', 'PPFAS', 'NPS') so EVERY email containing that exact term is considered, not just the top semantically-similar ones. Leave unset for purely conceptual queries with no single specific term to anchor on."),
     }),
   },
 );
@@ -312,13 +426,17 @@ METADATA PRE-FILTERING:
     "last 2 years" → year_from=${new Date().getFullYear() - 2}, year_to=${new Date().getFullYear()}
 
 WORKFLOW FOR TOPIC QUERIES (investments, receipts, bookings, etc.):
-1. semantic_search — use specific descriptive terms, add year/domain filters when clearly stated in the question
+1. semantic_search — use specific descriptive terms, add year/domain filters when clearly stated in the question. If the topic is a specific named brand/service/product (e.g. "FastTag", "PPFAS", "NPS") rather than a general concept, ALSO set "keyword" to that exact term so every literal mention is considered, not just the top semantically-similar ones.
 2. Read the results. If they look off-topic (wrong category of emails returned), try one more semantic_search with broader or rephrased terms
 3. ${fast ? "Reply directly as text" : "Call final_answer with the best response_type"}
 
 WORKFLOW FOR COUNT/RANKING QUERIES (top senders, who emails me most, overview):
 1. aggregate_stats
 2. ${fast ? "Reply directly as text" : "Call final_answer"}
+
+WORKFLOW FOR FOLLOW-UP / REFORMAT REQUESTS:
+- If the user is asking you to reformat, relabel, re-chart, re-sort, or filter data from EARLIER IN THIS CONVERSATION (visible above, in your own previous tool results) rather than asking about a new topic, reuse that data directly — copy the relevant rows into your response — instead of calling semantic_search/aggregate_stats again.
+- Only search again if the user is asking about something new, or explicitly asks you to search again.
 
 RULES:
 - Maximum 2 semantic_search calls per turn
@@ -336,11 +454,17 @@ JSON FORMAT (CRITICAL):
 
 type AgentEventFn = (ev: { action: string; tool?: string; label?: string; detail?: string; elapsed?: number; text?: string }) => void;
 
+// Persists the FULL conversation graph state — including real tool-call outputs,
+// not just text — across chat turns. Module-level because each new chat message
+// is a fresh call to runAppleMailAgent; without this the agent has no memory of
+// its own previous searches, only whatever plain text survives in conversationHistory.
+const _checkpointer = new MemorySaver();
+let _currentThreadId: string | null = null;
+
 export async function runAppleMailAgent(
   userMessage: string,
   conversationHistory: Array<{ role: string; content: string }>,
   model: string,
-  folders?: string[],
   onEvent?: AgentEventFn,
   mode: "fast" | "deep" = "fast",
   signal?: AbortSignal,
@@ -362,14 +486,10 @@ export async function runAppleMailAgent(
     onEvent?.({ action: "agentStep", tool, label, detail, elapsed });
   };
 
-  log(`[SmartSearch] ▶ Query: "${userMessage}" | model=${model} | mode=${mode} | folders=${folders?.join(",") || "all"}`);
+  log(`[SmartSearch] ▶ Query: "${userMessage}" | model=${model} | mode=${mode}`);
 
   if (provider === "ollama") { try { await loadOllamaThinkingModels(); } catch { /* offline */ } }
   const llm = createLLM(provider, model, apiKey);
-
-  const folderScope = folders && folders.length
-    ? `\nFOLDER SCOPE: The user has scoped this query to: ${folders.map((f) => `"${f}"`).join(", ")}. Pass folder=<path> when calling semantic_search.\n`
-    : "";
 
   const profileBlock = await buildIndexProfileBlock();
 
@@ -380,12 +500,32 @@ export async function runAppleMailAgent(
   const agent = createReactAgent({
     llm,
     tools,
-    prompt: buildSystemPrompt(mode) + folderScope + profileBlock,
+    prompt: buildSystemPrompt(mode) + profileBlock,
+    checkpointer: _checkpointer,
+    // Bounds what's sent to the LLM each turn as the checkpointed thread grows
+    // over a long conversation — the FULL history stays in the checkpoint
+    // regardless, this only windows what's actually fed to the model.
+    preModelHook: (state: { messages: BaseMessage[] }) => ({ llmInputMessages: state.messages.slice(-24) }),
   });
 
-  const historyMessages = conversationHistory.slice(-8).map((m) =>
-    m.role === "user" ? new HumanMessage(m.content) : new AIMessage(m.content),
-  );
+  // conversationHistory.length === 0 reliably means "new chat" (dashboard.js's
+  // ssClearChat() resets chat.history to [], and a new chat's first message
+  // always sends history: []). Falling back to a fresh thread when we have no
+  // _currentThreadId at all also covers the checkpointer having lost state
+  // (e.g. a main-process restart) — in that recovery case, seed the new thread
+  // with the renderer's text history so we degrade to text-only continuity
+  // instead of losing it outright.
+  let seedMessages: BaseMessage[] = [];
+  const isFreshChat = conversationHistory.length === 0;
+  if (isFreshChat || !_currentThreadId) {
+    const isRecovery = !isFreshChat && !_currentThreadId;
+    _currentThreadId = randomUUID();
+    if (isRecovery) {
+      seedMessages = conversationHistory.slice(-8).map((m) =>
+        m.role === "user" ? new HumanMessage(m.content) : new AIMessage(m.content),
+      );
+    }
+  }
 
   let finalArgs: {
     intent: string;
@@ -398,8 +538,8 @@ export async function runAppleMailAgent(
 
   try {
     const stream = agent.streamEvents(
-      { messages: [...historyMessages, new HumanMessage(userMessage)] },
-      { version: "v2", recursionLimit: RECURSION_LIMIT, signal },
+      { messages: [...seedMessages, new HumanMessage(userMessage)] },
+      { version: "v2", recursionLimit: RECURSION_LIMIT, signal, configurable: { thread_id: _currentThreadId } },
     );
 
     for await (const event of stream) {
@@ -458,6 +598,22 @@ export async function runAppleMailAgent(
               parsed.results.slice(0, 5).forEach((r: Record<string, unknown>, i: number) =>
                 log(`  [${i + 1}] ${r.subject ?? r.sender} (${r.relevance ?? ""})`),
               );
+              // Surface reranking as its own visible step — whether it ran or fell back —
+              // instead of hiding it inside a JSON field the UI never renders.
+              const rk = parsed.rerank as { applied: boolean; candidates: number; passed: number; ms: number; error?: string } | undefined;
+              if (rk) {
+                if (rk.applied) {
+                  const label = `Reranked ${rk.candidates} candidates → ${rk.passed} relevant`;
+                  log(`[SmartSearch] 🎯 ${label} (${rk.ms}ms)`);
+                  emit("semantic_search", label, `${rk.ms}ms`, rk.ms);
+                  agentSteps.push({ type: "result", label });
+                } else {
+                  const label = "Reranker unavailable — used hybrid ranking";
+                  log(`[SmartSearch] ⚠ ${label}: ${rk.error}`);
+                  emit("semantic_search", label, rk.error);
+                  agentSteps.push({ type: "retry", label, detail: rk.error });
+                }
+              }
               emit("semantic_search", `Found ${parsed.results.length} matching emails`, undefined, elapsed);
               agentSteps.push({ type: "result", label: `Found ${parsed.results.length} matching emails` });
             } else {
@@ -528,7 +684,7 @@ export async function runAppleMailAgent(
     if (!_retried && msg.includes("error parsing tool call")) {
       log(`[SmartSearch] ⚠ Ollama tool-call JSON parse error — retrying once`);
       emit("think", "Retrying", "Model produced malformed JSON — trying again");
-      return runAppleMailAgent(userMessage, conversationHistory, model, folders, onEvent, mode, signal, true, provider, apiKey);
+      return runAppleMailAgent(userMessage, conversationHistory, model, onEvent, mode, signal, true, provider, apiKey);
     }
     log(`[SmartSearch] ❌ Agent error after ${Date.now() - queryStart}ms:`, msg);
     if (semanticRows || aggregateRows) {

@@ -35,73 +35,195 @@ const TYPE_MAP: Record<string, string> = {
   topic: "TOPIC", concept: "TOPIC", category: "TOPIC", subject: "TOPIC",
   place: "PLACE", location: "PLACE", city: "PLACE", country: "PLACE", region: "PLACE",
   event: "EVENT", occasion: "EVENT", conference: "EVENT",
+  date: "DATE", time: "DATE", deadline: "DATE", schedule: "DATE",
+  amount: "AMOUNT", price: "AMOUNT", cost: "AMOUNT", total: "AMOUNT", value: "AMOUNT", money: "AMOUNT",
 };
 
 function mapType(raw: string): string {
   return TYPE_MAP[raw.toLowerCase().trim()] ?? "TOPIC";
 }
 
-// ── Batch extraction ───────────────────────────────────────────────────────────
+// ── Regex safety net (used only if the classification LLM call fails) ─────────
 
-const EXTRACTION_PROMPT = (emailLines: string) => `\
-Extract a knowledge graph as SPO (Subject-Predicate-Object) triplets from these emails.
-Return ONLY a valid JSON array — no markdown, no explanation.
+const CURRENCY_AMOUNT_RE = /[₹$€£¥]\s?[\d,]+(\.\d+)?|\b(?:Rs\.?|INR|USD|EUR|GBP)\s?[\d,]+(\.\d+)?\b/i;
+const DATE_RE = /\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b|\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}\b/i;
 
-Emails:
-${emailLines}
+function classifyLabelRegex(label: string): string {
+  const trimmed = label.trim();
+  if (CURRENCY_AMOUNT_RE.test(trimmed)) return "AMOUNT";
+  if (DATE_RE.test(trimmed)) return "DATE";
+  return "Entity";
+}
 
-Rules:
-- Use IS_A to declare entity types: {"subject":"ET Money","predicate":"IS_A","object":"Organization"}
-- Valid types for IS_A: Organization, Person, Product, Topic, Place, Event
-- Use meaningful predicates for facts: WORKS_FOR, SENDS, PROCESSES, OFFERS, RELATED_TO, PROVIDES, MANAGES
-- Keep subject and object labels short (1-4 words). Skip generic words like "email", "message", "notification", "update", "new", "dear".
-- All triplets in a single flat JSON array.
+// ── Prompt ─────────────────────────────────────────────────────────────────────
 
-Example output:
-[
-  {"subject":"ET Money","predicate":"IS_A","object":"Organization"},
-  {"subject":"NPS","predicate":"IS_A","object":"Product"},
-  {"subject":"ET Money","predicate":"PROCESSES","object":"NPS"},
-  {"subject":"HDFC Bank","predicate":"IS_A","object":"Organization"},
-  {"subject":"HDFC Bank","predicate":"SENDS","object":"Credit Card Statement"}
-]`;
+const EXTRACTION_PROMPT = (emailBlocks: string) => `\
+Extract the Key entities and relationships from this content at a deeper level -
+this is required for the Email Intelligence we are building and more entities and relationships the best.
+First try to Summarize the email understand what it is and create meaningful entities and relationships plan and proceed with extraction.
+The Email can be from any genre or domain relevancy - Just make sure to get the meaningful triplets with domain/context relevance -
+this would be stored for the GraphRAG and Knowledge Engineering - Keep it in mind.
 
-async function extractBatch(mails: PendingMail[], llm: BaseChatModel): Promise<Triplet[]> {
-  const emailLines = mails
-    .map((m, i) => `${i + 1}. From: "${m.sender || "unknown"}" | Subject: "${m.subject || "(no subject)"}"`)
-    .join("\n");
+${emailBlocks}
+
+Return ONLY a valid JSON object mapping each email's index (as a string key) to its triplets array.
+No markdown, no explanation — just the JSON.
+
+Example output (for 2 emails):
+{
+  "1": [
+    {"subject":"ET Money","predicate":"IS_A","object":"Organization"},
+    {"subject":"Investment Goal","predicate":"RELATED_TO","object":"My 1st crore"},
+    {"subject":"Financial Activity","predicate":"MANAGES_FLOW","object":"SIP installment"}
+  ],
+  "2": [
+    {"subject":"HDFC Bank","predicate":"IS_A","object":"Organization"},
+    {"subject":"HDFC Bank","predicate":"SENDS","object":"Credit Card Statement"}
+  ]
+}`;
+
+// ── Text parsing helpers ────────────────────────────────────────────────────────
+
+function isValidTriplet(t: unknown): t is Triplet {
+  return (
+    !!t &&
+    typeof (t as any).subject === "string" &&
+    typeof (t as any).predicate === "string" &&
+    typeof (t as any).object === "string" &&
+    (t as any).subject.trim().length > 0 &&
+    (t as any).object.trim().length > 0
+  );
+}
+
+/** Finds the first balanced `{...}` block in text — handles prose, fences, and JS comments. */
+function extractFirstJsonObject(text: string): string | null {
+  const start = text.indexOf("{");
+  if (start === -1) return null;
+  let depth = 0, inString = false, escape = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (escape)                  { escape = false; continue; }
+    if (c === "\\" && inString)  { escape = true;  continue; }
+    if (c === '"')               { inString = !inString; continue; }
+    if (inString)                continue;
+    if (c === "{")               depth++;
+    else if (c === "}")          { if (--depth === 0) return text.slice(start, i + 1); }
+  }
+  return null;
+}
+
+/** Normalises a LangChain AIMessage's `content` (string | content-block array) to plain text. */
+function extractResponseText(response: { content: unknown }): string {
+  return typeof response.content === "string"
+    ? response.content
+    : Array.isArray(response.content)
+      ? response.content.map((c: any) => (typeof c === "string" ? c : c?.text ?? "")).join("")
+      : String(response.content);
+}
+
+// ── Per-mail batch extraction ──────────────────────────────────────────────────
+
+/** Returns per-mail triplet arrays keyed by mail.id. */
+async function extractBatch(mails: PendingMail[], llm: BaseChatModel): Promise<Map<string, Triplet[]>> {
+  const mailsWithBody = mails
+    .map((m, i) => ({ mail: m, idx: i + 1, body: (m.bodyText ?? "").trim() }))
+    .filter((x) => x.body.length > 0);
+
+  const result = new Map<string, Triplet[]>();
+  if (!mailsWithBody.length) return result;
+
+  const emailBlocks = mailsWithBody
+    .map((x) => `Email ${x.idx}:\n${x.body.slice(0, 2000)}`)
+    .join("\n\n---\n\n");
 
   try {
-    const response = await llm.invoke(EXTRACTION_PROMPT(emailLines));
-    const text =
-      typeof response.content === "string"
-        ? response.content
-        : Array.isArray(response.content)
-          ? response.content.map((c: any) => (typeof c === "string" ? c : c?.text ?? "")).join("")
-          : String(response.content);
+    const prompt = EXTRACTION_PROMPT(emailBlocks);
+    const response = await llm.invoke(prompt);
+    const text = extractResponseText(response);
 
-    // Tolerate markdown fences and leading prose
-    const match = text.match(/\[[\s\S]*\]/);
-    if (!match) return [];
-    const parsed = JSON.parse(match[0]);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (t: unknown): t is Triplet =>
-        !!t &&
-        typeof (t as any).subject === "string" &&
-        typeof (t as any).predicate === "string" &&
-        typeof (t as any).object === "string" &&
-        (t as any).subject.trim().length > 0 &&
-        (t as any).object.trim().length > 0,
-    );
-  } catch {
-    return [];
+    console.log("DEBUG extractBatch: raw LLM response", text);
+
+    const jsonStr = extractFirstJsonObject(text);
+    if (!jsonStr) {
+      console.warn("DEBUG extractBatch: no JSON object found in response");
+      return result;
+    }
+
+    // Strip JS-style single-line comments before parsing
+    const cleaned = jsonStr.replace(/\/\/[^\n]*/g, "");
+    const parsed = JSON.parse(cleaned);
+    console.log("DEBUG extractBatch: parsed keys", Object.keys(parsed));
+
+    for (const x of mailsWithBody) {
+      const raw: unknown[] = parsed[String(x.idx)] ?? [];
+      const triplets = raw.filter(isValidTriplet);
+      console.log(`DEBUG extractBatch: mail idx=${x.idx} id=${x.mail.id} → ${triplets.length} triplets`);
+      result.set(x.mail.id, triplets);
+    }
+  } catch (err) {
+    console.error("DEBUG extractBatch: FAILED", (err as Error)?.message ?? String(err), err);
   }
+  return result;
+}
+
+// ── Stage 2: entity classification ──────────────────────────────────────────────
+
+const CLASSIFICATION_PROMPT = (labels: string[]) => `\
+Classify each of the following entity labels into exactly one of these types:
+ORG, PERSON, PRODUCT, TOPIC, PLACE, EVENT, DATE, AMOUNT
+
+Guidelines:
+- ORG: companies, banks, institutions, brands
+- PERSON: names of individuals
+- PRODUCT: named products, services, apps, financial instruments/funds
+- PLACE: cities, countries, regions, addresses
+- EVENT: occasions, conferences, scheduled happenings
+- DATE: dates, times, deadlines
+- AMOUNT: monetary values, quantities, prices
+- TOPIC: anything else — concepts or subjects that don't fit the above
+
+Labels:
+${labels.map((l, i) => `${i + 1}. ${l}`).join("\n")}
+
+Return ONLY a valid JSON object mapping each label's number (as a string key) to its type.
+No markdown, no explanation — just the JSON.
+
+Example output (for 3 labels):
+{ "1": "ORG", "2": "AMOUNT", "3": "DATE" }`;
+
+/** Stage 2: classifies entity labels that had no LLM-declared IS_A type. One call per batch. */
+async function classifyEntities(labels: string[], llm: BaseChatModel): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+  if (!labels.length) return result;
+
+  try {
+    const response = await llm.invoke(CLASSIFICATION_PROMPT(labels));
+    const text = extractResponseText(response);
+    console.log("DEBUG classifyEntities: raw LLM response", text);
+
+    const jsonStr = extractFirstJsonObject(text);
+    if (!jsonStr) {
+      console.warn("DEBUG classifyEntities: no JSON object found in response");
+      return result;
+    }
+
+    const cleaned = jsonStr.replace(/\/\/[^\n]*/g, "");
+    const parsed = JSON.parse(cleaned);
+
+    labels.forEach((label, i) => {
+      const raw = parsed[String(i + 1)];
+      if (typeof raw === "string") result.set(label.toLowerCase().trim(), mapType(raw));
+    });
+    console.log(`DEBUG classifyEntities: classified ${result.size}/${labels.length} labels`);
+  } catch (err) {
+    console.error("DEBUG classifyEntities: FAILED", (err as Error)?.message ?? String(err), err);
+  }
+  return result;
 }
 
 // ── Triplet → graph tables ─────────────────────────────────────────────────────
 
-function processTriplets(triplets: Triplet[]): string[] {
+function processTriplets(triplets: Triplet[], classifiedTypes: Map<string, string>): string[] {
   // First pass: collect IS_A declarations to build a type map
   const nodeTypes: Record<string, string> = {};
   for (const t of triplets) {
@@ -125,8 +247,9 @@ function processTriplets(triplets: Triplet[]): string[] {
     } else {
       const sId = nodeId(sLabel);
       const oId = nodeId(oLabel);
-      const sType = nodeTypes[sLabel.toLowerCase()] ?? "Entity";
-      const oType = nodeTypes[oLabel.toLowerCase()] ?? "Entity";
+      // Priority: LLM's own IS_A declaration → stage-2 classification → regex safety net → Entity
+      const sType = nodeTypes[sLabel.toLowerCase()] ?? classifiedTypes.get(sLabel.toLowerCase()) ?? classifyLabelRegex(sLabel);
+      const oType = nodeTypes[oLabel.toLowerCase()] ?? classifiedTypes.get(oLabel.toLowerCase()) ?? classifyLabelRegex(oLabel);
       inboxPieDb.upsertGraphNode(sId, sLabel, sType);
       inboxPieDb.upsertGraphNode(oId, oLabel, oType);
       inboxPieDb.upsertGraphEdge(edgeId(sId, t.predicate, oId), sId, t.predicate, oId);
@@ -198,15 +321,13 @@ export async function buildGraphIndexJob(
     // Mark batch as in-progress so a cancel/crash doesn't re-process them immediately
     for (const mail of batch) inboxPieDb.markMailGraphIndexing(mail.id);
 
-    let nodeIds: string[] = [];
-    let tripletCount = 0;
+    // mailTriplets: mail.id → triplets extracted from that mail's body only
+    let mailTriplets: Map<string, Triplet[]>;
     try {
-      const triplets = await extractBatch(batch, llm);
-      tripletCount = triplets.length;
-      nodeIds = triplets.length ? processTriplets(triplets) : [];
-      console.log(`[InboxPie Graph] Batch ${batchIdx}/${batchCount}: ${tripletCount} triplets → ${nodeIds.length} entities`);
+      mailTriplets = await extractBatch(batch, llm);
+      const totalTriplets = [...mailTriplets.values()].reduce((s, t) => s + t.length, 0);
+      console.log(`[InboxPie Graph] Batch ${batchIdx}/${batchCount}: ${totalTriplets} triplets across ${mailTriplets.size} mails`);
     } catch (err) {
-      // LLM error — reset all batch mails back to todo
       console.warn(`[InboxPie Graph] Batch ${batchIdx}/${batchCount}: LLM error — ${(err as Error)?.message ?? String(err)}`);
       for (const mail of batch) inboxPieDb.markMailGraphFailed(mail.id);
       done += batch.length;
@@ -215,9 +336,27 @@ export async function buildGraphIndexJob(
       continue;
     }
 
-    // Mark each mail complete — all batch-level nodeIds linked to all mails in the batch
+    // Stage 2: classify every non-IS_A-typed label across the whole batch in one call
+    const allTriplets = [...mailTriplets.values()].flat();
+    const isATyped = new Set(
+      allTriplets.filter((t) => t.predicate === "IS_A").map((t) => t.subject.toLowerCase().trim()),
+    );
+    const untyped = new Set<string>();
+    for (const t of allTriplets) {
+      if (t.predicate === "IS_A") continue;
+      const s = t.subject.trim();
+      const o = t.object.trim();
+      if (s && !isATyped.has(s.toLowerCase())) untyped.add(s);
+      if (o && !isATyped.has(o.toLowerCase())) untyped.add(o);
+    }
+    const classifiedTypes = await classifyEntities([...untyped], llm);
+    console.log(`[InboxPie Graph] Batch ${batchIdx}/${batchCount}: classified ${classifiedTypes.size}/${untyped.size} untyped entities`);
+
+    // Mark each mail complete with only ITS OWN extracted nodes
     for (const mail of batch) {
-      inboxPieDb.markMailGraphComplete(mail.id, nodeIds, mail.folderId, mail.mailboxId);
+      const triplets = mailTriplets.get(mail.id) ?? [];
+      const mailNodeIds = triplets.length ? processTriplets(triplets, classifiedTypes) : [];
+      inboxPieDb.markMailGraphComplete(mail.id, mailNodeIds, mail.folderId, mail.mailboxId);
     }
 
     done += batch.length;

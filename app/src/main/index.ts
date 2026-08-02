@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 
 import { registerIpcHandlers, cancelBackgroundWork } from "./ipc/handlers";
 import { prewarmEmbeddingModel, terminateEmbeddingWorker } from "./agent/embeddings";
+import { prewarmRerankerModel, terminateRerankerWorker } from "./agent/reranker";
+import { inboxPieDb } from "./db/inboxpie-db";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -80,6 +82,11 @@ app.whenReady().then(() => {
   // can update live without polling (falls back to polling if the window isn't ready yet).
   prewarmEmbeddingModel((status) => {
     console.log(`[embeddings] prewarm: phase=${status.phase}${status.pct != null ? ` pct=${status.pct}` : ""}${status.error ? ` err=${status.error}` : ""}`);
+    // Written here (not just inside getSetupStatus) so it's set on EVERY boot that
+    // successfully loads the model — getSetupStatus is skipped entirely once
+    // app_ready="yes", so relying on it alone left this preference permanently
+    // unset for anyone past their first run.
+    if (status.phase === "ready") inboxPieDb.setPreference("is_embedding_downloaded", "yes");
     mainWindow?.webContents.send("inboxpie:event", {
       action: "embeddingProgress",
       phase:  status.phase,
@@ -87,6 +94,19 @@ app.whenReady().then(() => {
       error:  status.error,
     });
   }).catch((e) => console.warn("[embeddings] prewarm failed:", (e as Error).message));
+
+  // Same rationale, larger model (~1.1GB quantized) — pre-download the cross-encoder
+  // reranker so the first AgentChat semantic search doesn't stall on it mid-conversation.
+  prewarmRerankerModel((status) => {
+    console.log(`[reranker] prewarm: phase=${status.phase}${status.pct != null ? ` pct=${status.pct}` : ""}${status.error ? ` err=${status.error}` : ""}`);
+    if (status.phase === "ready") inboxPieDb.setPreference("is_reranker_downloaded", "yes");
+    mainWindow?.webContents.send("inboxpie:event", {
+      action: "rerankerProgress",
+      phase:  status.phase,
+      pct:    status.pct ?? (status.phase === "ready" ? 100 : 0),
+      error:  status.error,
+    });
+  }).catch((e) => console.warn("[reranker] prewarm failed:", (e as Error).message));
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -98,8 +118,9 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
-  // Kill scan subprocesses, stop indexing, and terminate the embedding worker
-  // so no threads or processes linger after the app exits.
+  // Kill scan subprocesses, stop indexing, and terminate the embedding/reranker
+  // workers so no threads or processes linger after the app exits.
   cancelBackgroundWork();
   terminateEmbeddingWorker();
+  terminateRerankerWorker();
 });

@@ -35,6 +35,18 @@ export interface MailProvider {
     onProgress?: (count: number) => void,
   ): Promise<FetchMailResult>;
 
+  // ── Content Fetching (NEW: for VirtualBox deferred indexing) ────────────────
+
+  /**
+   * Fetch email body text using the provider's native identifier.
+   * Used during VirtualBox indexing to read full content after user confirmation.
+   * Returns null if email not found or content not accessible.
+   *
+   * @param identifier_id Provider-native ID (e.g., ROWID for Apple Mail, message key for Thunderbird)
+   * @returns Full email body text, or null if unavailable
+   */
+  fetchMessageBody(identifier_id: string): Promise<string | null>;
+
   // ── Actions (may return success:false for unimplemented providers) ─────────
 
   deleteMessages(messageIds: Array<string | number>): Promise<MoveDeleteResult>;

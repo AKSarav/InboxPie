@@ -34,7 +34,7 @@ export type AuditStatus       = "inprogress" | "success" | "failed";
 export interface GraphNode {
   id:        string;
   label:     string;
-  type:      string;   // PERSON | ORG | PRODUCT | TOPIC | PLACE | EVENT | Entity
+  type:      string;   // PERSON | ORG | PRODUCT | TOPIC | PLACE | EVENT | DATE | AMOUNT | Entity
   frequency: number;
   folderIds?: number[];
 }
@@ -54,14 +54,16 @@ export interface Triplet {
 }
 
 export interface MailInsert {
-  id:        string;
-  mailboxId: string;
-  folderId:  number;
-  sender:    string;
-  domain:    string;
-  size:      number;
-  subject:   string;
-  date:      string;
+  id:            string;
+  mailboxId:     string;
+  folderId:      number;
+  sender:        string;
+  domain:        string;
+  size:          number;
+  subject:       string;
+  date:          string;
+  provider?:     string;        // NEW: mail provider ('apple-mail', 'thunderbird', etc.)
+  identifier_id?: string | null; // NEW: provider-native ID (ROWID for Apple, message key for TB)
 }
 
 export interface PendingMail {
@@ -70,6 +72,7 @@ export interface PendingMail {
   mailboxId: string;
   folderId:  number;
   sender:    string;
+  bodyText:  string | null;
 }
 
 export interface NamedEntity {
@@ -134,14 +137,13 @@ CREATE TABLE IF NOT EXISTS mails (
   domain           TEXT,
   size             INTEGER DEFAULT 0,
   subject          TEXT,
-  subject_entities TEXT,   -- JSON [{text,label}] — extracted by LLM NER, body never stored
-  body_entities    TEXT,   -- JSON [{text,label}] — populated only when ReadContent=yes
   indexed          TEXT NOT NULL DEFAULT 'todo'
                    CHECK (indexed IN ('todo','inprogress','complete')),
   indexed_meta     TEXT NOT NULL DEFAULT 'no',  -- 'yes' once subject/sender/domain embedded
   indexed_body     TEXT NOT NULL DEFAULT 'no',  -- 'yes' once email body text embedded
   graph_indexed    TEXT NOT NULL DEFAULT 'todo'
                    CHECK (graph_indexed IN ('todo','inprogress','complete')),
+  category         TEXT,
   created_at       TEXT,
   updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -286,16 +288,16 @@ export class InboxPieDB {
       // Always create the index (IF NOT EXISTS handles both new and existing installs)
       this.db.exec("CREATE INDEX IF NOT EXISTS idx_mails_graph_indexed ON mails(graph_indexed)");
     } catch { /* ignore — fresh install gets the column from SCHEMA */ }
-    // Add subject_entities / body_entities to existing mails tables (added to SCHEMA later)
+    // Drop subject_entities / body_entities — data lives in graph_nodes/graph_mail_nodes
     try {
-      const mailColsE = this.db.prepare("PRAGMA table_info(mails)").all() as Array<{ name: string }>;
-      if (!mailColsE.some((c) => c.name === "subject_entities")) {
-        this.db.exec("ALTER TABLE mails ADD COLUMN subject_entities TEXT");
+      const mailColsDrop = this.db.prepare("PRAGMA table_info(mails)").all() as Array<{ name: string }>;
+      if (mailColsDrop.some((c) => c.name === "subject_entities")) {
+        this.db.exec("ALTER TABLE mails DROP COLUMN subject_entities");
       }
-      if (!mailColsE.some((c) => c.name === "body_entities")) {
-        this.db.exec("ALTER TABLE mails ADD COLUMN body_entities TEXT");
+      if (mailColsDrop.some((c) => c.name === "body_entities")) {
+        this.db.exec("ALTER TABLE mails DROP COLUMN body_entities");
       }
-    } catch { /* ignore — fresh install gets the columns from SCHEMA */ }
+    } catch { /* ignore — column may not exist or SQLite version too old */ }
     // Add include_for_index column for Virtual Box selective indexing
     try {
       const mailColsV = this.db.prepare("PRAGMA table_info(mails)").all() as Array<{ name: string }>;
@@ -311,6 +313,46 @@ export class InboxPieDB {
         this.db.exec("ALTER TABLE mails ADD COLUMN body_text TEXT");
       }
     } catch { /* ignore — fresh install gets the column from SCHEMA */ }
+    // Add category column for smart categorization
+    try {
+      const mailColsCat = this.db.prepare("PRAGMA table_info(mails)").all() as Array<{ name: string }>;
+      if (!mailColsCat.some((c) => c.name === "category")) {
+        this.db.exec("ALTER TABLE mails ADD COLUMN category TEXT");
+      }
+    } catch { /* ignore — fresh install gets the column from SCHEMA */ }
+    // Add provider and identifier_id columns for multi-provider content fetching (Phase 2)
+    try {
+      const mailColsId = this.db.prepare("PRAGMA table_info(mails)").all() as Array<{ name: string }>;
+      if (!mailColsId.some((c) => c.name === "provider")) {
+        this.db.exec("ALTER TABLE mails ADD COLUMN provider TEXT NOT NULL DEFAULT 'apple-mail'");
+      }
+      if (!mailColsId.some((c) => c.name === "identifier_id")) {
+        this.db.exec("ALTER TABLE mails ADD COLUMN identifier_id TEXT");
+        this.db.exec("CREATE INDEX IF NOT EXISTS idx_mails_identifier ON mails(identifier_id)");
+      }
+      // Backfill identifier_id from mails.id if it looks like a ROWID (all digits)
+      try {
+        this.db.prepare(`
+          UPDATE mails
+          SET identifier_id = id
+          WHERE identifier_id IS NULL
+            AND provider = 'apple-mail'
+            AND id REGEXP '^[0-9]+$'
+        `).run();
+      } catch {
+        // Regex not supported; try simpler approach with CAST
+        try {
+          this.db.prepare(`
+            UPDATE mails
+            SET identifier_id = id
+            WHERE identifier_id IS NULL
+              AND provider = 'apple-mail'
+              AND typeof(id) = 'text'
+              AND id NOT LIKE '%-%'
+          `).run();
+        } catch { /* ignore */ }
+      }
+    } catch { /* ignore — fresh install gets the columns from SCHEMA */ }
   }
 
   close(): void {
@@ -430,6 +472,7 @@ export class InboxPieDB {
   /**
    * Bulk-insert mails from a scan result.
    * Ignores duplicates (IGNORE on conflict) so rescans are safe.
+   * Stores provider and identifier_id for deferred content fetching during indexing.
    * Returns the number of newly inserted rows.
    */
   insertMails(mails: MailInsert[]): number {
@@ -437,15 +480,20 @@ export class InboxPieDB {
     const db = this.get();
     const stmt = db.prepare(`
       INSERT OR IGNORE INTO mails
-        (id, mailbox_id, folder_id, sender, domain, size, subject, indexed, created_at)
-      VALUES (?,?,?,?,?,?,?,'todo',?)
+        (id, mailbox_id, folder_id, sender, domain, size, subject, indexed, created_at, provider, identifier_id)
+      VALUES (?,?,?,?,?,?,?,'todo',?,?,?)
     `);
 
     let inserted = 0;
     db.exec("BEGIN");
     try {
       for (const m of mails) {
-        const result = stmt.run(m.id, m.mailboxId, m.folderId, m.sender, m.domain, m.size, m.subject, m.date) as any;
+        const provider = m.provider || "apple-mail";
+        const identifier_id = m.identifier_id || null;
+        const result = stmt.run(
+          m.id, m.mailboxId, m.folderId, m.sender, m.domain, m.size, m.subject, m.date,
+          provider, identifier_id
+        ) as any;
         inserted += result.changes as number;
       }
       db.exec("COMMIT");
@@ -524,22 +572,13 @@ export class InboxPieDB {
    */
   updateMailEntities(
     id: string,
-    subjectEntities: NamedEntity[],
-    bodyEntities?: NamedEntity[],
+    _subjectEntities: NamedEntity[],
+    _bodyEntities?: NamedEntity[],
   ): void {
     const db = this.get();
-    db.prepare(`
-      UPDATE mails SET
-        subject_entities = ?,
-        body_entities    = ?,
-        indexed          = 'complete',
-        updated_at       = datetime('now')
-      WHERE id = ?
-    `).run(
-      JSON.stringify(subjectEntities),
-      bodyEntities ? JSON.stringify(bodyEntities) : null,
-      id,
-    );
+    db.prepare(
+      "UPDATE mails SET indexed='complete', updated_at=datetime('now') WHERE id = ?"
+    ).run(id);
     // Sync folder status derived from its mail rows
     this._syncFolderStatus(id, db);
   }
@@ -598,7 +637,7 @@ export class InboxPieDB {
   /** Reset all mails back to indexed=todo (for re-indexing). */
   resetIndexing(): void {
     this.get().prepare(
-      "UPDATE mails SET indexed='todo', subject_entities=NULL, body_entities=NULL, updated_at=datetime('now')"
+      "UPDATE mails SET indexed='todo', updated_at=datetime('now')"
     ).run();
   }
 
@@ -609,7 +648,7 @@ export class InboxPieDB {
     if (folderIds && folderIds.length) {
       const ph = folderIds.map(() => "?").join(",");
       return this.get().prepare(`
-        SELECT id, subject, mailbox_id AS mailboxId, folder_id AS folderId, sender
+        SELECT id, subject, mailbox_id AS mailboxId, folder_id AS folderId, sender, body_text AS bodyText
         FROM mails
         WHERE graph_indexed = 'todo' AND folder_id IN (${ph})${vbClause}
         ORDER BY created_at ASC
@@ -617,7 +656,7 @@ export class InboxPieDB {
       `).all(...folderIds, limit) as unknown as PendingMail[];
     }
     return this.get().prepare(`
-      SELECT id, subject, mailbox_id AS mailboxId, folder_id AS folderId, sender
+      SELECT id, subject, mailbox_id AS mailboxId, folder_id AS folderId, sender, body_text AS bodyText
       FROM mails
       WHERE graph_indexed = 'todo'${vbClause}
       ORDER BY created_at ASC
@@ -678,15 +717,31 @@ export class InboxPieDB {
     `).run(id, subjectId, predicate, objectId);
   }
 
+  saveMailCategories(entries: Array<{ id: string; category: string }>): void {
+    if (!entries.length) return;
+    const db = this.get();
+    const stmt = db.prepare("UPDATE mails SET category=?, updated_at=datetime('now') WHERE id=?");
+    db.exec("BEGIN");
+    try {
+      for (const e of entries) stmt.run(e.category, e.id);
+      db.exec("COMMIT");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw err;
+    }
+  }
+
   getEmailsForNode(nodeId: string, limit = 100): Array<{
     mailId: string; subject: string | null; sender: string | null;
-    date: string | null; folderName: string;
+    domain: string | null; date: string | null; category: string | null; folderName: string;
   }> {
     return this.get().prepare(`
-      SELECT m.id        AS mailId,
+      SELECT m.id         AS mailId,
              m.subject,
              m.sender,
+             m.domain,
              m.created_at AS date,
+             m.category,
              f.name       AS folderName
       FROM mails m
       JOIN graph_mail_nodes gmn ON gmn.mail_id = m.id
@@ -796,6 +851,11 @@ export class InboxPieDB {
     }
   }
 
+  resetVectorFlags(): void {
+    const db = this.get();
+    db.prepare("UPDATE mails SET indexed_meta='no', indexed_body='no', updated_at=datetime('now')").run();
+  }
+
   // ── Queries ──────────────────────────────────────────────────────────────────
 
   /** Aggregated sender stats, ordered by message count descending. */
@@ -825,40 +885,6 @@ export class InboxPieDB {
       ORDER BY count DESC
       LIMIT ?
     `).all(limit) as unknown as DomainRow[];
-  }
-
-  /** IDs and subjects of mails matching an entity name (full-text scan of JSON). */
-  getMailsWithEntity(entityName: string, limit = 200): Array<{ id: string; sender: string; subject: string }> {
-    const pattern = `%${entityName}%`;
-    return this.get().prepare(`
-      SELECT id, sender, subject FROM mails
-      WHERE (subject_entities LIKE ? OR body_entities LIKE ?)
-        AND indexed = 'complete'
-      LIMIT ?
-    `).all(pattern, pattern, limit) as any[];
-  }
-
-  /** All entity names for a given sender (from subject_entities). */
-  getEntitiesForSender(senderEmail: string): NamedEntity[] {
-    const rows = this.get().prepare(`
-      SELECT subject_entities, body_entities FROM mails
-      WHERE LOWER(sender) = LOWER(?) AND indexed = 'complete'
-    `).all(senderEmail) as any[];
-
-    const seen = new Set<string>();
-    const result: NamedEntity[] = [];
-    for (const row of rows) {
-      for (const blob of [row.subject_entities, row.body_entities]) {
-        if (!blob) continue;
-        try {
-          for (const e of JSON.parse(blob) as NamedEntity[]) {
-            const key = `${e.label}:${e.text.toLowerCase()}`;
-            if (!seen.has(key)) { seen.add(key); result.push(e); }
-          }
-        } catch { /* skip malformed */ }
-      }
-    }
-    return result;
   }
 
   // ── Audit ────────────────────────────────────────────────────────────────────
@@ -1189,11 +1215,11 @@ export class InboxPieDB {
     id: string; subject: string; sender: string; domain: string;
     size: number; created_at: string;
     indexed_meta: string; indexed_body: string; graph_indexed: string;
-    folder_id: number; subject_entities: string | null; body_text: string | null;
+    folder_id: number; body_text: string | null;
   }> {
     return this.get().prepare(`
       SELECT id, subject, sender, domain, size, created_at,
-             indexed_meta, indexed_body, graph_indexed, folder_id, subject_entities, body_text
+             indexed_meta, indexed_body, graph_indexed, folder_id, body_text
       FROM mails
       WHERE include_for_index = 'yes'
       ORDER BY created_at DESC
@@ -1247,6 +1273,153 @@ export class InboxPieDB {
     db.prepare("UPDATE mails SET include_for_index='no'").run();
     for (const key of ["index_inclusion_domains", "index_inclusion_senders", "index_inclusion_mail_ids", "selective_indexing_enabled"]) {
       db.prepare("DELETE FROM preferences WHERE key=?").run(key);
+    }
+  }
+
+  /**
+   * Get nodes (typed entities) for a list of mail IDs.
+   * Reverse of getEmailsForNode: for each mail, return all nodes linked to it.
+   */
+  getNodesForMails(mailIds: string[]): Array<{
+    mailId: string;
+    label: string;
+    type: "ORG" | "PERSON" | "PRODUCT" | "TOPIC" | "PLACE" | "EVENT" | "DATE" | "AMOUNT";
+  }> {
+    if (!mailIds.length) return [];
+    const db = this.get();
+    const ph = mailIds.map(() => "?").join(",");
+    return (
+      db.prepare(`
+        SELECT gmn.mail_id AS mailId, gn.label, gn.type
+        FROM graph_mail_nodes gmn
+        JOIN graph_nodes gn ON gn.id = gmn.node_id
+        WHERE gmn.mail_id IN (${ph})
+        ORDER BY gmn.mail_id, gn.frequency DESC
+      `).all(...mailIds) as any[]
+    ).map((r) => ({
+      mailId: String(r.mailId),
+      label: String(r.label),
+      type: r.type as any,
+    }));
+  }
+
+  /**
+   * Get email bodies by mail IDs.
+   */
+  getBodiesByIds(mailIds: string[]): Array<{ id: string; body_text: string | null }> {
+    if (!mailIds.length) return [];
+    const db = this.get();
+    const ph = mailIds.map(() => "?").join(",");
+    return (
+      db.prepare(`
+        SELECT id, body_text
+        FROM mails
+        WHERE id IN (${ph})
+      `).all(...mailIds) as any[]
+    ).map((r) => ({
+      id: String(r.id),
+      body_text: r.body_text ? String(r.body_text) : null,
+    }));
+  }
+
+  /**
+   * Get per-type node statistics for the graph schema block.
+   * Returns counts + example labels per entity type.
+   */
+  getGraphTypeProfile(): Record<
+    string,
+    { count: number; examples: string[] }
+  > {
+    const db = this.get();
+    const types = ["ORG", "PERSON", "PRODUCT", "TOPIC", "PLACE", "EVENT", "DATE", "AMOUNT"];
+    const result: Record<string, { count: number; examples: string[] }> = {};
+
+    for (const type of types) {
+      const countRow = db.prepare("SELECT COUNT(*) AS n FROM graph_nodes WHERE type = ?").get(type) as any;
+      const count = countRow?.n ?? 0;
+
+      let examples: string[] = [];
+      if (count > 0) {
+        const exampleRows = db.prepare(`
+          SELECT label FROM graph_nodes WHERE type = ? ORDER BY frequency DESC LIMIT 5
+        `).all(type) as Array<{ label: string }>;
+        examples = exampleRows.map((r) => r.label);
+      }
+
+      result[type] = { count, examples };
+    }
+
+    return result;
+  }
+
+  // ── Provider & Identifier Tracking (Phase 2: Multi-provider content fetching) ──
+
+  /**
+   * Get provider and identifier_id for a single mail.
+   * Returns null if mail not found.
+   */
+  getMailProviderInfo(mailId: string): { provider: string; identifier_id: string | null } | null {
+    const row = this.get().prepare(
+      "SELECT provider, identifier_id FROM mails WHERE id = ?"
+    ).get(mailId) as any;
+    if (!row) return null;
+    return {
+      provider: row.provider || "apple-mail",
+      identifier_id: row.identifier_id || null,
+    };
+  }
+
+  /**
+   * Get provider and identifier_id for multiple mails.
+   * Returns a map of mailId → {provider, identifier_id}.
+   */
+  getMailsProviderInfo(mailIds: string[]): Record<string, { provider: string; identifier_id: string | null }> {
+    if (!mailIds.length) return {};
+    const db = this.get();
+    const ph = mailIds.map(() => "?").join(",");
+    const rows = db.prepare(`
+      SELECT id, provider, identifier_id FROM mails WHERE id IN (${ph})
+    `).all(...mailIds) as any[];
+
+    const result: Record<string, { provider: string; identifier_id: string | null }> = {};
+    for (const row of rows) {
+      result[row.id] = {
+        provider: row.provider || "apple-mail",
+        identifier_id: row.identifier_id || null,
+      };
+    }
+    return result;
+  }
+
+  /**
+   * Update provider and identifier_id for a mail.
+   * Used after scanning to store the provider-native ID for deferred content fetching.
+   */
+  setMailProviderInfo(mailId: string, provider: string, identifier_id: string | null): void {
+    this.get().prepare(
+      "UPDATE mails SET provider = ?, identifier_id = ?, updated_at = datetime('now') WHERE id = ?"
+    ).run(provider, identifier_id, mailId);
+  }
+
+  /**
+   * Bulk update provider and identifier_id for multiple mails.
+   * Each entry is {mailId, provider, identifier_id}.
+   */
+  setMailsProviderInfo(entries: Array<{ mailId: string; provider: string; identifier_id: string | null }>): void {
+    if (!entries.length) return;
+    const db = this.get();
+    const stmt = db.prepare(
+      "UPDATE mails SET provider = ?, identifier_id = ?, updated_at = datetime('now') WHERE id = ?"
+    );
+    db.exec("BEGIN");
+    try {
+      for (const e of entries) {
+        stmt.run(e.provider, e.identifier_id, e.mailId);
+      }
+      db.exec("COMMIT");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw err;
     }
   }
 

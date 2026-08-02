@@ -68,7 +68,6 @@ export async function runAgentQuery(
   userMessage: string,
   conversationHistory: ChatMessage[],
   model: string = DEFAULT_MODEL,
-  folders?: string[],
   onEvent?: (ev: Record<string, unknown>) => void,
   mode: "fast" | "deep" = "fast",
   signal?: AbortSignal,
@@ -76,5 +75,5 @@ export async function runAgentQuery(
   apiKey?: string,
 ): Promise<AgentResponse> {
   const { runAppleMailAgent } = await import("./langgraph-agent");
-  return runAppleMailAgent(userMessage, conversationHistory, model, folders, onEvent as any, mode, signal, false, provider, apiKey);
+  return runAppleMailAgent(userMessage, conversationHistory, model, onEvent as any, mode, signal, false, provider, apiKey);
 }

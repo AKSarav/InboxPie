@@ -72,8 +72,6 @@
     busy: false,
     showThinking: true,
     mode: 'fast',          // 'fast' (direct text) | 'deep' (visual report) — fast is the quick default
-    selectedFolders: [],   // [{path}] — from picker (max 2)
-    indexedFolders: [],    // cached list from lanceStore
     availableModels: [],   // from ollama list
     selectedModel: '',     // user-overridden model chip ('' = use auto-picked); cloud: 'openai:gpt-4o'
     // AI settings (loaded from backend)
@@ -109,9 +107,9 @@
 
         '<div class="ss-chat-input-bar">',
           '<div class="ss-input-row" style="position:relative">',
-            '<div class="ss-folder-picker" id="ssFolderPicker" style="display:none"></div>',
+            '<div class="ss-cmd-picker" id="ssCmdPicker" style="display:none"></div>',
             '<textarea id="ssChatInput" class="ss-chat-input" rows="1"',
-              ' placeholder="Type / to pick a model and folder (↑↓/Tab, Enter), then ask…"',
+              ' placeholder="Type / to pick a model (↑↓/Tab, Enter), then ask…"',
               (hasData ? '' : ' disabled'),
             '></textarea>',
           '</div>',
@@ -120,7 +118,7 @@
               '<button class="ss-mode-btn' + (chat.mode === 'fast' ? ' active' : '') + '" data-mode="fast" title="Direct chat answer — quick, no report">Fast</button>',
               '<button class="ss-mode-btn' + (chat.mode === 'deep' ? ' active' : '') + '" data-mode="deep" title="Generate a full visual report / widget — slower">Deep</button>',
             '</div>',
-            '<div class="ss-folder-chips" id="ssFolderChips"></div>',
+            '<div class="ss-model-chips" id="ssModelChips"></div>',
             '<button id="ssChatStop" class="ss-chat-send ss-chat-stop" style="display:none" title="Stop generating">',
               '<svg viewBox="0 0 20 20" fill="currentColor"><rect x="5" y="5" width="10" height="10" rx="2"/></svg>',
             '</button>',
@@ -148,10 +146,10 @@
         if (e.key === 'ArrowUp')   { e.preventDefault(); ssPickerMove(-1); return; }
         if (e.key === 'Tab')       { e.preventDefault(); ssPickerMove(e.shiftKey ? -1 : 1); return; }
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ssPickerSelectCurrent(); return; }
-        if (e.key === 'Escape')    { e.preventDefault(); ssHideFolderPicker(); return; }
+        if (e.key === 'Escape')    { e.preventDefault(); ssHidePicker(); return; }
         return;
       }
-      if (e.key === 'Escape') { ssHideFolderPicker(); return; }
+      if (e.key === 'Escape') { ssHidePicker(); return; }
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ssSendMessage(); }
     });
     inputEl.addEventListener('input', function () {
@@ -159,8 +157,8 @@
       ssCheckPickerTrigger(inputEl);
     });
     document.addEventListener('click', function (e) {
-      var picker = document.getElementById('ssFolderPicker');
-      if (picker && !picker.contains(e.target) && e.target !== inputEl) ssHideFolderPicker();
+      var picker = document.getElementById('ssCmdPicker');
+      if (picker && !picker.contains(e.target) && e.target !== inputEl) ssHidePicker();
     });
 
     document.getElementById('ssModeToggle').addEventListener('click', function (e) {
@@ -175,7 +173,7 @@
     });
 
     // Restore persistent chat state across view switches (panel HTML is rebuilt each time)
-    ssRenderFolderChips();
+    ssRenderChips();
     ssUpdateActiveModel();
 
     if (chat.history.length) {
@@ -186,27 +184,23 @@
     }
 
     ssCheckOllama();
-    ssLoadIndexedFolders(); // will update greeting once stats arrive
-    ssShowGreeting(false, ''); // placeholder — ssLoadIndexedFolders will update it
+    ssLoadIndexingStats(); // will update greeting once stats arrive
+    ssShowGreeting(false, ''); // placeholder — ssLoadIndexingStats will update it
 
     setTimeout(function () { inputEl.focus(); }, 80);
   };
 
-  // ── Picker (folders + models combined) ────────────────────────────────────
+  // ── Picker (model + cloud provider selection via "/") ──────────────────────
 
-  function ssLoadIndexedFolders() {
+  function ssLoadIndexingStats() {
     browser.runtime.sendMessage({ action: 'getIndexingStats' }).then(function (stats) {
-      chat.indexedFolders = (stats && stats.folders) ? stats.folders : [];
       var hasIndexed = stats && stats.total > 0;
       if (hasIndexed && !chat.history.length) {
-        var folderNames = chat.indexedFolders.slice(0, 3).map(function (f) {
-          return typeof f === 'object' ? (f.folder || '') : String(f);
-        }).filter(Boolean).join(', ');
-        ssShowGreeting(true, folderNames);
+        ssShowGreeting(true, fmtNum(stats.total));
       } else if (!hasIndexed && !getMessages().length && !chat.history.length) {
         ssShowGreeting(false, '');
       }
-    }).catch(function () { chat.indexedFolders = []; });
+    }).catch(function () {});
   }
 
   function ssCheckPickerTrigger(inputEl) {
@@ -218,27 +212,15 @@
     if (lastWord.startsWith('/')) {
       ssShowCombinedPicker(lastWord.slice(1).toLowerCase());
     } else {
-      ssHideFolderPicker();
+      ssHidePicker();
     }
   }
 
-  var FOLDER_ICON = '<svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M1.5 4.5h11v7a1 1 0 01-1 1h-9a1 1 0 01-1-1v-7zM1.5 4.5l1-2h3l1 2"/></svg>';
   var MODEL_ICON  = '<svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="10" height="7" rx="1.5"/><path d="M5 4V3a2 2 0 014 0v1"/><circle cx="5" cy="7.5" r=".8" fill="currentColor" stroke="none"/><circle cx="9" cy="7.5" r=".8" fill="currentColor" stroke="none"/></svg>';
 
   function ssShowCombinedPicker(filter) {
-    var picker = document.getElementById('ssFolderPicker');
+    var picker = document.getElementById('ssCmdPicker');
     if (!picker) return;
-
-    var availFolders = chat.indexedFolders.filter(function (f) {
-      var path = typeof f === 'object' ? f.folder : f;
-      return !chat.selectedFolders.some(function (s) { return s.path === path; });
-    });
-    var filtFolders = filter
-      ? availFolders.filter(function (f) {
-          var path = typeof f === 'object' ? f.folder : f;
-          return path.toLowerCase().includes(filter);
-        })
-      : availFolders;
 
     var availModels = chat.availableModels || [];
     var filtModels = filter
@@ -258,31 +240,18 @@
       });
     });
 
-    if (!filtFolders.length && !filtModels.length && !cloudEntries.length) { ssHideFolderPicker(); return; }
+    if (!filtModels.length && !cloudEntries.length) { ssHidePicker(); return; }
 
     var html = '';
-
-    if (filtFolders.length) {
-      html += '<div class="ss-picker-section-header">Folders</div>';
-      html += filtFolders.slice(0, 6).map(function (f) {
-        var path  = typeof f === 'object' ? f.folder : f;
-        var count = typeof f === 'object' ? f.count  : '';
-        return '<div class="ss-folder-option" data-type="folder" data-path="' + esc(path) + '">' +
-          FOLDER_ICON +
-          '<span class="ss-fo-name">' + esc(path) + '</span>' +
-          (count ? '<span class="ss-fo-count">' + fmtNum(count) + '</span>' : '') +
-          '</div>';
-      }).join('');
-    }
 
     if (filtModels.length) {
       html += '<div class="ss-picker-section-header">Local (Ollama)</div>';
       html += filtModels.slice(0, 8).map(function (m) {
         var active = m === (chat.selectedModel || (chat.aiProvider === 'ollama' ? chat.model : ''));
-        return '<div class="ss-folder-option" data-type="model" data-model="' + esc(m) + '">' +
+        return '<div class="ss-cmd-option" data-type="model" data-model="' + esc(m) + '">' +
           MODEL_ICON +
-          '<span class="ss-fo-name">' + esc(m) + '</span>' +
-          (active ? '<span class="ss-fo-count ss-fo-active">active</span>' : '') +
+          '<span class="ss-co-name">' + esc(m) + '</span>' +
+          (active ? '<span class="ss-co-count ss-co-active">active</span>' : '') +
           '</div>';
       }).join('');
     }
@@ -299,10 +268,10 @@
           '<span class="ss-cloud-dot">☁</span> ' + (CLOUD_PROVIDER_NAMES[p] || p) + '</div>';
         html += byProvider[p].map(function (e) {
           var active = chat.selectedModel === e.id || (chat.aiProvider === p && !chat.selectedModel && chat.aiSettings[p] && chat.aiSettings[p].model === e.model);
-          return '<div class="ss-folder-option ss-cloud-option" data-type="model" data-model="' + esc(e.id) + '">' +
+          return '<div class="ss-cmd-option ss-cloud-option" data-type="model" data-model="' + esc(e.id) + '">' +
             MODEL_ICON +
-            '<span class="ss-fo-name">' + esc(e.model) + '</span>' +
-            (active ? '<span class="ss-fo-count ss-fo-active">active</span>' : '') +
+            '<span class="ss-co-name">' + esc(e.model) + '</span>' +
+            (active ? '<span class="ss-co-count ss-co-active">active</span>' : '') +
             '</div>';
         }).join('');
       });
@@ -311,7 +280,7 @@
     picker.innerHTML = html;
     picker.style.display = 'block';
 
-    picker.querySelectorAll('.ss-folder-option').forEach(function (el, i) {
+    picker.querySelectorAll('.ss-cmd-option').forEach(function (el, i) {
       el.addEventListener('click', function () { ssPickerActivate(el); });
       el.addEventListener('mousemove', function () {   // hover follows the keyboard highlight
         if (ssPickerIndex !== i) { ssPickerIndex = i; ssPickerHighlight(); }
@@ -327,17 +296,17 @@
   var ssPickerIndex = -1;
 
   function ssPickerOpen() {
-    var picker = document.getElementById('ssFolderPicker');
+    var picker = document.getElementById('ssCmdPicker');
     return !!(picker && picker.style.display !== 'none');
   }
   function ssPickerItems() {
-    var picker = document.getElementById('ssFolderPicker');
+    var picker = document.getElementById('ssCmdPicker');
     if (!picker) return [];
-    return Array.prototype.slice.call(picker.querySelectorAll('.ss-folder-option'));
+    return Array.prototype.slice.call(picker.querySelectorAll('.ss-cmd-option'));
   }
   function ssPickerHighlight() {
     var items = ssPickerItems();
-    items.forEach(function (el, i) { el.classList.toggle('ss-fo-highlight', i === ssPickerIndex); });
+    items.forEach(function (el, i) { el.classList.toggle('ss-co-highlight', i === ssPickerIndex); });
     if (ssPickerIndex >= 0 && items[ssPickerIndex] && items[ssPickerIndex].scrollIntoView) {
       items[ssPickerIndex].scrollIntoView({ block: 'nearest' });
     }
@@ -350,9 +319,8 @@
   }
   function ssPickerActivate(el) {
     if (!el) return;
-    if (el.getAttribute('data-type') === 'folder') ssAddFolderChip(el.getAttribute('data-path'));
-    else                                           ssSetModelChip(el.getAttribute('data-model'));
-    ssHideFolderPicker();
+    ssSetModelChip(el.getAttribute('data-model'));
+    ssHidePicker();
     ssPickerClearSlash();
   }
   function ssPickerSelectCurrent() {
@@ -370,32 +338,20 @@
     }
   }
 
-  function ssHideFolderPicker() {
-    var picker = document.getElementById('ssFolderPicker');
+  function ssHidePicker() {
+    var picker = document.getElementById('ssCmdPicker');
     if (picker) picker.style.display = 'none';
     ssPickerIndex = -1;
   }
 
-  function ssAddFolderChip(path) {
-    if (chat.selectedFolders.length >= 2) return;
-    if (chat.selectedFolders.some(function (f) { return f.path === path; })) return;
-    chat.selectedFolders.push({ path: path });
-    ssRenderFolderChips();
-  }
-
-  function ssRemoveFolderChip(path) {
-    chat.selectedFolders = chat.selectedFolders.filter(function (f) { return f.path !== path; });
-    ssRenderFolderChips();
-  }
-
   function ssSetModelChip(modelName) {
     chat.selectedModel = modelName;
-    ssRenderFolderChips();
+    ssRenderChips();
     ssUpdateActiveModel();
   }
 
-  function ssRenderFolderChips() {
-    var chips = document.getElementById('ssFolderChips');
+  function ssRenderChips() {
+    var chips = document.getElementById('ssModelChips');
     if (!chips) return;
     var html = '';
 
@@ -413,22 +369,11 @@
         '</span>';
     }
 
-    html += chat.selectedFolders.map(function (f) {
-      return '<span class="ss-folder-chip">' +
-        '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M1 3.5h10v6a.5.5 0 01-.5.5h-9a.5.5 0 01-.5-.5v-6zM1 3.5l.8-1.5h2.5l.7 1.5"/></svg>' +
-        esc(f.path) +
-        '<button class="ss-chip-remove" data-path="' + esc(f.path) + '" title="Remove">&times;</button>' +
-        '</span>';
-    }).join('');
-
     chips.innerHTML = html;
 
     var modelRemove = chips.querySelector('.ss-model-remove');
     if (modelRemove) modelRemove.addEventListener('click', function () {
-      chat.selectedModel = ''; ssRenderFolderChips(); ssUpdateActiveModel();
-    });
-    chips.querySelectorAll('.ss-chip-remove:not(.ss-model-remove)').forEach(function (btn) {
-      btn.addEventListener('click', function () { ssRemoveFolderChip(btn.getAttribute('data-path')); });
+      chat.selectedModel = ''; ssRenderChips(); ssUpdateActiveModel();
     });
   }
 
@@ -524,13 +469,13 @@
 
   // ── Greeting ───────────────────────────────────────────────────────────────
 
-  function ssShowGreeting(hasData, folderNames) {
+  function ssShowGreeting(hasData, indexedCount) {
     var body = document.getElementById('ssChatMessages');
     if (!body) return;
     body.innerHTML = '';
-    var folderHint = folderNames ? ' Indexed: <strong>' + esc(folderNames) + '</strong>.' : '';
+    var vbHint = indexedCount ? ' Virtual Box: <strong>' + esc(indexedCount) + ' emails</strong> indexed.' : '';
     var greetingText = hasData
-      ? 'Hi! I can search your indexed emails semantically. Try:\n\n• "Who sends me the most email?"\n• "Show me all Amazon orders"\n• "Find travel booking emails last year"\n\n' + folderHint + '\n\nType <code>/</code> to scope by folder · <code>/model</code> to switch AI model.'
+      ? 'Hi! I can search your indexed emails semantically. Try:\n\n• "Who sends me the most email?"\n• "Show me all Amazon orders"\n• "Find travel booking emails last year"\n\n' + vbHint + '\n\nType <code>/</code> to switch AI model.'
       : 'Go to the <strong>Intelligence</strong> tab to index your emails first — then come back here to search them with AI.\n\nEverything runs fully on your device, no data leaves your machine.';
     body.insertAdjacentHTML('beforeend', ssAssistantBubble(greetingText.replace(/\n/g, '<br>')));
   }
@@ -570,15 +515,11 @@
     var text = inputEl.value.trim();
     if (!text) return;
 
-    // No defaults — require the user to explicitly pick a model AND at least one folder.
-    var missing = [];
-    if (!chat.selectedModel)            missing.push('a model');
-    if (!chat.selectedFolders.length)   missing.push('at least one folder');
-    if (missing.length) {
+    // No default — require the user to explicitly pick a model.
+    if (!chat.selectedModel) {
       var bodyG = document.getElementById('ssChatMessages');
       if (bodyG) bodyG.insertAdjacentHTML('beforeend', ssAssistantBubble(
-        'Please choose ' + missing.join(' and ') +
-        ' before asking. Type <code>/</code> to pick — use ↑ ↓ / Tab and Enter to select. ' +
+        'Please choose a model before asking. Type <code>/</code> to pick — use ↑ ↓ / Tab and Enter to select. ' +
         '(Your question is kept; just select, then press Enter.)'));
       ssScrollToBottom();
       ssShowCombinedPicker('');   // open the picker to choose right away
@@ -666,9 +607,6 @@
 
     chat.history.push({ role: 'user', content: text });
 
-    // Include selected folder paths in the query for scoped search
-    var folders = chat.selectedFolders.map(function (f) { return f.path; });
-
     browser.runtime.sendMessage({
       action:      'chatQuery',
       userMessage: text,
@@ -677,7 +615,6 @@
       }),
       model:    effectiveModel,
       provider: effectiveProvider,
-      folders:  folders.length ? folders : undefined,
       mode:     chat.mode,
     }).then(function (res) {
       var typingEl = document.getElementById(typingId);
@@ -756,13 +693,12 @@
 
   function ssClearChat() {
     chat.history = [];
-    chat.selectedFolders = [];
     chat.selectedModel = '';
     var body = document.getElementById('ssChatMessages');
     if (body) body.innerHTML = '';
-    ssRenderFolderChips();
+    ssRenderChips();
     ssUpdateActiveModel();
-    ssLoadIndexedFolders(); // re-run to update greeting with folder context
+    ssLoadIndexingStats(); // re-run to refresh the greeting's Virtual Box count
   }
 
   // ── Bubble HTML helpers ────────────────────────────────────────────────────
@@ -1328,10 +1264,11 @@
     var folders = kg.folders || [];
 
     // ── Pre-compute groups ───────────────────────────────────────────────────
-    var KG_TYPE_ORDER  = ['ORG','PERSON','PRODUCT','TOPIC','PLACE','EVENT','Entity'];
+    var KG_TYPE_ORDER  = ['ORG','PERSON','PRODUCT','TOPIC','PLACE','EVENT','DATE','AMOUNT','Entity'];
     var TYPE_COLORS    = {
-      ORG:'#818cf8', PERSON:'#10b981', PRODUCT:'#f59e0b',
-      TOPIC:'#f43f5e', PLACE:'#14b8a6', EVENT:'#f97316', Entity:'#a855f7'
+      ORG:'#5887e4', PERSON:'#58e470', PRODUCT:'#e4b558',
+      TOPIC:'#e45864', PLACE:'#58e4d8', EVENT:'#e458cd',
+      DATE:'#9258e4', AMOUNT:'#aae458', Entity:'#93909f'
     };
     var typeGroups = {};
     nodes.forEach(function(n) {
@@ -1449,8 +1386,6 @@
 
     var chart = echarts.init(host, null, { renderer: 'canvas' });
     var maxFreq = nodes.reduce(function(m, n) { return Math.max(m, n.frequency || 1); }, 1);
-    var nodeMeta = {};
-    nodes.forEach(function(n) { nodeMeta[n.id] = { type: n.type, color: n.color || '#a855f7' }; });
 
     var ecNodes = nodes.map(function(n) {
       var freq  = n.frequency || 1;
@@ -1474,7 +1409,9 @@
           textBorderColor: 'rgba(0,0,0,0.5)',
           textBorderWidth: 2
         },
-        blur:     { itemStyle: { opacity: 0.07 }, label: { show: false } },
+        // Dim, don't hide the label — a stray blur state during pan/zoom (cursor
+        // resting over a node while scrolling) should never make labels vanish.
+        blur:     { itemStyle: { opacity: 0.07 }, label: { show: sz >= 24, opacity: 0.35 } },
         emphasis: {
           label: { show: true, fontSize: 12, fontWeight: '600', color: '#fff', textBorderColor: 'transparent' },
           itemStyle: { borderColor: '#ffffff', borderWidth: 2.5, shadowBlur: 14, shadowColor: col }
@@ -1482,22 +1419,33 @@
       };
     });
 
+    // Neo4j-style relationships: static neutral silver-gray line + always-visible predicate label
+    var EDGE_COLOR       = '#9aa1ae';  // silver / whitesmoke-on-dark
+    var EDGE_COLOR_HOVER = '#d3d7de';
     var ecEdges = edges.map(function(e) {
-      var srcColor = (nodeMeta[e.subjectNodeId] || {}).color || '#818cf8';
       return {
         source:    e.subjectNodeId,
         target:    e.objectNodeId,
         _pred:     e.predicate || '',
-        label:     { show: false },
-        lineStyle: { color: srcColor, curveness: 0.25, width: 1.2, opacity: 0.35 },
-        blur:      { lineStyle: { opacity: 0.03 } },
+        label: {
+          show: true,
+          formatter: e.predicate || '',
+          fontSize: 9,
+          color: '#c9cfd9',
+          backgroundColor: 'rgba(8,11,20,0.78)',
+          padding: [1, 4],
+          borderRadius: 3
+        },
+        lineStyle: { color: EDGE_COLOR, curveness: 0.25, width: 1, opacity: 0.55 },
+        // Dim, don't hide — see matching comment on node blur above.
+        blur:      { lineStyle: { opacity: 0.05 }, label: { show: true, opacity: 0.3 } },
         emphasis: {
           label: {
             show: true, formatter: e.predicate || '',
-            fontSize: 9, color: '#e2e8f0',
-            backgroundColor: 'rgba(5,9,20,0.88)', padding: [2, 5], borderRadius: 3
+            fontSize: 10, fontWeight: '600', color: '#f5f7fa',
+            backgroundColor: 'rgba(8,11,20,0.92)', padding: [2, 6], borderRadius: 3
           },
-          lineStyle: { width: 2.5, opacity: 1.0 }
+          lineStyle: { color: EDGE_COLOR_HOVER, width: 2, opacity: 1.0 }
         }
       };
     });
@@ -1566,8 +1514,16 @@
     var btnZoomIn    = document.getElementById('idGalaxyZoomIn');
     var btnZoomOut   = document.getElementById('idGalaxyZoomOut');
     var btnZoomReset = document.getElementById('idGalaxyZoomReset');
-    if (btnZoomIn)    btnZoomIn.addEventListener('click',    function() { chart.dispatchAction({ type: 'graphRoam', zoom: 1.3 }); });
-    if (btnZoomOut)   btnZoomOut.addEventListener('click',   function() { chart.dispatchAction({ type: 'graphRoam', zoom: 1 / 1.3 }); });
+    // Native wheel/pinch zoom implicitly anchors on the cursor position; dispatchAction
+    // has no such default, so we must pass an explicit origin (viewport center) or the
+    // roam ends up zooming around the container's corner — compounding into the
+    // "pinwheel" explosion after a couple of clicks.
+    if (btnZoomIn)    btnZoomIn.addEventListener('click',    function() {
+      chart.dispatchAction({ type: 'graphRoam', zoom: 1.3, originX: host.clientWidth / 2, originY: host.clientHeight / 2 });
+    });
+    if (btnZoomOut)   btnZoomOut.addEventListener('click',   function() {
+      chart.dispatchAction({ type: 'graphRoam', zoom: 1 / 1.3, originX: host.clientWidth / 2, originY: host.clientHeight / 2 });
+    });
     if (btnZoomReset) btnZoomReset.addEventListener('click', function() {
       chart.setOption({ series: [{ roam: true, draggable: true, zoom: 1, center: [host.offsetWidth / 2, host.offsetHeight / 2] }] });
     });
@@ -1604,14 +1560,16 @@
             : emails.map(function(e, i) {
                 var displaySender = privacyOn() ? maskEmail(e.sender || '') : (e.sender || '');
                 var dateStr = e.date ? new Date(e.date).toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric' }) : '';
+                var metaParts = [displaySender];
+                if (e.domain) metaParts.push(e.domain);
+                if (dateStr)  metaParts.push(dateStr);
+                if (e.folderName) metaParts.push(e.folderName);
                 return '<label class="id-kg-nd-email-row">' +
                   '<input type="checkbox" class="id-kg-nd-email-cb" data-idx="' + i + '" data-subject="' + esc(e.subject || '') + '" data-sender="' + esc(e.sender || '') + '">' +
                   '<div class="id-kg-nd-email-info">' +
                     '<div class="id-kg-nd-email-subj">' + esc(e.subject || '(no subject)') + '</div>' +
-                    '<div class="id-kg-nd-email-meta">' + esc(displaySender) +
-                      (dateStr ? ' · ' + dateStr : '') +
-                      (e.folderName ? ' · ' + esc(e.folderName) : '') +
-                    '</div>' +
+                    '<div class="id-kg-nd-email-meta">' + esc(metaParts.join(' · ')) + '</div>' +
+                    (e.category ? '<span class="id-kg-nd-email-cat">' + esc(e.category) + '</span>' : '') +
                   '</div>' +
                 '</label>';
               }).join('');
@@ -2303,7 +2261,12 @@
 
     panel.innerHTML = '<div class="ais-shell" id="aisShell"><div class="ais-loading">Loading…</div></div>';
 
-    browser.runtime.sendMessage({ action: 'getAISettings' }).then(function (s) {
+    Promise.all([
+      browser.runtime.sendMessage({ action: 'getAISettings' }),
+      browser.runtime.sendMessage({ action: 'checkOllama' }),
+    ]).then(function (results) {
+      var s = results[0];
+      var ollamaRes = results[1];
       if (s && s.activeProvider) chat.aiProvider = s.activeProvider;
       if (s && s.ollamaModel) chat._savedOllamaModel = s.ollamaModel;
       if (s && s.providers) {
@@ -2315,6 +2278,8 @@
           }
         });
       }
+      chat.ollamaOk = ollamaRes && ollamaRes.available;
+      if (chat.ollamaOk) chat.availableModels = ollamaRes.models || [];
       aisRender(s);
     }).catch(function () { aisRender(null); });
   };
@@ -2412,6 +2377,23 @@
             '</div>' +
           '</div>' +
         '</div>' +
+        '<div class="ais-card" id="aisRerankerCard">' +
+          '<div class="ais-card-header">' +
+            '<span class="ais-card-icon">🎯</span>' +
+            '<div>' +
+              '<div class="ais-card-name">Reranker Model</div>' +
+              '<div class="ais-card-sub">bge-reranker-base — cross-encoder, ~300 MB · quantized ONNX · runs offline</div>' +
+            '</div>' +
+            '<span class="ais-badge" id="aisRerankBadge">Checking…</span>' +
+          '</div>' +
+          '<div class="ais-card-body">' +
+            '<div class="ais-ollama-hint" id="aisRerankHint">Loading status…</div>' +
+            '<div class="ais-embed-bar-wrap" id="aisRerankBarWrap" style="display:none">' +
+              '<div class="ais-embed-bar"><div class="ais-embed-bar-fill" id="aisRerankBarFill"></div></div>' +
+              '<span class="ais-embed-bar-label" id="aisRerankBarLabel"></span>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
         '<div id="aisIndexingStatusCard"></div>' +
         (function() {
           var ollamaBadge = chat.ollamaOk === false
@@ -2464,6 +2446,7 @@
       '</div>';
 
     aisLoadEmbeddingStatus();
+    aisLoadRerankerStatus();
     aisLoadIndexingStatus();
 
     // Wire up events
@@ -2757,6 +2740,47 @@
       }
     }).catch(function () {
       if (hint) hint.textContent = 'Could not check embedding model status.';
+    });
+  }
+
+  function aisLoadRerankerStatus() {
+    var badge   = document.getElementById('aisRerankBadge');
+    var hint    = document.getElementById('aisRerankHint');
+    var barWrap = document.getElementById('aisRerankBarWrap');
+    var barFill = document.getElementById('aisRerankBarFill');
+    var barLabel= document.getElementById('aisRerankBarLabel');
+    if (!badge || !hint) return;
+
+    browser.runtime.sendMessage({ action: 'checkReranker' }).then(function (s) {
+      if (!s) return;
+      if (s.ready) {
+        badge.className  = 'ais-badge ais-badge-ok';
+        badge.textContent = 'Ready';
+        hint.textContent  = 'Model loaded in memory — AgentChat search results are relevance-reranked.';
+        if (barWrap) barWrap.style.display = 'none';
+      } else if (s.cached) {
+        badge.className  = 'ais-badge ais-badge-ok';
+        badge.textContent = 'Cached';
+        var mb = s.downloadedMB || 0;
+        hint.textContent  = 'Downloaded (' + mb + ' MB on disk). Will load into memory on first AgentChat search.';
+        if (barWrap) barWrap.style.display = 'none';
+      } else {
+        badge.className  = 'ais-badge';
+        badge.textContent = 'Downloading…';
+        var total = s.totalMB || 300;
+        var dl    = s.downloadedMB || 0;
+        hint.textContent  = 'Downloading bge-reranker-base in the background (~' + total + ' MB). Optional — search still works via hybrid ranking until this is ready.';
+        if (barWrap && barFill && barLabel) {
+          barWrap.style.display = '';
+          var pct = total > 0 ? Math.min(100, Math.round((dl / total) * 100)) : 0;
+          barFill.style.width = pct + '%';
+          barLabel.textContent = dl + ' / ' + total + ' MB';
+        }
+        // Poll every 4s until cached
+        setTimeout(aisLoadRerankerStatus, 4000);
+      }
+    }).catch(function () {
+      if (hint) hint.textContent = 'Could not check reranker model status.';
     });
   }
 
@@ -3887,6 +3911,23 @@
     });
   };
 
+  var VB_ICON_SMART  = '<svg viewBox="0 0 20 20" fill="currentColor"><path d="M10 2c.32 0 .6.21.7.52L12 7l4.48 1.3c.6.18.6 1.03 0 1.2L12 11l-1.3 4.48c-.18.6-1.03.6-1.2 0L8 11l-4.48-1.3c-.6-.18-.6-1.03 0-1.2L8 7l1.3-4.48c.1-.31.38-.52.7-.52z"/></svg>';
+  var VB_ICON_SIMPLE = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8.5" cy="8.5" r="5.5"/><path d="M17 17l-4-4"/></svg>';
+
+  // 10 fixed, muted hues (Outlook-contact-style) — subtle enough for dark theme, evenly
+  // spread so adjacent senders rarely collide. Assignment is a stable hash, not random,
+  // so the same sender always gets the same color across renders/sessions.
+  var VB_AVATAR_COLORS = [
+    '#7c6af7', '#5b8def', '#3fb6c4', '#2fae8a', '#6cb44e',
+    '#d3a13c', '#e08a4e', '#e0687a', '#cd6bc9', '#6e7fe0',
+  ];
+  function vbAvatarColor(key) {
+    var str = String(key || '');
+    var hash = 0;
+    for (var i = 0; i < str.length; i++) hash = (hash * 31 + str.charCodeAt(i)) | 0;
+    return VB_AVATAR_COLORS[Math.abs(hash) % VB_AVATAR_COLORS.length];
+  }
+
   function vbBuildShell(mails, stats) {
     var subtitleText = stats.total + ' email' + (stats.total !== 1 ? 's' : '') +
       ' &nbsp;·&nbsp; ' + stats.vectorDone + ' vector-indexed' +
@@ -3904,57 +3945,227 @@
         '<p class="vb-empty-hint">Add emails using the selection review modal or the Subscriptions view.</p></div>';
     }
 
-    var rows = mails.map(function(m) {
-      var initial = privacyOn() ? '?' : (m.domain || '?')[0].toUpperCase();
-      var subject = privacyOn() ? '••••••••' : esc(m.subject || '(No Subject)');
-      var sender  = privacyOn() ? '••••••••' : esc(m.sender || m.domain || '');
-      var date    = m.created_at ? new Date(m.created_at).toLocaleDateString() : '';
-      var vecCls  = m.indexed_meta === 'yes' ? 'done' : 'pending';
-      var grpCls  = m.graph_indexed === 'complete' ? 'done' : m.graph_indexed === 'inprogress' ? 'partial' : 'pending';
-      return '<div class="vb-row" data-id="' + esc(m.id) + '">' +
-        '<div class="vb-row-avatar">' + initial + '</div>' +
-        '<div class="vb-row-body">' +
-          '<div class="vb-row-subject">' + subject + '</div>' +
-          '<div class="vb-row-meta">' + sender + ' &nbsp;·&nbsp; ' + date + '</div>' +
-        '</div>' +
-        '<div class="vb-row-badges">' +
-          '<span class="vb-badge vb-vec ' + vecCls + '" title="Vector index">V</span>' +
-          '<span class="vb-badge vb-grp ' + grpCls + '" title="Graph index">G</span>' +
-        '</div>' +
-      '</div>';
-    }).join('');
+    var rows = mails.map(function(m) { return vbRowHtml(m); }).join('');
+    var defaultStatus = mails.length.toLocaleString() + ' email' + (mails.length !== 1 ? 's' : '') + ' in Virtual Box';
+    var notIndexedCount = Math.max(0, stats.total - stats.vectorDone);
+    var notIndexedHint = notIndexedCount > 0
+      ? notIndexedCount.toLocaleString() + ' email' + (notIndexedCount !== 1 ? 's aren\'t' : ' isn\'t') + ' vector-indexed yet — Simple Search covers ' + (notIndexedCount !== 1 ? 'them' : 'it') + ' too'
+      : 'Keyword match across every email, indexed or not';
 
     return '<div class="vb-header">' +
       '<h2>Virtual Box</h2>' +
       '<p class="vb-subtitle" id="vbSubtitle">' + subtitleText + '</p>' +
-      '<div class="vb-header-actions"><button id="vbClearAll" class="btn-ghost-sm">Clear All</button></div>' +
+      '<div class="vb-header-actions">' +
+        '<button type="button" id="vbDetailToggle" class="vb-icon-btn" title="Hide reading pane">' +
+          '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="15" height="12" rx="1.5"/><path d="M12 4v12"/></svg>' +
+        '</button>' +
+        '<button id="vbClearAll" class="btn-ghost-sm">Clear All</button>' +
       '</div>' +
-      '<div class="vb-layout">' +
+      '</div>' +
+      '<div class="vb-layout" id="vbLayoutRoot">' +
         '<div class="vb-list-panel">' +
-          '<div class="vb-search-row"><input id="vbSearch" class="vb-search" type="text" placeholder="Search emails&hellip;"></div>' +
+          '<div class="vb-smart-banner" id="vbSmartBanner">' +
+            '<span id="vbSmartBannerText">' + esc(defaultStatus) + '</span>' +
+            '<button type="button" id="vbSmartClear" class="vb-smart-clear-btn" style="display:none">Clear</button>' +
+          '</div>' +
           '<div id="vbList" class="vb-list">' + rows + '</div>' +
+          '<div class="vb-smart-bar">' +
+            '<div class="vb-smart-bar-top">' +
+              '<div class="vb-smart-bar-label">' +
+                '<span class="vb-smart-bar-icon" id="vbSearchModeIcon">' + VB_ICON_SMART + '</span>' +
+                '<div class="vb-smart-bar-text">' +
+                  '<span class="vb-smart-bar-title" id="vbSearchModeTitle">Smart Search</span>' +
+                  '<span class="vb-smart-bar-subtitle" id="vbSearchModeSubtitle">Powered by vector &amp; hybrid search</span>' +
+                '</div>' +
+              '</div>' +
+              '<div class="vb-search-mode-tabs" id="vbSearchModeTabs">' +
+                '<button type="button" class="vb-mode-tab active" data-mode="smart">Smart</button>' +
+                '<button type="button" class="vb-mode-tab" data-mode="simple" title="' + esc(notIndexedHint) + '">Simple</button>' +
+              '</div>' +
+            '</div>' +
+            '<div class="vb-smart-bar-row">' +
+              '<input id="vbSmartInput" class="vb-smart-input" type="text" placeholder="Ask: List all my FastTag emails&hellip;" autocomplete="off">' +
+              '<button type="button" id="vbSmartSend" class="vb-smart-send" title="Search">' +
+                '<svg viewBox="0 0 20 20" fill="currentColor"><path d="M3.105 2.289a.75.75 0 00-.826.95l1.414 4.925A1.5 1.5 0 005.135 9.25h6.115a.75.75 0 010 1.5H5.135a1.5 1.5 0 00-1.442 1.086l-1.414 4.926a.75.75 0 00.826.95 28.896 28.896 0 0015.293-7.154.75.75 0 000-1.115A28.897 28.897 0 003.105 2.289z"/></svg>' +
+              '</button>' +
+            '</div>' +
+          '</div>' +
         '</div>' +
-        '<div class="vb-detail-panel"><div id="vbDetail" class="vb-detail">' + emptyDetail + '</div></div>' +
+        '<div class="vb-detail-panel" id="vbDetailPanel"><div id="vbDetail" class="vb-detail">' + emptyDetail + '</div></div>' +
       '</div>';
+  }
+
+  function vbRowHtml(m, score) {
+    // Hash on the raw (unmasked) sender identity so color assignment stays stable
+    // regardless of privacy-mask state, then mask only the displayed initial/text.
+    var identity    = m.sender || m.domain || '';
+    var avatarColor = vbAvatarColor(identity);
+    var initial = privacyOn() ? '?' : (m.domain || '?')[0].toUpperCase();
+    var subject = privacyOn() ? '••••••••' : esc(m.subject || '(No Subject)');
+    var sender  = privacyOn() ? '••••••••' : esc(m.sender || m.domain || '');
+    var date    = m.created_at ? new Date(m.created_at).toLocaleDateString() : '';
+    var vecCls  = m.indexed_meta === 'yes' ? 'done' : 'pending';
+    var grpCls  = m.graph_indexed === 'complete' ? 'done' : m.graph_indexed === 'inprogress' ? 'partial' : 'pending';
+    var scoreBadge = (typeof score === 'number')
+      ? '<span class="vb-score-badge" title="Match confidence">' + Math.round(score * 100) + '%</span>'
+      : '';
+    return '<div class="vb-row" data-id="' + esc(m.id) + '">' +
+      '<div class="vb-row-avatar" style="background:' + avatarColor + ';">' + initial + '</div>' +
+      '<div class="vb-row-body">' +
+        '<div class="vb-row-subject">' + subject + '</div>' +
+        '<div class="vb-row-meta">' + sender + ' &nbsp;·&nbsp; ' + date + '</div>' +
+      '</div>' +
+      scoreBadge +
+      '<div class="vb-row-badges">' +
+        '<span class="vb-badge vb-vec ' + vecCls + '" title="Vector index">V</span>' +
+        '<span class="vb-badge vb-grp ' + grpCls + '" title="Graph index">G</span>' +
+      '</div>' +
+    '</div>';
   }
 
   function vbWireEvents(panel, mails) {
     var mailMap = {};
     mails.forEach(function(m) { mailMap[String(m.id)] = m; });
 
-    var list   = panel.querySelector('#vbList');
-    var detail = panel.querySelector('#vbDetail');
-    var search = panel.querySelector('#vbSearch');
+    var list       = panel.querySelector('#vbList');
+    var detail     = panel.querySelector('#vbDetail');
+    var layoutRoot = panel.querySelector('#vbLayoutRoot');
+    var detailToggle = panel.querySelector('#vbDetailToggle');
 
-    if (search && list) {
-      search.addEventListener('input', function() {
-        var q = search.value.toLowerCase();
-        list.querySelectorAll('.vb-row').forEach(function(row) {
-          var text = (row.textContent || '').toLowerCase();
-          row.style.display = q && text.indexOf(q) === -1 ? 'none' : '';
-        });
+    // ── Collapsible detail panel — gives the list more room when not needed.
+    // Auto-expands again the moment a row is clicked (see list click handler below).
+    function vbSetDetailCollapsed(collapsed) {
+      if (!layoutRoot) return;
+      layoutRoot.classList.toggle('vb-detail-hidden', collapsed);
+      if (detailToggle) {
+        detailToggle.classList.toggle('active', collapsed);
+        detailToggle.title = collapsed ? 'Show reading pane' : 'Hide reading pane';
+      }
+    }
+    if (detailToggle) {
+      detailToggle.addEventListener('click', function() {
+        vbSetDetailCollapsed(!layoutRoot.classList.contains('vb-detail-hidden'));
       });
     }
+
+    // ── Search: Smart (hybrid vector + BM25, needs vector-indexed content) or
+    // Simple (plain keyword match, works on every email including ones not yet
+    // vector-indexed). Smart shows a per-row confidence score; Simple doesn't.
+    var smartInput   = panel.querySelector('#vbSmartInput');
+    var smartSend    = panel.querySelector('#vbSmartSend');
+    var smartText    = panel.querySelector('#vbSmartBannerText');
+    var smartClear   = panel.querySelector('#vbSmartClear');
+    var modeIcon     = panel.querySelector('#vbSearchModeIcon');
+    var modeTitle    = panel.querySelector('#vbSearchModeTitle');
+    var modeSubtitle = panel.querySelector('#vbSearchModeSubtitle');
+    var modeTabsEl   = panel.querySelector('#vbSearchModeTabs');
+
+    var VB_MODE_COPY = {
+      smart:  { icon: VB_ICON_SMART,  title: 'Smart Search',  subtitle: 'Powered by vector & hybrid search',       placeholder: 'Ask: List all my FastTag emails…' },
+      simple: { icon: VB_ICON_SIMPLE, title: 'Simple Search', subtitle: 'Keyword match — works on every email',    placeholder: 'Search subject, sender, domain…' },
+    };
+    var vbSearchMode = 'smart';
+
+    function vbDefaultStatus() {
+      return mails.length.toLocaleString() + ' email' + (mails.length !== 1 ? 's' : '') + ' in Virtual Box';
+    }
+
+    function vbClearSearch() {
+      if (smartInput) smartInput.value = '';
+      if (smartClear) smartClear.style.display = 'none';
+      if (smartText) smartText.textContent = vbDefaultStatus();
+      if (list) list.innerHTML = mails.map(function(m) { return vbRowHtml(m); }).join('');
+    }
+
+    function vbSetSearchMode(mode) {
+      if (mode === vbSearchMode) return;
+      vbSearchMode = mode;
+      var copy = VB_MODE_COPY[mode];
+      if (modeIcon) modeIcon.innerHTML = copy.icon;
+      if (modeTitle) modeTitle.textContent = copy.title;
+      if (modeSubtitle) modeSubtitle.textContent = copy.subtitle;
+      if (smartInput) smartInput.placeholder = copy.placeholder;
+      if (modeTabsEl) {
+        modeTabsEl.querySelectorAll('.vb-mode-tab').forEach(function(tab) {
+          tab.classList.toggle('active', tab.getAttribute('data-mode') === mode);
+        });
+      }
+      vbClearSearch();
+    }
+    if (modeTabsEl) {
+      modeTabsEl.addEventListener('click', function(e) {
+        var tab = e.target.closest('.vb-mode-tab');
+        if (tab) vbSetSearchMode(tab.getAttribute('data-mode'));
+      });
+    }
+
+    function vbRunSimpleSearch(q) {
+      var needle = q.toLowerCase();
+      var matched = mails.filter(function(m) {
+        return (
+          (m.subject || '').toLowerCase().indexOf(needle) !== -1 ||
+          (m.sender  || '').toLowerCase().indexOf(needle) !== -1 ||
+          (m.domain  || '').toLowerCase().indexOf(needle) !== -1
+        );
+      });
+      if (!matched.length) {
+        if (smartText) smartText.textContent = 'No matches for "' + q + '"';
+        if (list) list.innerHTML = '<div class="vb-empty" style="padding:24px 16px;"><p>No emails matched.</p></div>';
+      } else {
+        if (smartText) {
+          smartText.textContent = matched.length.toLocaleString() + ' match' + (matched.length !== 1 ? 'es' : '') + ' for "' + q + '"';
+        }
+        if (list) list.innerHTML = matched.map(function(m) { return vbRowHtml(m); }).join('');
+      }
+      if (smartClear) smartClear.style.display = '';
+    }
+
+    function vbRunSmartSearch(q) {
+      smartInput.disabled = true;
+      if (smartSend) smartSend.disabled = true;
+      if (smartClear) smartClear.style.display = 'none';
+      if (smartText) smartText.textContent = 'Searching…';
+
+      browser.runtime.sendMessage({ action: 'smartSearchVirtualBox', query: q, limit: 50 }).then(function(res) {
+        smartInput.disabled = false;
+        if (smartSend) smartSend.disabled = false;
+        var results = (res && res.results) || [];
+        var matched = results
+          .map(function(r) { var m = mailMap[String(r.id)]; return m ? { mail: m, score: r.score } : null; })
+          .filter(Boolean);
+
+        if (!matched.length) {
+          if (smartText) smartText.textContent = 'No matches for "' + q + '"';
+          if (smartClear) smartClear.style.display = '';
+          if (list) list.innerHTML = '<div class="vb-empty" style="padding:24px 16px;"><p>No emails matched.</p></div>';
+          return;
+        }
+        if (smartText) {
+          smartText.textContent = 'Top ' + matched.length.toLocaleString() + ' match' + (matched.length !== 1 ? 'es' : '') + ' for "' + q + '"';
+        }
+        if (smartClear) smartClear.style.display = '';
+        if (list) list.innerHTML = matched.map(function(x) { return vbRowHtml(x.mail, x.score); }).join('');
+      }).catch(function() {
+        smartInput.disabled = false;
+        if (smartSend) smartSend.disabled = false;
+        if (smartText) smartText.textContent = 'Search failed — try again.';
+        if (smartClear) smartClear.style.display = '';
+      });
+    }
+
+    function vbRunSearch() {
+      if (!smartInput) return;
+      var q = smartInput.value.trim();
+      if (!q) return;
+      if (vbSearchMode === 'simple') vbRunSimpleSearch(q);
+      else vbRunSmartSearch(q);
+    }
+
+    if (smartSend)  smartSend.addEventListener('click', vbRunSearch);
+    if (smartInput) smartInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') { e.preventDefault(); vbRunSearch(); }
+    });
+    if (smartClear) smartClear.addEventListener('click', vbClearSearch);
 
     if (list && detail) {
       list.addEventListener('click', function(e) {
@@ -3962,6 +4173,7 @@
         if (!row) return;
         list.querySelectorAll('.vb-row').forEach(function(r) { r.classList.remove('selected'); });
         row.classList.add('selected');
+        vbSetDetailCollapsed(false); // clicking a row always means "show me details"
         var m = mailMap[row.getAttribute('data-id')];
         if (m) detail.innerHTML = vbDetailHtml(m);
 
@@ -4011,16 +4223,6 @@
     var grpLbl  = m.graph_indexed === 'complete' ? 'Indexed' : m.graph_indexed === 'inprogress' ? 'In Progress' : 'Pending';
 
     var entities = '';
-    if (m.subject_entities) {
-      try {
-        var ents = JSON.parse(m.subject_entities);
-        if (Array.isArray(ents) && ents.length) {
-          entities = '<div class="vb-entities">' +
-            ents.slice(0, 8).map(function(e2) { return '<span class="vb-entity-badge">' + esc(String(e2)) + '</span>'; }).join('') +
-            '</div>';
-        }
-      } catch (ex) { /* ignore */ }
-    }
 
     var bodySection = '';
     if (m.body_text) {
@@ -4050,6 +4252,251 @@
       entities +
       bodySection +
       '<div class="vb-detail-actions"><button class="vb-remove-btn">Remove from Virtual Box</button></div>';
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  BROWSE — search the full scanned mailbox, pick emails, add to Virtual Box
+  //  Reuses the Selection Review modal's virtual-scroll table markup/CSS
+  //  (.selection-review-table / .selection-review-row / .sr-*) as a full page.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  var browseState = { query: '', sort: 'date-desc', folder: '' };
+  var browseCheckedIds = new Set();
+  var BR_ROW_HEIGHT = 54;
+  var BR_VIRTUAL_BUFFER = 8;
+
+  function brFormatBytes(bytes) {
+    var n = Number(bytes) || 0;
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(n < 10 * 1024 ? 1 : 0) + ' KB';
+    if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(n < 10 * 1024 * 1024 ? 1 : 0) + ' MB';
+    return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+  }
+
+  function brFormatDate(dateValue) {
+    var d = new Date(dateValue);
+    if (isNaN(d.getTime())) return 'Unknown date';
+    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  }
+
+  function brMatchesQuery(m, q) {
+    return (
+      (m.subject || '').toLowerCase().indexOf(q) !== -1 ||
+      (m.senderName || '').toLowerCase().indexOf(q) !== -1 ||
+      (m.senderEmail || '').toLowerCase().indexOf(q) !== -1 ||
+      (m.domain || '').toLowerCase().indexOf(q) !== -1 ||
+      (m.folder || '').toLowerCase().indexOf(q) !== -1 ||
+      (m.account || '').toLowerCase().indexOf(q) !== -1
+    );
+  }
+
+  function brGetFiltered() {
+    var q = browseState.query.trim().toLowerCase();
+    var filtered = getMessages().filter(function(m) {
+      if (browseState.folder && (m.folder || '') !== browseState.folder) return false;
+      if (q && !brMatchesQuery(m, q)) return false;
+      return true;
+    });
+    var sort = browseState.sort;
+    filtered.sort(function(a, b) {
+      if (sort === 'date-asc')    return new Date(a.date) - new Date(b.date);
+      if (sort === 'size-desc')   return (Number(b.size) || 0) - (Number(a.size) || 0);
+      if (sort === 'sender-asc')  return (a.senderEmail || '').localeCompare(b.senderEmail || '');
+      if (sort === 'subject-asc') return (a.subject || '').localeCompare(b.subject || '');
+      return new Date(b.date) - new Date(a.date);
+    });
+    return filtered;
+  }
+
+  window.renderBrowse = function() {
+    var panel = document.getElementById('browseView');
+    if (!panel) return;
+
+    browseCheckedIds.clear();
+    var all = getMessages();
+
+    if (!all.length) {
+      panel.innerHTML = '<div class="vb-shell"><div class="vb-header"><h2>Browse</h2>' +
+        '<p class="vb-subtitle">No scanned emails yet</p></div>' +
+        '<div class="vb-empty"><p>Scan a mailbox first (Indexes page), then come back here to browse and pick emails for Virtual Box.</p></div></div>';
+      return;
+    }
+
+    var folderCounts = {};
+    all.forEach(function(m) { if (m.folder) folderCounts[m.folder] = (folderCounts[m.folder] || 0) + 1; });
+    var folders = Object.keys(folderCounts).sort();
+
+    panel.innerHTML =
+      '<div class="vb-shell">' +
+        '<div class="vb-header">' +
+          '<h2>Browse</h2>' +
+          '<p class="vb-subtitle" id="brSubtitle"></p>' +
+        '</div>' +
+        '<div class="selection-review-controls">' +
+          '<input type="text" id="brSearch" class="search-input" placeholder="Search subject, sender, folder…">' +
+          '<select id="brFolder">' +
+            '<option value="">All folders</option>' +
+            folders.map(function(f) {
+              return '<option value="' + esc(f) + '">' + esc(displayFolderName(f) || f) + ' (' + fmtNum(folderCounts[f]) + ')</option>';
+            }).join('') +
+          '</select>' +
+          '<select id="brSort">' +
+            '<option value="date-desc">Newest first</option>' +
+            '<option value="date-asc">Oldest first</option>' +
+            '<option value="size-desc">Largest first</option>' +
+            '<option value="sender-asc">Sender A→Z</option>' +
+            '<option value="subject-asc">Subject A→Z</option>' +
+          '</select>' +
+        '</div>' +
+        '<div id="brTable" class="selection-review-table br-table"></div>' +
+        '<div class="modal-actions selection-review-actions br-actions">' +
+          '<div id="brCheckedActions" class="sr-checked-actions" style="display:none">' +
+            '<button type="button" id="brAddToVB" class="btn btn-primary" title="Add checked emails to the Virtual Box intelligence index">Add selected to VirtualBox</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+    brWire(panel);
+  };
+
+  function brWire(panel) {
+    var table     = panel.querySelector('#brTable');
+    var search    = panel.querySelector('#brSearch');
+    var folderSel = panel.querySelector('#brFolder');
+    var sortSel   = panel.querySelector('#brSort');
+
+    search.value    = browseState.query;
+    folderSel.value = browseState.folder;
+    sortSel.value   = browseState.sort;
+
+    search.oninput    = function() { browseState.query  = search.value;    brRenderTable(panel); };
+    folderSel.onchange = function() { browseState.folder = folderSel.value; brRenderTable(panel); };
+    sortSel.onchange  = function() { browseState.sort   = sortSel.value;   brRenderTable(panel); };
+
+    table.addEventListener('click', function(e) {
+      var link = e.target.closest('[data-open-message]');
+      if (!link) return;
+      e.preventDefault();
+      if (window._ip && window._ip.openMessageInThunderbird) window._ip.openMessageInThunderbird(link.getAttribute('data-open-message'));
+    });
+
+    brRenderTable(panel);
+  }
+
+  function brRenderTable(panel) {
+    var table      = panel.querySelector('#brTable');
+    var subtitleEl = panel.querySelector('#brSubtitle');
+    var filtered   = brGetFiltered();
+
+    if (subtitleEl) {
+      subtitleEl.textContent = fmtNum(getMessages().length) + ' emails scanned · ' + fmtNum(filtered.length) + ' matched';
+    }
+
+    if (!filtered.length) {
+      table.innerHTML = '<div class="selection-empty">No emails match your filters.</div>';
+      return;
+    }
+
+    var allIds     = filtered.map(function(m) { return String(m.id); });
+    var allChecked = allIds.length > 0 && allIds.every(function(id) { return browseCheckedIds.has(id); });
+    var someChecked = allIds.some(function(id) { return browseCheckedIds.has(id); });
+    var totalHeight = filtered.length * BR_ROW_HEIGHT;
+
+    table.innerHTML =
+      '<div class="selection-review-table-head">' +
+        '<span class="sr-col-check"><input type="checkbox" id="brSelectAll"' + (allChecked ? ' checked' : '') + '></span>' +
+        '<span>Subject</span><span>Sender</span><span>Date</span><span>Size</span>' +
+      '</div>' +
+      '<div class="sr-virtual-spacer" id="brVirtualSpacer" style="height:' + totalHeight + 'px;"></div>';
+
+    var selAllCb = table.querySelector('#brSelectAll');
+    if (selAllCb && someChecked && !allChecked) selAllCb.indeterminate = true;
+    var spacer = table.querySelector('#brVirtualSpacer');
+    var headEl = table.querySelector('.selection-review-table-head');
+
+    function rowHtml(m, idx) {
+      var mid         = String(m.id);
+      var subject     = privacyOn() ? '••••••••' : esc(m.subject || '(No Subject)');
+      var senderName  = privacyOn() ? '••••••••' : esc(m.senderName || displayEmail(m.senderEmail));
+      var senderEmail = privacyOn() ? '' : esc(displayEmail(m.senderEmail) || '');
+      return '<div class="selection-review-row' + (browseCheckedIds.has(mid) ? ' sr-row-checked' : '') + '" data-id="' + esc(mid) + '" style="top:' + (idx * BR_ROW_HEIGHT) + 'px;">' +
+        '<div class="sr-col-check"><input type="checkbox" class="sr-row-cb" data-id="' + esc(mid) + '"' + (browseCheckedIds.has(mid) ? ' checked' : '') + '></div>' +
+        '<div class="selection-subject">' +
+          '<button type="button" class="selection-open-link" data-open-message="' + esc(mid) + '" title="Open in Thunderbird">' + subject + '</button>' +
+          '<span>' + esc(displayFolderName(m.folder) || 'Unknown folder') + ' · ' + esc(displayAccountName(m.account || '')) + '</span>' +
+        '</div>' +
+        '<div class="selection-sender"><strong>' + senderName + '</strong><span>' + senderEmail + '</span></div>' +
+        '<div class="selection-date">' + esc(brFormatDate(m.date)) + '</div>' +
+        '<div class="selection-size">' + esc(brFormatBytes(m.size)) + '</div>' +
+      '</div>';
+    }
+
+    var rafPending = false;
+    function renderVisible() {
+      rafPending = false;
+      var headH = headEl ? headEl.offsetHeight : 0;
+      var relTop = Math.max(0, table.scrollTop - headH);
+      var startIndex = Math.max(0, Math.floor(relTop / BR_ROW_HEIGHT) - BR_VIRTUAL_BUFFER);
+      var visibleCount = Math.ceil(table.clientHeight / BR_ROW_HEIGHT) + BR_VIRTUAL_BUFFER * 2;
+      var endIndex = Math.min(filtered.length, startIndex + visibleCount);
+      var html = '';
+      for (var i = startIndex; i < endIndex; i++) html += rowHtml(filtered[i], i);
+      spacer.innerHTML = html;
+    }
+    function scheduleRender() {
+      if (rafPending) return;
+      rafPending = true;
+      requestAnimationFrame(renderVisible);
+    }
+    table.onscroll = scheduleRender;
+    renderVisible();
+
+    if (selAllCb) {
+      selAllCb.addEventListener('change', function() {
+        allIds.forEach(function(id) { selAllCb.checked ? browseCheckedIds.add(id) : browseCheckedIds.delete(id); });
+        brUpdateCheckedActions();
+        renderVisible();
+      });
+    }
+
+    spacer.addEventListener('change', function(e) {
+      var cb = e.target.closest('.sr-row-cb');
+      if (!cb) return;
+      var id = cb.dataset.id;
+      cb.checked ? browseCheckedIds.add(id) : browseCheckedIds.delete(id);
+      var row = cb.closest('.selection-review-row');
+      if (row) row.classList.toggle('sr-row-checked', cb.checked);
+      var allNow  = allIds.every(function(vid) { return browseCheckedIds.has(vid); });
+      var someNow = allIds.some(function(vid) { return browseCheckedIds.has(vid); });
+      if (selAllCb) { selAllCb.checked = allNow; selAllCb.indeterminate = someNow && !allNow; }
+      brUpdateCheckedActions();
+    });
+
+    brUpdateCheckedActions();
+  }
+
+  function brUpdateCheckedActions() {
+    var n = browseCheckedIds.size;
+    var actionsEl = document.getElementById('brCheckedActions');
+    var addBtn    = document.getElementById('brAddToVB');
+    if (!actionsEl) return;
+    actionsEl.style.display = n > 0 ? '' : 'none';
+    if (addBtn) {
+      addBtn.textContent = 'Add selected to VirtualBox (' + fmtNum(n) + ')';
+      addBtn.onclick = function() {
+        var ids = Array.from(browseCheckedIds);
+        if (!ids.length) return;
+        browser.runtime.sendMessage({ action: 'addInclusionMails', mailIds: ids }).then(function(res) {
+          if (window._ip && window._ip.showToast) {
+            window._ip.showToast(fmtNum(ids.length) + ' email' + (ids.length !== 1 ? 's' : '') + ' added to Virtual Box');
+          }
+          if (res && res.stats && window.updateVirtualBoxNavCount) window.updateVirtualBoxNavCount(res.stats.total);
+          browseCheckedIds.clear();
+          var panel = document.getElementById('browseView');
+          if (panel) brRenderTable(panel);
+        });
+      };
+    }
   }
 
   // Render plain-text email body with light markdown: bold, inline code, headings, bullets, URLs

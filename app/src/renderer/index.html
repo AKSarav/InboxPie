@@ -83,6 +83,29 @@
           </div>
         </div>
 
+        <!-- Task: Reranker model -->
+        <div class="setup-task" id="setupTaskReranker" data-task="reranker">
+          <div class="setup-task-icon" id="setupIconReranker">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="10" cy="10" r="7"/>
+              <path d="M10 6.5v3.5l2.3 2.3"/>
+            </svg>
+          </div>
+          <div class="setup-task-body">
+            <div class="setup-task-header-row">
+              <span class="setup-task-name">AI Reranker Model</span>
+              <span class="setup-task-badge" id="setupBadgeReranker">Pending</span>
+            </div>
+            <p class="setup-task-desc" id="setupDescReranker">Downloading bge-reranker-base (~300 MB) — improves AgentChat search relevance</p>
+            <div class="setup-task-bar-wrap" id="setupBarReranker" style="display:none">
+              <div class="setup-task-bar">
+                <div class="setup-task-bar-fill" id="setupBarFillReranker"></div>
+              </div>
+              <span class="setup-task-pct" id="setupPctReranker">0%</span>
+            </div>
+          </div>
+        </div>
+
         <!-- Task: Permissions -->
         <div class="setup-task" id="setupTaskPerms" data-task="perms">
           <div class="setup-task-icon" id="setupIconPerms">
@@ -378,6 +401,12 @@
           </svg>
           Virtual Box
           <span class="nav-vb-count" id="navVirtualBoxCount" style="display:none"></span>
+        </button>
+        <button class="tab nav-item" data-view="browse" data-label="Browse">
+          <svg class="nav-item-icon" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="9" cy="9" r="6"/><path d="M17 17l-4.3-4.3"/>
+          </svg>
+          Browse
         </button>
       </div>
 
@@ -690,6 +719,7 @@
         <div id="indexesView" class="view-panel view-panel-intelligence" style="display:none;"></div>
         <div id="groupsView" class="view-panel view-panel-intelligence" style="display:none;"></div>
         <div id="virtualboxView" class="view-panel view-panel-intelligence" style="display:none;"></div>
+        <div id="browseView" class="view-panel view-panel-intelligence" style="display:none;"></div>
 
         <!-- ── Intelligence panels ── -->
         <div id="smartsearchView" class="view-panel view-panel-intelligence" style="display:none;"></div>
@@ -707,7 +737,7 @@
     <div class="modal-box selection-review-modal">
       <div class="selection-review-head">
         <div>
-          <h3>Review selected emails</h3>
+          <h3 id="selectionReviewTitle">Review selected emails</h3>
           <p id="selectionReviewSummary"></p>
         </div>
         <button type="button" id="selectionReviewClose" class="btn btn-secondary">Close</button>
@@ -721,13 +751,16 @@
           <option value="sender-asc">Sender A→Z</option>
           <option value="subject-asc">Subject A→Z</option>
         </select>
-        <button type="button" id="selectionReviewUnselectMatches" class="btn btn-secondary">Unselect Matches</button>
       </div>
       <div id="selectionReviewTable" class="selection-review-table"></div>
       <div class="modal-actions selection-review-actions">
+        <div id="selectionReviewCheckedActions" class="sr-checked-actions" style="display:none">
+          <button type="button" id="selectionReviewExcludeChecked" class="btn btn-secondary" title="Remove checked emails from selection">Exclude checked</button>
+          <button type="button" id="selectionReviewKeepChecked" class="btn btn-secondary" title="Keep only checked emails — remove everything else from selection">Keep only checked</button>
+          <button type="button" id="selectionAddToVirtualBox" class="btn btn-primary" title="Add checked emails to the Virtual Box intelligence index">Add selected to VirtualBox</button>
+        </div>
         <button type="button" id="selectionReviewExport" class="btn btn-secondary">Export CSV</button>
-        <button type="button" id="selectionReviewClear" class="btn btn-secondary">Clear Selection</button>
-        <button type="button" id="selectionAddToVirtualBox" class="btn btn-primary">Add to Virtual Box</button>
+        <button type="button" id="selectionReviewClear" class="btn btn-secondary">Reset Selection</button>
       </div>
     </div>
   </div>

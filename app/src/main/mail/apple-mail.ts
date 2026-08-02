@@ -558,6 +558,9 @@ function scanEnvelopeIndexMessages(
         accountId: `am_${parsed.uuid}`, // Prefix with provider
         tags:      [],
         size:      sqlNum(row.size),
+        // NEW: Provider metadata for VirtualBox deferred indexing
+        provider:     "apple-mail",
+        identifier_id: rowId,  // Envelope Index ROWID is the canonical identifier
       });
     }
 
@@ -649,6 +652,9 @@ function parseEmlxFile(emlxPath: string, includeBody: boolean): MessageRecord | 
   const rawSubject = headers.get("subject") ?? "";
   const subject = decodeRfc2047(rawSubject) || "(No Subject)";
 
+  // For emlx, use message-id header if available, else file basename
+  const messageId = headers.get("message-id") || path.basename(emlxPath, ".emlx");
+
   return {
     id:         path.basename(emlxPath, ".emlx"),
     subject,
@@ -670,6 +676,9 @@ function parseEmlxFile(emlxPath: string, includeBody: boolean): MessageRecord | 
     size:         fs.statSync(emlxPath).size,
     body_preview: includeBody ? extractBodyPreview(messageBytes) : undefined,
     body_display: includeBody ? extractBodyText(messageBytes, 50_000) : undefined,
+    // NEW: Provider metadata for VirtualBox deferred indexing
+    provider:     "apple-mail",
+    identifier_id: messageId,  // Message-ID header or file basename as fallback
   };
 }
 
@@ -959,6 +968,91 @@ export class AppleMailProvider implements MailProvider {
       accounts:          targetAccounts,
       envelopeIndexPath: dbPath ?? undefined,
     };
+  }
+
+  /**
+   * Fetch email body text using the Envelope Index ROWID.
+   * Used during VirtualBox deferred indexing when user confirms indexing.
+   * Returns the full email body text, or null if not found/accessible.
+   */
+  async fetchMessageBody(identifier_id: string): Promise<string | null> {
+    const dbPath = findEnvelopeIndex();
+    if (!dbPath) return null;
+
+    try {
+      const { db, cleanup } = openEnvelopeIndex(dbPath);
+      try {
+        // Query the messages table using ROWID to find the mailbox URL
+        type MessageRow = { url: string };
+        const row = db
+          .prepare("SELECT url FROM messages WHERE ROWID = ?")
+          .get(identifier_id) as MessageRow | undefined;
+
+        if (!row || !row.url) return null;
+
+        // Parse the mailbox URL to get folder path
+        const parsed = parseMailboxUrl(row.url);
+        if (!parsed || !parsed.folderPath) return null;
+
+        // The URL points to an .emlx file; construct its path and read
+        const mailRoot = path.join(os.homedir(), "Library", "Mail");
+        const versionDirs = fs
+          .readdirSync(mailRoot, { withFileTypes: true })
+          .filter((e) => e.isDirectory() && /^V\d+$/.test(e.name))
+          .sort((a, b) => Number(b.name.slice(1)) - Number(a.name.slice(1)));
+
+        for (const vdir of versionDirs) {
+          const accountPath = path.join(mailRoot, vdir.name, parsed.uuid);
+          if (!fs.existsSync(accountPath)) continue;
+
+          // Navigate to the folder and find the corresponding .mbox directory
+          const folderSegments = parsed.folderPath.split("/");
+          let currentPath = accountPath;
+
+          for (const segment of folderSegments) {
+            const mboxPath = path.join(currentPath, `${segment}.mbox`);
+            const nextPath = path.join(currentPath, segment);
+
+            if (fs.existsSync(mboxPath)) {
+              currentPath = mboxPath;
+            } else if (fs.existsSync(nextPath)) {
+              currentPath = nextPath;
+            }
+          }
+
+          // Look for the .emlx file matching this ROWID
+          // Files are named by message ID; try common patterns
+          const emlxDir = path.join(currentPath, "Messages");
+          if (!fs.existsSync(emlxDir)) continue;
+
+          // The message ID from Envelope Index is stored in the ROWID
+          // Try to find .emlx file that corresponds to this message
+          // This is a best-effort search; ideally we'd store the filename mapping
+          const files = fs.readdirSync(emlxDir);
+          for (const file of files) {
+            if (!file.endsWith(".emlx")) continue;
+
+            const emlxPath = path.join(emlxDir, file);
+            try {
+              const record = parseEmlxFile(emlxPath, true); // includeBody=true
+              if (record && record.body_display) {
+                return record.body_display;
+              }
+            } catch {
+              // Skip files that can't be parsed
+              continue;
+            }
+          }
+        }
+
+        return null;
+      } finally {
+        cleanup();
+      }
+    } catch (e) {
+      console.warn(`[AppleMail] fetchMessageBody(${identifier_id}) failed:`, e);
+      return null;
+    }
   }
 
   async deleteMessages(_messageIds: Array<string | number>): Promise<MoveDeleteResult> {

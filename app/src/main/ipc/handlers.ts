@@ -5,7 +5,8 @@ import path from "node:path";
 
 import type { ProgressEvent, RpcAction } from "../../../shared/message-record";
 import { checkOllama, runAgentQuery, checkCloudProvider } from "../agent/nlp-agent";
-import { checkEmbeddingModel, isEmbeddingReady } from "../agent/embeddings";
+import { checkEmbeddingModel, isEmbeddingReady, embedText } from "../agent/embeddings";
+import { checkRerankerModel, isRerankerModelReady, getRerankerModelError } from "../agent/reranker";
 import { buildVectorIndex }           from "../agent/indexer";
 import { buildGraphIndexJob }         from "../agent/graph-extractor";
 import { lanceStore }                 from "../db/lance-store";
@@ -19,13 +20,15 @@ import { isThunderbirdInstalled } from "../mail/thunderbird";
 // ── Knowledge graph helpers ────────────────────────────────────────────────────
 
 const TYPE_PALETTE: Record<string, string> = {
-  ORG:    "#818cf8",  // indigo
-  PERSON: "#10b981",  // emerald
-  PRODUCT:"#f59e0b",  // amber
-  TOPIC:  "#f43f5e",  // rose
-  PLACE:  "#14b8a6",  // teal
-  EVENT:  "#f97316",  // orange
-  Entity: "#a855f7",  // purple (fallback)
+  ORG:    "#5887e4",  // blue
+  PERSON: "#58e470",  // green
+  PRODUCT:"#e4b558",  // amber
+  TOPIC:  "#e45864",  // rose-red
+  PLACE:  "#58e4d8",  // teal-cyan
+  EVENT:  "#e458cd",  // magenta
+  DATE:   "#9258e4",  // blue-violet
+  AMOUNT: "#aae458",  // chartreuse
+  Entity: "#93909f",  // muted slate (fallback — deliberately desaturated, recedes)
 };
 
 /** Resolve the configured AI provider + model + decrypted API key. Returns null if not configured. */
@@ -437,7 +440,7 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
         return checkOllama();
 
       case "chatQuery": {
-        const { userMessage, history, model, provider, folders, mode } = message as any;
+        const { userMessage, history, model, provider, mode } = message as any;
         const win = getMainWindow();
         currentChatAbort?.abort();
         currentChatAbort = new AbortController();
@@ -460,7 +463,6 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
             userMessage,
             history ?? [],
             resolvedModel,
-            folders,
             (ev) => { emitProgress(win, ev as any); },
             mode ?? "fast",
             signal,
@@ -534,11 +536,17 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
         return { ...status, ready: isEmbeddingReady() };
       }
 
+      case "checkReranker": {
+        const status = await checkRerankerModel();
+        return { ...status, ready: isRerankerModelReady(), error: getRerankerModelError() ?? undefined };
+      }
+
       // ── First-run setup status ────────────────────────────────────────────────
       // Returns the state of all setup prerequisites so the setup screen can poll.
 
       case "getSetupStatus": {
-        const embStatus = await checkEmbeddingModel();
+        const embStatus  = await checkEmbeddingModel();
+        const rrkStatus  = await checkRerankerModel();
 
         // Check Full Disk Access by attempting to stat the Mail envelope index
         const mailDir = path.join(os.homedir(), "Library", "Mail");
@@ -554,8 +562,9 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
           if (permsOk) permsDetail = "Full Disk Access granted";
         }
 
-        // Update embedding flag in prefs
+        // Update embedding/reranker flags in prefs
         if (embStatus.cached) inboxPieDb.setPreference("is_embedding_downloaded", "yes");
+        if (rrkStatus.cached) inboxPieDb.setPreference("is_reranker_downloaded", "yes");
 
         const appReady = inboxPieDb.getPreference("app_ready", null) === "yes";
 
@@ -573,6 +582,29 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
                   ? `Cached (${embStatus.downloadedMB} MB) — will load on first search`
                   : `Downloading… ${embStatus.downloadedMB}/${embStatus.totalMB} MB`,
               required: true,
+            },
+            {
+              id:      "reranker",
+              label:   "AI Reranker Model",
+              // isRerankerModelReady() reflects an actual successful model load, not just
+              // "the worker thread started" (that's what the old isRerankerReady() check
+              // conflated — it reported "done" even when the model 404'd on download).
+              status:  isRerankerModelReady()
+                ? "done"
+                : getRerankerModelError()
+                  ? "warn"
+                  : "active",
+              pct:     isRerankerModelReady() ? 100 : (rrkStatus.totalMB > 0 ? Math.min(99, Math.round((rrkStatus.downloadedMB / rrkStatus.totalMB) * 100)) : 0),
+              detail:  isRerankerModelReady()
+                ? "bge-reranker-base loaded in memory"
+                : getRerankerModelError()
+                  ? `Failed to load (${getRerankerModelError()}) — AgentChat search will use hybrid ranking instead`
+                  : rrkStatus.cached
+                    ? `Cached (${rrkStatus.downloadedMB} MB) — will load on first search`
+                    : `Downloading… ${rrkStatus.downloadedMB}/${rrkStatus.totalMB} MB`,
+              // Optional: search still works via hybrid ranking if this isn't ready —
+              // a ~1.1GB download shouldn't block first launch the way embedding does.
+              required: false,
             },
             {
               id:      "perms",
@@ -678,6 +710,8 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
 
       case "resetVectorIndex":
         await lanceStore.reset();
+        inboxPieDb.resetVectorFlags();
+        inboxPieDb.resetGraphIndex();
         return { success: true };
 
       case "resetAllData": {
@@ -1291,6 +1325,19 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
               console.log(`[VirtualBox] Saved body text for ${bodyTexts.length} emails`);
             }
 
+            // ── Classify each VB mail → mails.category ────────────────────────────
+            try {
+              const clusters = buildClusters();
+              const catEntries = vbMails.map((m) => {
+                const text = `${m["subject"] ?? ""} ${m["domain"] ?? ""} ${m["sender"] ?? ""}`;
+                const idx  = classifyEmail(text, clusters);
+                return { id: String(m["id"]), category: clusters[idx]?.label ?? "Other" };
+              });
+              inboxPieDb.saveMailCategories(catEntries);
+            } catch (e) {
+              console.warn("[VirtualBox] category classification failed:", (e as Error)?.message);
+            }
+
             // Enrich VB mail records with body_preview so buildVectorIndex uses content mode
             const enrichedMails = vbMails.map((m) => ({
               ...m,
@@ -1360,6 +1407,22 @@ export function registerIpcHandlers(getMainWindow: () => BrowserWindow | null): 
 
       case "getVirtualBoxStats":
         return inboxPieDb.getVirtualBoxStats();
+
+      // Hybrid search (vector + BM25, RRF-fused) over the Virtual Box's LanceDB index —
+      // returns matching mail ids ranked by relevance; the renderer already holds the
+      // full Virtual Box mail data, so we only need ids/scores back over IPC.
+      case "smartSearchVirtualBox": {
+        const { query, limit } = message as any;
+        const q = String(query ?? "").trim();
+        if (!q) return { results: [] };
+        try {
+          const queryVec = await embedText(q);
+          const results = await lanceStore.search(queryVec, { queryText: q, limit: limit ?? 50 });
+          return { results: results.map((r) => ({ id: r.id, score: r.score })) };
+        } catch (e) {
+          return { results: [], error: (e as Error).message };
+        }
+      }
 
       case "getInclusionRules":
         return inboxPieDb.getInclusionRules();
@@ -1468,14 +1531,17 @@ function populateScanDB(
   }
 
   const inserts = messages.map((m) => ({
-    id:        String(m.id),
-    mailboxId: m.accountId,
-    folderId:  folderIdMap.get(folderKey(m.accountId, m.folder)) ?? 0,
-    sender:    m.senderEmail || m.author || "",
-    domain:    m.domain || "",
-    size:      m.size ?? 0,
-    subject:   m.subject || "",
-    date:      m.date || "",
+    id:            String(m.id),
+    mailboxId:     m.accountId,
+    folderId:      folderIdMap.get(folderKey(m.accountId, m.folder)) ?? 0,
+    sender:        m.senderEmail || m.author || "",
+    domain:        m.domain || "",
+    size:          m.size ?? 0,
+    subject:       m.subject || "",
+    date:          m.date || "",
+    // NEW: Store provider and identifier_id for deferred content fetching during indexing
+    provider:      m.provider,
+    identifier_id: m.identifier_id,
   })).filter((r) => r.mailboxId && r.folderId > 0);
 
   const mailCountByFolder = new Map<number, number>();
