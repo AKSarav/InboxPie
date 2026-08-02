@@ -995,6 +995,120 @@
   }
 
   // ══════════════════════════════════════════
+  //  ECHARTS UTILITIES & BAR CHART RENDERING
+  // ══════════════════════════════════════════
+
+  function initViewChart(hostId, option) {
+    if (!window.echarts) return;
+    const el = document.getElementById(hostId);
+    if (!el) return;
+
+    if (!el._echartsInstance) {
+      el._echartsInstance = echarts.init(el, getChartTheme());
+      new ResizeObserver(() => {
+        if (el._echartsInstance) el._echartsInstance.resize();
+      }).observe(el);
+    }
+    el._echartsInstance.setOption(option, true);
+    requestAnimationFrame(() => {
+      if (el._echartsInstance) el._echartsInstance.resize();
+    });
+  }
+
+  function getChartTheme() {
+    const theme = document.documentElement.getAttribute("data-theme") || "dark";
+    return theme === "light" ? "light" : "dark";
+  }
+
+  function buildSizeBarChartOption() {
+    const buckets = [
+      { key: "0-1MB", label: "0–1 MB", min: 0, max: 1_000_000 },
+      { key: "1-10MB", label: "1–10 MB", min: 1_000_000, max: 10_000_000 },
+      { key: "10-100MB", label: "10–100 MB", min: 10_000_000, max: 100_000_000 },
+      { key: "100MB+", label: "100 MB+", min: 100_000_000, max: Infinity }
+    ];
+
+    const counts = buckets.map(b =>
+      allMessages.filter(m => (m.size || 0) >= b.min && (m.size || 0) < b.max).length
+    );
+
+    return {
+      tooltip: { trigger: "axis" },
+      grid: { left: "10%", right: "10%", top: "12px", bottom: "40px", containLabel: true },
+      xAxis: {
+        type: "category",
+        data: buckets.map(b => b.label),
+        axisLabel: { fontSize: 11 }
+      },
+      yAxis: { type: "value", minInterval: 1 },
+      series: [{
+        type: "bar",
+        data: counts,
+        itemStyle: { borderRadius: [4, 4, 0, 0], color: colorFor(0) },
+        label: { show: true, position: "top", fontSize: 11 }
+      }]
+    };
+  }
+
+  function buildDomainBarChartOption() {
+    const domains = {};
+    allMessages.forEach(m => {
+      if (!m.domain) return;
+      domains[m.domain] = (domains[m.domain] || 0) + 1;
+    });
+
+    const sorted = Object.entries(domains)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10);
+
+    return {
+      tooltip: { trigger: "axis" },
+      grid: { left: "10%", right: "10%", top: "12px", bottom: "40px", containLabel: true },
+      xAxis: {
+        type: "category",
+        data: sorted.map(([d]) => d),
+        axisLabel: { fontSize: 10, interval: 0, rotate: 45 }
+      },
+      yAxis: { type: "value", minInterval: 1 },
+      series: [{
+        type: "bar",
+        data: sorted.map(([, c]) => c),
+        itemStyle: { borderRadius: [4, 4, 0, 0], color: colorFor(1) },
+        label: { show: false }
+      }]
+    };
+  }
+
+  function buildSenderBarChartOption() {
+    const senders = {};
+    allMessages.forEach(m => {
+      const key = m.senderEmail || m.author || "Unknown";
+      senders[key] = (senders[key] || 0) + 1;
+    });
+
+    const sorted = Object.entries(senders)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10);
+
+    return {
+      tooltip: { trigger: "axis" },
+      grid: { left: "10%", right: "10%", top: "12px", bottom: "40px", containLabel: true },
+      xAxis: {
+        type: "category",
+        data: sorted.map(([s]) => s),
+        axisLabel: { fontSize: 10, interval: 0, rotate: 45 }
+      },
+      yAxis: { type: "value", minInterval: 1 },
+      series: [{
+        type: "bar",
+        data: sorted.map(([, c]) => c),
+        itemStyle: { borderRadius: [4, 4, 0, 0], color: colorFor(2) },
+        label: { show: false }
+      }]
+    };
+  }
+
+  // ══════════════════════════════════════════
   //  SUNBURST CHART (theme-aware)
   // ══════════════════════════════════════════
   function renderSunburst(filterFn = null, breadcrumbPath = []) {
@@ -1516,6 +1630,19 @@
 
     searchInput.oninput = () => renderSenderTable();
     sortSelect.onchange = () => renderSenderTable();
+
+    // Render chart
+    initViewChart("chart-sender-container", buildSenderBarChartOption());
+    const chart = document.getElementById("chart-sender-container")._echartsInstance;
+    if (chart) {
+      chart.on("click", (params) => {
+        if (params.value && params.value > 0) {
+          searchInput.value = params.name;
+          renderSenderTable();
+        }
+      });
+    }
+
     updateBulkButtons();
   }
 
@@ -1632,6 +1759,18 @@
       });
     });
 
+    // Render chart
+    initViewChart("chart-domain-container", buildDomainBarChartOption());
+    const chart = document.getElementById("chart-domain-container")._echartsInstance;
+    if (chart) {
+      chart.on("click", (params) => {
+        if (params.value && params.value > 0) {
+          searchInput.value = params.name;
+          renderDomainTable();
+        }
+      });
+    }
+
     updateBulkButtons();
   }
 
@@ -1713,6 +1852,28 @@
     container.querySelectorAll("[data-size-kind]").forEach((btn) => {
       btn.addEventListener("click", () => selectSizeInsight(btn, knownMessages));
     });
+
+    // Render chart
+    initViewChart("chart-size-container", buildSizeBarChartOption());
+    const chart = document.getElementById("chart-size-container")._echartsInstance;
+    if (chart) {
+      chart.on("click", (params) => {
+        if (params.value && params.value > 0) {
+          const buckets = [
+            { key: "0-1MB", label: "0–1 MB", min: 0, max: 1_000_000 },
+            { key: "1-10MB", label: "1–10 MB", min: 1_000_000, max: 10_000_000 },
+            { key: "10-100MB", label: "10–100 MB", min: 10_000_000, max: 100_000_000 },
+            { key: "100MB+", label: "100 MB+", min: 100_000_000, max: Infinity }
+          ];
+          const bucketIndex = buckets.findIndex(b => b.label === params.name);
+          if (bucketIndex >= 0) selectSizeInsight(
+            document.querySelector(`[data-size-kind="${["bucket", "domain", "sender", "large"][bucketIndex]}"]`),
+            knownMessages
+          );
+        }
+      });
+    }
+
     updateBulkButtons();
   }
 
