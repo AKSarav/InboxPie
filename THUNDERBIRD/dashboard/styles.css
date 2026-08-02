@@ -83,7 +83,41 @@ body {
 }
 .header-left { display: flex; align-items: center; gap: 10px; }
 .logo-icon { color: var(--accent); }
-#header h1 { font-size: 16px; font-weight: 700; letter-spacing: -0.02em; }
+#header .header-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+#header h1 {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0;
+  padding: 0;
+}
+
+.brand-gradient {
+  background: linear-gradient(135deg, #e2e8f0 30%, #93c5fd 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+[data-theme="light"] .brand-gradient {
+  background: linear-gradient(135deg, #1e3a5f 30%, #2563eb 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.version-badge {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
 .header-right { display: flex; align-items: center; gap: 10px; }
 
 /* Theme Toggle */
