@@ -1003,6 +1003,11 @@
     const el = document.getElementById(hostId);
     if (!el) return;
 
+    // Set container height based on chart height option
+    if (option.height) {
+      el.style.minHeight = Math.min(option.height, 600) + "px";
+    }
+
     if (!el._echartsInstance) {
       el._echartsInstance = echarts.init(el, getChartTheme());
       new ResizeObserver(() => {
@@ -1058,24 +1063,26 @@
     });
 
     const sorted = Object.entries(domains)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10);
+      .sort((a, b) => b[1] - a[1]);
+
+    const chartHeight = Math.max(400, sorted.length * 25);
 
     return {
       tooltip: { trigger: "axis" },
-      grid: { left: "10%", right: "10%", top: "12px", bottom: "40px", containLabel: true },
+      grid: { left: "15%", right: "5%", top: "12px", bottom: "12px", containLabel: true },
       xAxis: {
         type: "category",
         data: sorted.map(([d]) => d),
-        axisLabel: { fontSize: 10, interval: 0, rotate: 45 }
+        axisLabel: { fontSize: 11, margin: 8 }
       },
       yAxis: { type: "value", minInterval: 1 },
       series: [{
         type: "bar",
         data: sorted.map(([, c]) => c),
         itemStyle: { borderRadius: [4, 4, 0, 0], color: colorFor(1) },
-        label: { show: false }
-      }]
+        label: { show: true, position: "right", fontSize: 10 }
+      }],
+      height: chartHeight
     };
   }
 
@@ -1087,24 +1094,26 @@
     });
 
     const sorted = Object.entries(senders)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10);
+      .sort((a, b) => b[1] - a[1]);
+
+    const chartHeight = Math.max(400, sorted.length * 25);
 
     return {
       tooltip: { trigger: "axis" },
-      grid: { left: "10%", right: "10%", top: "12px", bottom: "40px", containLabel: true },
+      grid: { left: "15%", right: "5%", top: "12px", bottom: "12px", containLabel: true },
       xAxis: {
         type: "category",
         data: sorted.map(([s]) => s),
-        axisLabel: { fontSize: 10, interval: 0, rotate: 45 }
+        axisLabel: { fontSize: 11, margin: 8 }
       },
       yAxis: { type: "value", minInterval: 1 },
       series: [{
         type: "bar",
         data: sorted.map(([, c]) => c),
         itemStyle: { borderRadius: [4, 4, 0, 0], color: colorFor(2) },
-        label: { show: false }
-      }]
+        label: { show: true, position: "right", fontSize: 10 }
+      }],
+      height: chartHeight
     };
   }
 
