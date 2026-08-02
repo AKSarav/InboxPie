@@ -3,6 +3,7 @@
 :root, [data-theme="dark"] {
   --bg-primary: #0c0f14;
   --bg-secondary: #13161d;
+  --bg-tertiary: #1a1f29;
   --bg-card: #181c25;
   --bg-hover: #1e2330;
   --border: #2a3040;
@@ -29,6 +30,7 @@
 [data-theme="light"] {
   --bg-primary: #f4f5f7;
   --bg-secondary: #ffffff;
+  --bg-tertiary: #f9fafb;
   --bg-card: #ffffff;
   --bg-hover: #eef0f4;
   --border: #d4d8e0;
@@ -646,6 +648,52 @@ select option { background: var(--bg-card); color: var(--text-primary); }
   overflow: auto;
 }
 .chart-container canvas, .chart-container svg { max-height: 100%; max-width: 100%; }
+
+/* Settings & Categories */
+.settings-dashboard { padding: 20px; }
+.settings-header { margin-bottom: 30px; }
+.settings-header h2 { margin-bottom: 6px; }
+.settings-section { margin-bottom: 30px; }
+.settings-section-head { margin-bottom: 16px; }
+.settings-section-head h3 { margin-bottom: 4px; font-size: 14px; }
+.settings-section-head p { font-size: 12px; color: var(--text-muted); }
+.settings-add-category { display: flex; gap: 8px; margin-bottom: 16px; }
+.settings-add-category input { flex: 1; }
+.settings-add-category .btn { flex-shrink: 0; }
+
+.ais-categories-list { display: flex; flex-direction: column; gap: 12px; }
+.ais-cat-row { border: 1px solid var(--border); border-radius: 6px; padding: 12px; background: var(--bg-secondary); }
+.ais-cat-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.ais-cat-name { font-weight: 600; font-size: 14px; }
+.ais-cat-tag { font-size: 10px; background: var(--bg-tertiary); padding: 2px 6px; border-radius: 3px; margin-left: 6px; }
+.ais-cat-del { background: transparent; border: none; color: var(--text-muted); cursor: pointer; font-size: 16px; padding: 0; }
+.ais-cat-del:hover { color: var(--text-primary); }
+.ais-cat-kws { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ais-cat-chip { display: inline-flex; align-items: center; gap: 6px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 12px; padding: 4px 8px; font-size: 12px; }
+.ais-cat-chip-x { background: transparent; border: none; cursor: pointer; font-size: 12px; padding: 0; color: var(--text-muted); line-height: 1; }
+.ais-cat-chip-x:hover { color: var(--text-primary); }
+.ais-cat-kwadd { flex: 0 1 140px; padding: 4px 8px; border: 1px dashed var(--border); border-radius: 12px; background: transparent; color: var(--text-primary); font-size: 12px; }
+.ais-cat-kwadd::placeholder { color: var(--text-muted); }
+.ais-folders-empty { padding: 20px; text-align: center; color: var(--text-muted); font-size: 12px; background: var(--bg-secondary); border-radius: 6px; }
+
+/* Subscriptions */
+.subscriptions-freq-tabs { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+.sub-freq-tab { padding: 8px 14px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 20px; cursor: pointer; font-size: 12px; font-weight: 500; color: var(--text-secondary); transition: all 0.2s; }
+.sub-freq-tab:hover { background: var(--bg-tertiary); }
+.sub-freq-tab.active { background: var(--accent); color: white; border-color: var(--accent); }
+.subscriptions-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.an-sub-card { background: var(--bg-secondary); border-radius: 6px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.an-sub-head { display: flex; justify-content: space-between; align-items: start; gap: 8px; }
+.an-sub-domain { font-weight: 600; font-size: 13px; flex: 1; }
+.an-sub-badges { display: flex; gap: 4px; flex-wrap: wrap; }
+.an-sub-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; text-transform: uppercase; }
+.an-sub-newsletter { background: #fef3c7; color: #92400e; }
+.an-sub-freq { background: #e0f2fe; color: #0c4a6e; }
+.an-sub-meta { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; font-size: 11px; color: var(--text-secondary); }
+.an-sub-meta div { padding: 6px; background: var(--bg-primary); border-radius: 4px; }
+.an-sub-meta strong { color: var(--text-primary); display: block; }
+
+.timeline-dashboard, .settings-dashboard { max-width: 100%; }
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; }

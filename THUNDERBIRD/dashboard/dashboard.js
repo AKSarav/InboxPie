@@ -990,6 +990,8 @@
       else if (view === "domain") renderDomainTable();
       else if (view === "size") renderSizeDashboard();
       else if (view === "timeline") renderTimeline();
+      else if (view === "subscriptions") renderSubscriptionsView();
+      else if (view === "settings") renderSettingsView();
     }
     updateBulkButtons();
   }
@@ -2799,6 +2801,349 @@
       .replace(/'/g, "&#39;");
   }
   function escAttr(s) { return (s || "").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
+
+  // ══════════════════════════════════════════
+  //  CATEGORIES (Phase 3)
+  // ══════════════════════════════════════════
+
+  const DEFAULT_BUILT_IN_CATEGORIES = [
+    { name: "Finance", icon: "💰", keywords: ["payment","invoice","bill","bank","credit","debit","statement","transaction","balance","money","fund","investment","loan","tax"] },
+    { name: "Shopping", icon: "🛍️", keywords: ["order","purchase","delivery","shipping","amazon","cart","shop","buy","receipt","product","item","refund","return","track"] },
+    { name: "Travel", icon: "✈️", keywords: ["flight","hotel","booking","ticket","reservation","travel","trip","journey","airline","airport","itinerary"] },
+    { name: "Work", icon: "💼", keywords: ["meeting","project","deadline","team","report","schedule","task","office","manager","sprint","standup","review","jira"] },
+    { name: "Newsletters", icon: "📰", keywords: ["newsletter","unsubscribe","weekly","digest","subscribe","edition","substack","mailchimp"] },
+    { name: "Social", icon: "👥", keywords: ["friend","follow","comment","like","mention","invite","connect","profile","network","notification"] },
+    { name: "Tech", icon: "⚙️", keywords: ["update","release","version","feature","bug","security","software","app","github","deploy","patch"] },
+    { name: "Healthcare", icon: "🏥", keywords: ["appointment","prescription","doctor","health","medical","clinic","hospital","insurance","lab","test"] },
+    { name: "Food", icon: "🍔", keywords: ["restaurant","food","delivery","menu","zomato","swiggy","meal","doordash","order","cuisine"] },
+    { name: "Utilities", icon: "⚡", keywords: ["electricity","water","gas","internet","phone","broadband","utility","provider","bill","recharge"] },
+    { name: "Real Estate", icon: "🏠", keywords: ["property","rent","lease","apartment","house","mortgage","tenant","landlord","flat","listing"] }
+  ];
+
+  let emailCategories = new Map(); // Map<mailId, categoryName>
+
+  async function loadCategoriesFromStorage() {
+    try {
+      const result = await browser.storage.local.get("categories");
+      return result.categories || [];
+    } catch (e) {
+      console.error("Failed to load categories:", e);
+      return [];
+    }
+  }
+
+  async function saveCategoryToStorage(name, keywords) {
+    try {
+      const cats = await loadCategoriesFromStorage();
+      const exists = cats.findIndex(c => c.name === name);
+      if (exists >= 0) {
+        cats[exists].keywords = keywords;
+      } else {
+        cats.push({ name, icon: "🏷️", keywords, builtin: 0 });
+      }
+      await browser.storage.local.set({ categories: cats });
+      return true;
+    } catch (e) {
+      console.error("Failed to save category:", e);
+      return false;
+    }
+  }
+
+  async function deleteCategoryFromStorage(name) {
+    try {
+      const cats = await loadCategoriesFromStorage();
+      const filtered = cats.filter(c => c.name !== name);
+      await browser.storage.local.set({ categories: filtered });
+      return true;
+    } catch (e) {
+      console.error("Failed to delete category:", e);
+      return false;
+    }
+  }
+
+  function classifyEmail(email, categories) {
+    const text = (email.subject + " " + email.author + " " + (email.domain || "")).toLowerCase();
+    for (const cat of categories) {
+      for (const kw of (cat.keywords || [])) {
+        if (text.includes(kw.toLowerCase())) return cat.name;
+      }
+    }
+    return null;
+  }
+
+  async function renderSettingsView() {
+    const container = $("#settingsView");
+    if (!container) return;
+
+    // Seed default categories if not already done
+    const existing = await loadCategoriesFromStorage();
+    if (!existing.length) {
+      for (const cat of DEFAULT_BUILT_IN_CATEGORIES) {
+        await saveCategoryToStorage(cat.name, cat.keywords);
+      }
+    }
+
+    await renderCategoryList();
+    wireUpCategoryAdd();
+  }
+
+  async function renderCategoryList() {
+    const list = $("#aisCategoriesList");
+    if (!list) return;
+
+    const categories = await loadCategoriesFromStorage();
+    if (!categories.length) {
+      list.innerHTML = '<div class="ais-folders-empty">No categories. Add one below.</div>';
+      return;
+    }
+
+    const byName = {};
+    categories.forEach(c => { byName[c.name] = (c.keywords || []).slice(); });
+
+    list.innerHTML = categories.map(c => {
+      const chips = (c.keywords || []).map(k => {
+        return '<span class="ais-cat-chip" data-cat="' + escAttr(c.name) + '" data-kw="' + escAttr(k) + '">' +
+          escHtml(k) + '<button class="ais-cat-chip-x" title="Remove keyword">×</button></span>';
+      }).join('');
+      return '<div class="ais-cat-row">' +
+        '<div class="ais-cat-head">' +
+          '<span class="ais-cat-name">' + escHtml(c.icon || '🏷️') + ' ' + escHtml(c.name) + '</span>' +
+          '<button class="ais-cat-del" title="Delete category" data-cat="' + escAttr(c.name) + '">✕</button>' +
+        '</div>' +
+        '<div class="ais-cat-kws">' + chips +
+          '<input type="text" class="ais-cat-kwadd" data-cat="' + escAttr(c.name) + '" placeholder="+ keyword">' +
+        '</div>' +
+      '</div>';
+    }).join('');
+
+    // Wire up keyword chip removal
+    list.querySelectorAll('.ais-cat-chip-x').forEach(btn => {
+      btn.addEventListener('click', async function () {
+        const chip = btn.closest('.ais-cat-chip');
+        const cat = chip.getAttribute('data-cat'), kw = chip.getAttribute('data-kw');
+        const updated = (byName[cat] || []).filter(k => k !== kw);
+        await saveCategoryToStorage(cat, updated);
+        await renderCategoryList();
+        reclassifyAllEmails();
+      });
+    });
+
+    // Wire up adding keywords
+    list.querySelectorAll('.ais-cat-kwadd').forEach(inp => {
+      inp.addEventListener('keydown', async function (e) {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        const cat = inp.getAttribute('data-cat'), val = inp.value.trim();
+        if (!val) return;
+        const adds = val.split(',').map(s => s.trim()).filter(Boolean);
+        let next = (byName[cat] || []).concat(adds);
+        next = next.filter((k, i) => next.indexOf(k) === i); // dedupe
+        inp.value = '';
+        await saveCategoryToStorage(cat, next);
+        await renderCategoryList();
+        reclassifyAllEmails();
+      });
+    });
+
+    // Wire up category deletion
+    list.querySelectorAll('.ais-cat-del').forEach(btn => {
+      btn.addEventListener('click', async function () {
+        const name = btn.getAttribute('data-cat');
+        if (!window.confirm('Delete category "' + name + '"?')) return;
+        await deleteCategoryFromStorage(name);
+        await renderCategoryList();
+        reclassifyAllEmails();
+      });
+    });
+  }
+
+  function wireUpCategoryAdd() {
+    const btn = $("#aisCatAdd");
+    const nameInput = $("#aisCatName");
+    const kwInput = $("#aisCatKeywords");
+    if (!btn || !nameInput || !kwInput) return;
+
+    async function add() {
+      const n = nameInput.value.trim();
+      if (!n) { nameInput.focus(); return; }
+      const keywords = kwInput.value.split(',').map(s => s.trim()).filter(Boolean);
+      btn.disabled = true;
+      await saveCategoryToStorage(n, keywords);
+      nameInput.value = '';
+      kwInput.value = '';
+      btn.disabled = false;
+      await renderCategoryList();
+      reclassifyAllEmails();
+    }
+
+    btn.addEventListener('click', add);
+    kwInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+  }
+
+  async function reclassifyAllEmails() {
+    const categories = await loadCategoriesFromStorage();
+    emailCategories.clear();
+    allMessages.forEach(msg => {
+      const cat = classifyEmail(msg, categories);
+      if (cat) emailCategories.set(msg.id, cat);
+    });
+  }
+
+  // ══════════════════════════════════════════
+  //  SUBSCRIPTIONS (Phase 4)
+  // ══════════════════════════════════════════
+
+  function computeSubscriptionStats(msgs) {
+    const byDomain = {};
+    msgs.forEach(m => {
+      if (!m.domain || !m.date) return;
+      const ts = Math.floor(new Date(m.date).getTime() / 1000);
+      if (!ts || isNaN(ts)) return;
+      if (!byDomain[m.domain]) byDomain[m.domain] = { dates: [], subjects: [], senders: {}, size: 0 };
+      const g = byDomain[m.domain];
+      g.dates.push(ts);
+      if (m.subject) g.subjects.push(m.subject.toLowerCase());
+      if (m.senderEmail) g.senders[m.senderEmail] = true;
+      g.size += m.size || 0;
+    });
+
+    const results = [];
+    Object.keys(byDomain).forEach(domain => {
+      const g = byDomain[domain];
+      if (g.dates.length < 3) return;
+      g.dates.sort((a, b) => a - b);
+
+      let totalGap = 0;
+      for (let i = 1; i < g.dates.length; i++) totalGap += (g.dates[i] - g.dates[i - 1]) / 86400;
+      const avgDays = totalGap / (g.dates.length - 1);
+
+      let frequency;
+      if (avgDays <= 1.5) frequency = "Daily";
+      else if (avgDays <= 4) frequency = "Every few days";
+      else if (avgDays <= 10) frequency = "Weekly";
+      else if (avgDays <= 25) frequency = "Bi-weekly";
+      else if (avgDays <= 55) frequency = "Monthly";
+      else if (avgDays <= 100) frequency = "Quarterly";
+      else frequency = "Occasional";
+
+      if (frequency === "Occasional") return;
+
+      const hasUnsubscribe = g.subjects.some(s => s.indexOf("unsubscribe") !== -1);
+
+      results.push({
+        domain: domain,
+        email_count: g.dates.length,
+        sender_count: Object.keys(g.senders).length,
+        avg_interval_days: Math.round(avgDays * 10) / 10,
+        frequency: frequency,
+        is_newsletter: hasUnsubscribe,
+        last_date_unix: g.dates[g.dates.length - 1],
+        size_bytes: g.size
+      });
+    });
+
+    return results.sort((a, b) => b.email_count - a.email_count);
+  }
+
+  async function renderSubscriptionsView() {
+    const stats = computeSubscriptionStats(allMessages);
+    if (!stats.length) {
+      const container = $("#subscriptionsCards");
+      if (container) container.innerHTML = '<div class="ais-folders-empty">No subscriptions detected.</div>';
+      return;
+    }
+
+    renderSubscriptionChart(stats);
+    renderSubscriptionFreqTabs(stats);
+  }
+
+  function renderSubscriptionChart(stats) {
+    const freqCounts = {};
+    stats.forEach(s => {
+      freqCounts[s.frequency] = (freqCounts[s.frequency] || 0) + 1;
+    });
+
+    const freqOrder = ["Daily", "Every few days", "Weekly", "Bi-weekly", "Monthly", "Quarterly"];
+    const data = freqOrder
+      .filter(f => freqCounts[f])
+      .map((f, i) => ({
+        name: f,
+        value: freqCounts[f],
+        itemStyle: { color: colorFor(i) }
+      }));
+
+    initViewChart("chart-subscriptions-container", {
+      backgroundColor: "transparent",
+      tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${p.value.toLocaleString()} subscriptions (${p.percent}%)` },
+      legend: { show: false },
+      series: [{
+        type: "pie",
+        radius: ["38%", "68%"],
+        center: ["50%", "50%"],
+        data: data,
+        label: { formatter: "{b}\n{d}%", fontSize: 11 },
+        emphasis: { itemStyle: { shadowBlur: 8, shadowColor: "rgba(0,0,0,0.4)" } }
+      }]
+    });
+  }
+
+  function renderSubscriptionFreqTabs(stats) {
+    const tabs = $("#subscriptionsFreqTabs");
+    if (!tabs) return;
+
+    const freqs = ["All", "Newsletter", ...["Daily", "Every few days", "Weekly", "Bi-weekly", "Monthly", "Quarterly"]];
+    tabs.innerHTML = freqs.map(f => {
+      const count = f === "All" ? stats.length :
+                    f === "Newsletter" ? stats.filter(s => s.is_newsletter).length :
+                    stats.filter(s => s.frequency === f).length;
+      return `<button class="sub-freq-tab ${f === 'All' ? 'active' : ''}" data-freq="${f}">${f} (${count})</button>`;
+    }).join('');
+
+    tabs.querySelectorAll('.sub-freq-tab').forEach(btn => {
+      btn.addEventListener('click', function () {
+        tabs.querySelectorAll('.sub-freq-tab').forEach(b => b.classList.remove('active'));
+        this.classList.add('active');
+        const freq = this.getAttribute('data-freq');
+        renderSubscriptionCards(stats, freq);
+      });
+    });
+
+    renderSubscriptionCards(stats, "All");
+  }
+
+  function renderSubscriptionCards(stats, filter) {
+    let filtered = stats;
+    if (filter === "Newsletter") filtered = stats.filter(s => s.is_newsletter);
+    else if (filter !== "All") filtered = stats.filter(s => s.frequency === filter);
+
+    const cards = $("#subscriptionsCards");
+    if (!cards) return;
+
+    if (!filtered.length) {
+      cards.innerHTML = '<div class="ais-folders-empty">No subscriptions in this category.</div>';
+      return;
+    }
+
+    cards.innerHTML = filtered.map((s, i) => {
+      const lastDate = new Date(s.last_date_unix * 1000);
+      const dateStr = lastDate.toLocaleDateString();
+      const domain = privacyMaskEnabled ? "?" : s.domain;
+      return `<div class="an-sub-card" style="border-left: 4px solid ${colorFor(i)}">
+        <div class="an-sub-head">
+          <div class="an-sub-domain">${escHtml(domain)}</div>
+          <div class="an-sub-badges">
+            ${s.is_newsletter ? '<span class="an-sub-badge an-sub-newsletter">Newsletter</span>' : ''}
+            <span class="an-sub-badge an-sub-freq">${escHtml(s.frequency)}</span>
+          </div>
+        </div>
+        <div class="an-sub-meta">
+          <div><strong>${s.email_count}</strong> emails</div>
+          <div><strong>${s.avg_interval_days}</strong> days avg</div>
+          <div>Last: ${dateStr}</div>
+        </div>
+      </div>`;
+    }).join('');
+  }
 
   init();
 })();
