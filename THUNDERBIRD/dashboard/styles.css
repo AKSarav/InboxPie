@@ -601,12 +601,15 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 
 /* Chart containers for ECharts visualizations */
 .chart-container {
-  height: 250px;
+  height: auto;
+  min-height: 400px;
+  max-height: 600px;
   margin-bottom: 20px;
   background: var(--bg-secondary);
   border-radius: 6px;
   padding: 12px;
   box-sizing: border-box;
+  overflow: auto;
 }
 .chart-container canvas, .chart-container svg { max-height: 100%; max-width: 100%; }
 
