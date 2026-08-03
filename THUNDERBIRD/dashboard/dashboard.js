@@ -30,6 +30,8 @@
   let selectedFolderKeys = new Set();
   let scanFolderList = [];
   let folderListLoaded = false;
+  /** Scan date-range filter: { fromYear, fromMonth, toYear, toMonth } (1-indexed months), or null for all time. */
+  let scanDateRange = null;
   /** Last domain drill-down shown under PieView (for refresh on privacy toggle). */
   let sunburstDetailState = null;
   
@@ -124,6 +126,9 @@
 
     // Folder selection
     initFolderSelection();
+
+    // Scan date range
+    initDateRangeSelection();
 
     // Accounts
     try {
@@ -914,6 +919,119 @@
   }
 
   // ══════════════════════════════════════════
+  //  SCAN DATE RANGE
+  // ══════════════════════════════════════════
+  const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const DATE_RANGE_EARLIEST_YEAR = 1995;
+
+  function initDateRangeSelection() {
+    const btn = $("#dateRangeBtn");
+    const dropdown = $("#dateRangeDropdown");
+    if (!btn || !dropdown) return;
+
+    const nowYear = new Date().getFullYear();
+    const monthOptions = MONTH_NAMES.map((name, i) => `<option value="${i + 1}">${name}</option>`).join("");
+    let yearOptions = "";
+    for (let y = nowYear; y >= DATE_RANGE_EARLIEST_YEAR; y--) {
+      yearOptions += `<option value="${y}">${y}</option>`;
+    }
+    $("#dateRangeFromMonth").innerHTML = monthOptions;
+    $("#dateRangeToMonth").innerHTML = monthOptions;
+    $("#dateRangeFromYear").innerHTML = yearOptions;
+    $("#dateRangeToYear").innerHTML = yearOptions;
+
+    loadSavedDateRange();
+    applyDateRangeToSelects();
+    updateDateRangeLabel();
+
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isVisible = dropdown.style.display === "block";
+      dropdown.style.display = isVisible ? "none" : "block";
+    });
+
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest("#dateRangeBtn") && !e.target.closest("#dateRangeDropdown")) {
+        dropdown.style.display = "none";
+      }
+    });
+
+    $("#dateRangeApply").addEventListener("click", () => {
+      const fromYear = parseInt($("#dateRangeFromYear").value, 10);
+      const fromMonth = parseInt($("#dateRangeFromMonth").value, 10);
+      const toYear = parseInt($("#dateRangeToYear").value, 10);
+      const toMonth = parseInt($("#dateRangeToMonth").value, 10);
+
+      if (fromYear > toYear || (fromYear === toYear && fromMonth > toMonth)) {
+        alert("The \"From\" date must be before the \"To\" date.");
+        return;
+      }
+
+      scanDateRange = { fromYear, fromMonth, toYear, toMonth };
+      saveDateRange();
+      updateDateRangeLabel();
+      dropdown.style.display = "none";
+    });
+
+    $("#dateRangeClear").addEventListener("click", () => {
+      scanDateRange = null;
+      saveDateRange();
+      applyDateRangeToSelects();
+      updateDateRangeLabel();
+      dropdown.style.display = "none";
+    });
+  }
+
+  function applyDateRangeToSelects() {
+    const nowYear = new Date().getFullYear();
+    const nowMonth = new Date().getMonth() + 1;
+    const range = scanDateRange || { fromYear: nowYear - 1, fromMonth: nowMonth, toYear: nowYear, toMonth: nowMonth };
+    $("#dateRangeFromYear").value = String(range.fromYear);
+    $("#dateRangeFromMonth").value = String(range.fromMonth);
+    $("#dateRangeToYear").value = String(range.toYear);
+    $("#dateRangeToMonth").value = String(range.toMonth);
+  }
+
+  function updateDateRangeLabel() {
+    const label = $("#dateRangeLabel");
+    const btn = $("#dateRangeBtn");
+    if (!label || !btn) return;
+    if (!scanDateRange) {
+      label.textContent = "Date Range";
+      btn.classList.remove("active");
+      btn.title = "Limit scan to a date range (currently: all time)";
+    } else {
+      const { fromYear, fromMonth, toYear, toMonth } = scanDateRange;
+      label.textContent = `${MONTH_NAMES[fromMonth - 1]} ${fromYear} – ${MONTH_NAMES[toMonth - 1]} ${toYear}`;
+      btn.classList.add("active");
+      btn.title = "Limit scan to a date range (click to change)";
+    }
+  }
+
+  function saveDateRange() {
+    if (scanDateRange) localStorage.setItem("mail-audit-date-range", JSON.stringify(scanDateRange));
+    else localStorage.removeItem("mail-audit-date-range");
+  }
+
+  function loadSavedDateRange() {
+    try {
+      const saved = localStorage.getItem("mail-audit-date-range");
+      scanDateRange = saved ? JSON.parse(saved) : null;
+    } catch (e) {
+      scanDateRange = null;
+    }
+  }
+
+  /** First/last instant of the saved range, as epoch ms, for filtering message dates. Null fields mean unbounded. */
+  function getDateRangeBounds() {
+    if (!scanDateRange) return null;
+    const { fromYear, fromMonth, toYear, toMonth } = scanDateRange;
+    const from = new Date(fromYear, fromMonth - 1, 1, 0, 0, 0, 0).getTime();
+    const to = new Date(toYear, toMonth, 0, 23, 59, 59, 999).getTime(); // day 0 of next month = last day of toMonth
+    return { from, to };
+  }
+
+  // ══════════════════════════════════════════
   //  RESET (account change)
   // ══════════════════════════════════════════
   function resetDashboard() {
@@ -1034,15 +1152,19 @@
     $("#landingState").style.display = "none";
     $("#progressArea").style.display = "block";
     $("#progressFill").style.width = "20%";
-    $("#progressText").textContent = `Scanning ${folderSelections.length.toLocaleString()} folder${folderSelections.length === 1 ? "" : "s"}…`;
+    const rangeSuffix = scanDateRange ? ` (${$("#dateRangeLabel").textContent})` : "";
+    $("#progressText").textContent = `Scanning ${folderSelections.length.toLocaleString()} folder${folderSelections.length === 1 ? "" : "s"}${rangeSuffix}…`;
 
     try {
       const acctVal = accountSelect.value;
+      const dateBounds = getDateRangeBounds();
       const result = await browser.runtime.sendMessage({
         action: "fetchAllMail",
         options: {
           accountId: acctVal === "all" ? null : acctVal,
           folderSelections,
+          dateFrom: dateBounds ? dateBounds.from : null,
+          dateTo: dateBounds ? dateBounds.to : null,
         },
       });
 
