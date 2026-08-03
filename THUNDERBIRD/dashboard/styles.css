@@ -314,7 +314,9 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
 
 /* Export bar */
-.export-bar { display: flex; gap: 8px; padding: 10px 24px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); }
+.export-bar { display: flex; gap: 8px; padding: 10px 24px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); justify-content: flex-end; }
+.export-btn { display: flex; align-items: center; gap: 6px; }
+.export-btn svg { flex-shrink: 0; }
 
 /* Main Content */
 #mainContent { padding: 20px 24px; min-height: 400px; }
