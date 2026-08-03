@@ -2487,6 +2487,11 @@
       </div>
       ${selectedMonthKey ? `<div class="timeline-note">Showing insights for ${escHtml(selectedMonthKey)}. Click the month again to return to the visible range.</div>` : ""}
     `);
+
+    renderInsightChart("sender", topUnreadSenders, messages);
+    renderInsightChart("age", ageBuckets, messages);
+    renderInsightChart("domain", noisyDomains, messages);
+    renderInsightChart("folder", folderHotspots, messages);
   }
 
   function renderInsightCard(title, subtitle, rows, kind) {
@@ -2499,8 +2504,48 @@
           <h3>${escHtml(title)}</h3>
           <p>${escHtml(subtitle)}</p>
         </div>
+        ${rows.length ? `<div id="chart-insight-${kind}" class="chart-container insight-chart-host"></div>` : ""}
         <div class="insight-rows">${body}</div>
       </section>`;
+  }
+
+  /** Pie chart mirroring an insight card's rows; clicking a slice selects the same messages as its row's Select button. */
+  function renderInsightChart(kind, rows, rangeMessages) {
+    const hostId = `chart-insight-${kind}`;
+    const chartContainer = document.getElementById(hostId);
+    if (!chartContainer || !rows.length) return;
+
+    const data = rows.map((row, i) => ({
+      name: row.title,
+      value: row.count,
+      itemStyle: { color: colorFor(i) }
+    }));
+
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    const textColor = isLight ? "#1a1d24" : "#eaedf2";
+
+    initViewChart(hostId, {
+      backgroundColor: "transparent",
+      tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${p.value.toLocaleString()} (${p.percent}%)`, textStyle: { color: textColor } },
+      legend: { show: false },
+      series: [{
+        type: "pie",
+        radius: ["38%", "68%"],
+        center: ["50%", "50%"],
+        data: data,
+        label: { formatter: "{b}\n{d}%", fontSize: 10, color: textColor },
+        emphasis: { itemStyle: { shadowBlur: 8, shadowColor: isLight ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.4)" } }
+      }]
+    });
+
+    const chart = chartContainer.querySelector('.chart-host')._echartsInstance;
+    if (chart) {
+      chart.on("click", (params) => {
+        const row = rows.find(r => r.title === params.name);
+        if (!row) return;
+        selectTimelineInsightByKind(kind, row.value, row.bucket, row.accountId, rangeMessages);
+      });
+    }
   }
 
   function renderInsightRow(row, kind) {
@@ -2555,10 +2600,16 @@
   }
 
   function selectTimelineInsight(btn, rangeMessages) {
-    const kind = btn.dataset.selectKind;
-    const value = btn.dataset.value;
-    const bucket = btn.dataset.bucket;
-    const accountId = btn.dataset.accountId;
+    selectTimelineInsightByKind(
+      btn.dataset.selectKind,
+      btn.dataset.value,
+      btn.dataset.bucket,
+      btn.dataset.accountId,
+      rangeMessages
+    );
+  }
+
+  function selectTimelineInsightByKind(kind, value, bucket, accountId, rangeMessages) {
     let matches = [];
 
     if (kind === "sender") {

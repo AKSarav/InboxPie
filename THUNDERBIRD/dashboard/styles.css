@@ -513,6 +513,7 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 .insight-card-head { padding: 14px 14px 10px; border-bottom: 1px solid var(--border); background: rgba(var(--accent-rgb, 37, 99, 235), 0.055); }
 .insight-card-head h3 { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
 .insight-card-head p { font-size: 11px; color: var(--text-muted); line-height: 1.4; }
+.insight-chart-host { height: 200px; margin: 4px 0 0; border-bottom: 1px solid var(--border); }
 .insight-rows { display: flex; flex-direction: column; }
 .insight-row {
   display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px;
