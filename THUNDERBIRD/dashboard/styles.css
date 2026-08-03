@@ -228,6 +228,15 @@ body {
 .folder-dropdown-footer .btn { width: 100%; justify-content: center; }
 .btn-small { padding: 5px 10px; font-size: 11px; }
 
+.date-range-wrap { position: relative; }
+.date-range-dropdown { padding: 12px 14px; min-width: 260px; }
+.date-range-dropdown .folder-dropdown-header { padding: 0 0 10px; margin-bottom: 10px; }
+.date-range-dropdown .folder-dropdown-actions { padding: 10px 0 0; margin-top: 10px; }
+.date-range-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.date-range-row label { font-size: 12px; color: var(--text-secondary); width: 38px; flex-shrink: 0; }
+.date-range-row select { flex: 1; min-width: 0; padding: 5px 6px; font-size: 12px; }
+.date-range-hint { font-size: 11px; color: var(--text-muted); line-height: 1.4; margin: 2px 0 0; }
+
 /* Form elements */
 select, .search-input {
   font-family: var(--font-body); font-size: 13px;

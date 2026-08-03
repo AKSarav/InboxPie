@@ -41,11 +41,20 @@ browser.runtime.onMessage.addListener((message, sender) => {
 });
 
 async function fetchAllMail(options) {
-  const { accountId, folderTypes, folderSelections } = options;
+  const { accountId, folderTypes, folderSelections, dateFrom, dateTo } = options;
   const accounts = await browser.accounts.list();
   const targetAccounts = accountId
     ? accounts.filter(a => a.id === accountId)
     : accounts;
+
+  // Optional scan-time date filter (epoch ms, inclusive). null bound = unbounded on that side.
+  const inDateRange = (msg) => {
+    if (dateFrom == null && dateTo == null) return true;
+    const t = msg.date instanceof Date ? msg.date.getTime() : new Date(msg.date).getTime();
+    if (dateFrom != null && t < dateFrom) return false;
+    if (dateTo != null && t > dateTo) return false;
+    return true;
+  };
 
   const allMessages = [];
   let totalProcessed = 0;
@@ -64,12 +73,12 @@ async function fetchAllMail(options) {
     for (const folder of foldersToScan) {
       try {
         let page = await browser.messages.list(folder);
-        allMessages.push(...page.messages.map(m => extractMessageData(m, account, folder)));
+        allMessages.push(...page.messages.filter(inDateRange).map(m => extractMessageData(m, account, folder)));
         totalProcessed += page.messages.length;
 
         while (page.id) {
           page = await browser.messages.continueList(page.id);
-          allMessages.push(...page.messages.map(m => extractMessageData(m, account, folder)));
+          allMessages.push(...page.messages.filter(inDateRange).map(m => extractMessageData(m, account, folder)));
           totalProcessed += page.messages.length;
 
           browser.runtime.sendMessage({
