@@ -707,12 +707,13 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 
 /* Categories */
 .categories-table { display: flex; flex-direction: column; gap: 8px; }
-.category-row { padding: 12px; background: var(--bg-secondary); border-radius: 6px; border: 1px solid var(--border); cursor: pointer; transition: all 0.2s; display: grid; grid-template-columns: 32px 1fr auto 80px; gap: 12px; align-items: center; }
+.category-row { padding: 12px; background: var(--bg-secondary); border-radius: 6px; border: 1px solid var(--border); cursor: pointer; transition: all 0.2s; display: grid; grid-template-columns: 32px 1fr auto 80px auto; gap: 12px; align-items: center; }
 .category-row:hover { background: var(--bg-hover); border-color: var(--accent); }
 .category-icon { font-size: 18px; text-align: center; }
 .category-name { font-weight: 600; font-size: 13px; }
 .category-keywords { font-size: 11px; color: var(--text-muted); }
 .category-count { font-size: 12px; color: var(--text-secondary); text-align: right; font-weight: 500; }
+.category-select-btn { white-space: nowrap; }
 .categories-detail { padding: 16px 0; }
 .category-detail-header { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
 .category-detail-header h3 { margin: 0; font-size: 16px; }
