@@ -16,8 +16,10 @@
   let senderChartFilterValue = null;
   /** Category currently driving the dynamic sender-breakdown chart on the Categories tab. */
   let categoriesChartSelectedName = null;
-  /** Category names expanded to show their sender sub-rows (accordion, like By Domain/By Sender). */
+  /** Category names expanded to show their domain sub-rows (accordion, like By Domain/By Sender). */
   const expandedCategories = new Set();
+  /** `${categoryName}::${domain}` keys expanded to show sender sub-rows within a category's domain. */
+  const expandedCategoryDomains = new Set();
 
   const timelineState = {
     windowMonths: 24,
@@ -813,6 +815,7 @@
     expandedSenders.clear();
     expandedSenderYears.clear();
     expandedCategories.clear();
+    expandedCategoryDomains.clear();
     domainChartFilterValue = null;
     senderChartFilterValue = null;
     timelineState.windowMonths = 24;
@@ -3500,12 +3503,6 @@
     const container = $("#categoriesTable");
     if (!container) return;
 
-    // Always land back on the list + chart split; a prior drill-down may have hidden it.
-    const detail = $("#categoriesDetail");
-    const split = $("#categoriesSplit");
-    if (detail) { detail.style.display = "none"; detail.innerHTML = ""; }
-    if (split) split.style.display = "flex";
-
     // Seed default categories if not already done
     let categories = await loadCategoriesFromStorage();
     if (!categories || !categories.length) {
@@ -3536,36 +3533,7 @@
       const selected = cat.count > 0 && cat.msgs.every(m => selectedIds.has(m.id));
       const expanded = expandedCategories.has(cat.name);
 
-      const bySender = {};
-      cat.msgs.forEach(m => {
-        const key = m.senderEmail || m.author || "Unknown";
-        if (!bySender[key]) bySender[key] = [];
-        bySender[key].push(m);
-      });
-      const senderEntries = Object.entries(bySender).sort((a, b) => b[1].length - a[1].length);
-      const subMax = Math.max(1, ...senderEntries.map(([, list]) => list.length));
-
-      const subRows = expanded
-        ? senderEntries
-            .map(([email, subMsgs], si) => {
-              const name = subMsgs[0].senderName || email;
-              const subCount = subMsgs.length;
-              const unread = subMsgs.filter(m => !m.read).length;
-              const partialSel = subMsgs.some(m => selectedIds.has(m.id));
-              const spct = ((subCount / subMax) * 100).toFixed(0);
-              const sc = colorFor(si + i * 3);
-              return `
-        <div class="sender-row ${partialSel ? "selected" : ""}" data-role="sender" data-cat="${escAttr(cat.name)}" data-email="${escAttr(email)}">
-          <div class="sr-check"></div>
-          <div class="sr-info"><div class="sr-name">${escHtml(name)}</div><div class="sr-email">${escHtml(displayEmail(email))}</div></div>
-          <div class="sr-count">${subCount}</div>
-          <div class="sr-bar-wrap"><div class="sr-bar" style="width:${spct}%;background:${sc};"></div></div>
-          <div class="sr-unread">${unread ? unread + " unread" : ""}</div>
-          <div class="sr-expand"></div>
-        </div>`;
-            })
-            .join("")
-        : "";
+      const domainRowsHtml = expanded ? renderCategoryDomainRows(cat, i) : "";
 
       return `
       <div class="category-group" data-cat="${escAttr(cat.name)}">
@@ -3577,9 +3545,9 @@
           <button type="button" class="btn btn-secondary btn-small category-select-btn ${selected ? "active" : ""}" data-cat="${escAttr(cat.name)}" ${cat.count === 0 ? "disabled" : ""}>
             ${selected ? "✓ Selected" : "Select"}
           </button>
-          <div class="category-expand" title="Show senders">${cat.count > 0 ? "›" : ""}</div>
+          <div class="category-expand" title="Show domains">${cat.count > 0 ? "›" : ""}</div>
         </div>
-        ${expanded ? `<div class="category-sender-list">${subRows}</div>` : ""}
+        ${expanded ? `<div class="category-sender-list">${domainRowsHtml}</div>` : ""}
       </div>
     `;
     }).join('');
@@ -3589,6 +3557,17 @@
       const row = group.querySelector('.category-row');
       const chev = row && row.querySelector('.category-expand');
       const selectBtn = row && row.querySelector('.category-select-btn');
+
+      const toggleSelectAll = (msgs) => {
+        if (!msgs.length) return;
+        const allSelected = msgs.every(m => selectedIds.has(m.id));
+        msgs.forEach(m => {
+          if (allSelected) selectedIds.delete(m.id);
+          else selectedIds.add(m.id);
+        });
+        updateStats();
+        renderCategoriesView();
+      };
 
       if (chev) {
         chev.addEventListener('click', (e) => {
@@ -3603,39 +3582,111 @@
       if (selectBtn) {
         selectBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          if (!cat.count) return;
-          const allSelected = cat.msgs.every(m => selectedIds.has(m.id));
-          cat.msgs.forEach(m => {
-            if (allSelected) selectedIds.delete(m.id);
-            else selectedIds.add(m.id);
-          });
-          updateStats();
-          renderCategoriesView();
+          toggleSelectAll(cat.msgs);
         });
       }
 
       if (row) {
         row.addEventListener('click', (e) => {
           if (e.target.closest('.category-select-btn') || e.target.closest('.category-expand')) return;
-          filterMessagesByCategory(cat);
+          toggleSelectAll(cat.msgs);
         });
       }
 
+      // Level 2: domain rows within this category
+      group.querySelectorAll('[data-role="cat-domain-head"]').forEach((domainRow) => {
+        const domain = domainRow.dataset.domain;
+        const domainMsgs = cat.msgs.filter(m => (m.domain || "Unknown") === domain);
+        const domainChev = domainRow.querySelector('.sr-expand');
+        const domainKey = `${cat.name}::${domain}`;
+
+        if (domainChev) {
+          domainChev.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (expandedCategoryDomains.has(domainKey)) expandedCategoryDomains.delete(domainKey);
+            else expandedCategoryDomains.add(domainKey);
+            renderCategoriesView();
+          });
+        }
+        domainRow.addEventListener('click', (e) => {
+          if (e.target.closest('.sr-expand')) return;
+          toggleSelectAll(domainMsgs);
+        });
+      });
+
+      // Level 3: sender rows within an expanded domain
       group.querySelectorAll('.sender-row[data-role="sender"]').forEach((subRow) => {
         subRow.addEventListener('click', () => {
           const email = subRow.dataset.email;
-          const msgs = cat.msgs.filter(m => (m.senderEmail || m.author || "Unknown") === email);
-          if (!msgs.length) return;
-          const allSelected = msgs.every(m => selectedIds.has(m.id));
-          msgs.forEach(m => {
-            if (allSelected) selectedIds.delete(m.id);
-            else selectedIds.add(m.id);
-          });
-          updateStats();
-          renderCategoriesView();
+          const domain = subRow.dataset.domain;
+          const msgs = cat.msgs.filter(m => (m.domain || "Unknown") === domain && (m.senderEmail || m.author || "Unknown") === email);
+          toggleSelectAll(msgs);
         });
       });
     });
+  }
+
+  /** Level-2 accordion rows: domains within a category, each expandable to its senders (level 3). */
+  function renderCategoryDomainRows(cat, catIndex) {
+    const byDomain = {};
+    cat.msgs.forEach(m => {
+      const key = m.domain || "Unknown";
+      if (!byDomain[key]) byDomain[key] = [];
+      byDomain[key].push(m);
+    });
+    const domainEntries = Object.entries(byDomain).sort((a, b) => b[1].length - a[1].length);
+    const domainMax = Math.max(1, ...domainEntries.map(([, list]) => list.length));
+
+    return domainEntries.map(([domain, domainMsgs], di) => {
+      const domainExpanded = expandedCategoryDomains.has(`${cat.name}::${domain}`);
+      const senderNum = new Set(domainMsgs.map(m => m.senderEmail || m.author || "Unknown")).size;
+      const dcount = domainMsgs.length;
+      const dpct = ((dcount / domainMax) * 100).toFixed(0);
+      const dcolor = colorFor(di + catIndex * 3);
+      const anySel = domainMsgs.some(m => selectedIds.has(m.id));
+
+      const bySender = {};
+      domainMsgs.forEach(m => {
+        const key = m.senderEmail || m.author || "Unknown";
+        if (!bySender[key]) bySender[key] = [];
+        bySender[key].push(m);
+      });
+      const senderEntries = Object.entries(bySender).sort((a, b) => b[1].length - a[1].length);
+      const subMax = Math.max(1, ...senderEntries.map(([, list]) => list.length));
+
+      const senderRowsHtml = domainExpanded
+        ? senderEntries.map(([email, subMsgs], si) => {
+            const name = subMsgs[0].senderName || email;
+            const subCount = subMsgs.length;
+            const unread = subMsgs.filter(m => !m.read).length;
+            const partialSel = subMsgs.some(m => selectedIds.has(m.id));
+            const spct = ((subCount / subMax) * 100).toFixed(0);
+            const sc = colorFor(si + di * 3);
+            return `
+        <div class="sender-row ${partialSel ? "selected" : ""}" data-role="sender" data-domain="${escAttr(domain)}" data-email="${escAttr(email)}">
+          <div class="sr-check"></div>
+          <div class="sr-info"><div class="sr-name">${escHtml(name)}</div><div class="sr-email">${escHtml(displayEmail(email))}</div></div>
+          <div class="sr-count">${subCount}</div>
+          <div class="sr-bar-wrap"><div class="sr-bar" style="width:${spct}%;background:${sc};"></div></div>
+          <div class="sr-unread">${unread ? unread + " unread" : ""}</div>
+          <div class="sr-expand"></div>
+        </div>`;
+          }).join("")
+        : "";
+
+      return `
+        <div class="domain-group" data-domain="${escAttr(domain)}">
+          <div class="sender-row domain-row ${domainExpanded ? "expanded" : ""} ${anySel ? "selected" : ""}" data-role="cat-domain-head" data-domain="${escAttr(domain)}">
+            <div class="sr-check"></div>
+            <div class="sr-info"><div class="sr-name">${escHtml(displayDomain(domain))}</div><div class="sr-email">${senderNum} sender${senderNum > 1 ? "s" : ""} · click › to expand</div></div>
+            <div class="sr-count">${dcount}</div>
+            <div class="sr-bar-wrap"><div class="sr-bar" style="width:${dpct}%;background:${dcolor};"></div></div>
+            <div class="sr-unread"></div>
+            <div class="sr-expand" title="Show senders">›</div>
+          </div>
+          ${domainExpanded ? `<div class="domain-sender-list">${senderRowsHtml}</div>` : ""}
+        </div>`;
+    }).join("");
   }
 
   /** Dynamic sender ("people") breakdown pie chart for the category chosen in the dropdown. */
@@ -3724,54 +3775,6 @@
       updateStats();
       renderCategoriesView();
     };
-  }
-
-  function filterMessagesByCategory(cat) {
-    showCategoryDetail(cat.name, cat.msgs);
-  }
-
-  function showCategoryDetail(categoryName, msgs) {
-    const detail = $("#categoriesDetail");
-    const split = $("#categoriesSplit");
-    if (!detail) return;
-    if (split) split.style.display = "none";
-    detail.style.display = "block";
-
-    if (!msgs.length) {
-      detail.innerHTML = '<div class="ais-folders-empty">No emails in this category.</div><div style="margin-top:12px;"><button class="btn btn-secondary" onclick="switchView(\'categories\')">Back</button></div>';
-      return;
-    }
-
-    const grouped = {};
-    msgs.forEach(m => {
-      const key = m.senderEmail || m.author || "Unknown";
-      if (!grouped[key]) grouped[key] = [];
-      grouped[key].push(m);
-    });
-
-    detail.innerHTML = `
-      <div class="category-detail-header">
-        <h3>${escHtml(categoryName)}</h3>
-        <p>${msgs.length} emails</p>
-        <button class="btn btn-secondary" onclick="switchView('categories')">Back</button>
-      </div>
-      <div class="category-emails">
-        ${Object.entries(grouped)
-          .sort((a, b) => b[1].length - a[1].length)
-          .map(([sender, emails]) => `
-            <div class="category-sender">
-              <div><strong>${escHtml(displayEmail(sender))}</strong> (${emails.length})</div>
-              ${emails.slice(0, 5).map(m => `
-                <div class="category-email-item">
-                  ${escHtml(m.subject || "(no subject)")}
-                  <span class="text-muted">${new Date(m.date).toLocaleDateString()}</span>
-                </div>
-              `).join('')}
-              ${emails.length > 5 ? `<div class="text-muted">+${emails.length - 5} more</div>` : ''}
-            </div>
-          `).join('')}
-      </div>
-    `;
   }
 
   init();
