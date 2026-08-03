@@ -894,7 +894,7 @@
 
     if (label) {
       if (viewFilterFolderKeys.size === 0 || checkedCount === totalCount || checkedCount === 0) {
-        label.textContent = "All scanned";
+        label.textContent = "Folders";
       } else if (viewFilterFolderKeys.size === 1) {
         const checked = Array.from(checkboxes).find((cb) => cb.checked);
         label.textContent = displayFolderName(checked?.dataset.folderName) || "1 folder";
