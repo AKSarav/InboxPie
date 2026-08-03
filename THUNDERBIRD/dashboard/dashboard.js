@@ -1060,34 +1060,31 @@
     return theme === "light" ? "light" : "dark";
   }
 
-  function buildSizeBarChartOption() {
-    const bucketColors = ["#ef4444", "#f97316", "#eab308", "#3b82f6"];
-    const buckets = [
-      { label: "0–1 MB", min: 0, max: 1_000_000 },
-      { label: "1–10 MB", min: 1_000_000, max: 10_000_000 },
-      { label: "10–100 MB", min: 10_000_000, max: 100_000_000 },
-      { label: "100 MB+", min: 100_000_000, max: Infinity }
-    ];
+  /** Pie chart for the "Size Buckets" card — built from the same buildSizeBuckets() rows the card lists, so slices and rows always agree. */
+  function buildSizeBucketsChartOption(buckets) {
+    const bucketColors = ["#ef4444", "#f97316", "#eab308", "#3b82f6", "#22c55e"];
+    const titleByValue = {};
+    buckets.forEach(b => { titleByValue[b.value] = b.title; });
 
     const data = buckets.map((b, i) => ({
-      name: b.label,
-      value: allMessages.filter(m => (m.size || 0) >= b.min && (m.size || 0) < b.max).length,
+      name: b.value,
+      value: b.count,
       itemStyle: { color: bucketColors[i % bucketColors.length] }
-    })).filter(d => d.value > 0);
+    }));
 
     const isLight = document.documentElement.getAttribute("data-theme") === "light";
     const textColor = isLight ? "#1a1d24" : "#eaedf2";
 
     return {
       backgroundColor: "transparent",
-      tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${p.value.toLocaleString()} emails (${p.percent}%)`, textStyle: { color: textColor } },
+      tooltip: { trigger: "item", formatter: (p) => `${titleByValue[p.name] || p.name}: ${formatBytes(p.value)} (${p.percent}%)`, textStyle: { color: textColor } },
       legend: { show: false },
       series: [{
         type: "pie",
         radius: ["38%", "68%"],
         center: ["50%", "50%"],
         data: data,
-        label: { formatter: "{b}\n{d}%", fontSize: 11, color: textColor },
+        label: { formatter: (p) => `${titleByValue[p.name] || p.name}\n${p.percent}%`, fontSize: 11, color: textColor },
         emphasis: { itemStyle: { shadowBlur: 8, shadowColor: isLight ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.4)" } }
       }]
     };
@@ -2004,8 +2001,18 @@
       </div>
       <div class="size-note">Size data depends on what Thunderbird exposes per account. Unknown-size messages are kept out of storage rankings.</div>
       <div class="insight-grid size-grid">
-        ${renderSizeCard("Size Buckets", "Select a size band to recover storage quickly.", buckets, "bucket")}
-        ${renderSizeCard("Top Space-Heavy Senders", "Senders consuming the most total mailbox space.", heavySenders, "sender")}
+        ${renderSizeCard("Size Buckets", "Select a size band to recover storage quickly.", buckets, "bucket", buckets.length ? `<div id="chart-size-buckets" class="chart-container insight-chart-host"></div>` : "")}
+        ${renderSizeCard("Top Space-Heavy Senders", "Senders consuming the most total mailbox space.", heavySenders, "sender", heavySenders.length ? `
+          <div style="display: flex; gap: 12px; padding: 10px 14px 0; align-items: center; justify-content: flex-end;">
+            <select class="size-senders-topx-dropdown" style="padding: 4px 8px; font-size: 11px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
+              <option value="5">Top 5</option>
+              <option value="10" selected>Top 10</option>
+              <option value="20">Top 20</option>
+              <option value="all">All</option>
+            </select>
+          </div>
+          <div id="chart-size-senders" class="chart-container insight-chart-host"></div>
+        ` : "")}
         ${renderSizeCard("Top Space-Heavy Domains", "Domains consuming storage across many senders.", heavyDomains, "domain")}
         ${renderSizeCard("Large Old Messages", "Large messages older than one year.", largeOld, "message")}
       </div>
@@ -2094,75 +2101,31 @@
       });
     }
 
-    // Render charts with legend
-    const chartContainer = document.getElementById("chart-size-container");
-    if (chartContainer) {
-      chartContainer.innerHTML = `
-        <div>
-          <div style="display: flex; gap: 12px; margin-bottom: 12px; align-items: center;">
-            <h3 style="margin: 0; font-size: 14px;">Size Buckets</h3>
-            <select class="size-topx-dropdown" style="padding: 4px 8px; font-size: 11px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
-              <option value="5">Top 5</option>
-              <option value="10" selected>Top 10</option>
-              <option value="20">Top 20</option>
-              <option value="all">All</option>
-            </select>
-          </div>
-          <div id="chart-size-buckets" class="chart-container"></div>
-        </div>
-        <div>
-          <div style="display: flex; gap: 12px; margin-bottom: 12px; align-items: center;">
-            <h3 style="margin: 0; font-size: 14px;">Top Senders by Space</h3>
-            <select class="size-senders-topx-dropdown" style="padding: 4px 8px; font-size: 11px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
-              <option value="5">Top 5</option>
-              <option value="10" selected>Top 10</option>
-              <option value="20">Top 20</option>
-              <option value="all">All</option>
-            </select>
-          </div>
-          <div id="chart-size-senders" class="chart-container"></div>
-        </div>
-      `;
-
-      // Render size buckets chart
-      initViewChart("chart-size-buckets", buildSizeBarChartOption());
+    // Size Buckets chart — lives inside the "Size Buckets" card, built from the same rows as its rows list
+    if (buckets.length && document.getElementById("chart-size-buckets")) {
+      initViewChart("chart-size-buckets", buildSizeBucketsChartOption(buckets));
       const bucketChart = document.getElementById("chart-size-buckets").querySelector('.chart-host')._echartsInstance;
       if (bucketChart) {
         bucketChart.on("click", (params) => {
-          if (params.value && params.value > 0) {
-            const bucketLabels = ["0–1 MB", "1–10 MB", "10–100 MB", "100 MB+"];
-            const bucketIndex = bucketLabels.indexOf(params.name);
-            if (bucketIndex >= 0) {
-              const btn = document.querySelector(`[data-size-kind="${["bucket", "domain", "sender", "large"][bucketIndex]}"]`);
-              if (btn) selectSizeInsight(btn, knownMessages);
-            }
-          }
+          const btn = document.querySelector(`[data-size-kind="bucket"][data-value="${escAttr(params.name)}"]`);
+          if (btn) selectSizeInsight(btn, knownMessages);
         });
       }
+    }
 
-      // Render top senders chart
+    // Top Senders by Space chart — lives inside the "Top Space-Heavy Senders" card
+    if (heavySenders.length && document.getElementById("chart-size-senders")) {
       initViewChart("chart-size-senders", buildTopSendersChartOption(heavySenders));
       const sendersChart = document.getElementById("chart-size-senders").querySelector('.chart-host')._echartsInstance;
       if (sendersChart) {
         sendersChart.on("click", (params) => {
-          if (params.value && params.value > 0) {
-            const sender = heavySenders.find(s => s.title === params.name);
-            if (sender) {
-              const btn = document.querySelector(`[data-size-kind="sender"][data-value="${escAttr(sender.value || "")}"]`);
-              if (btn) selectSizeInsight(btn, knownMessages);
-            }
+          const sender = heavySenders.find(s => s.title === params.name);
+          if (sender) {
+            const btn = document.querySelector(`[data-size-kind="sender"][data-value="${escAttr(sender.value || "")}"]`);
+            if (btn) selectSizeInsight(btn, knownMessages);
           }
         });
       }
-
-      // Wire up dropdowns
-      document.querySelector('.size-topx-dropdown')?.addEventListener('change', function() {
-        const newOption = buildSizeBarChartOption(this.value);
-        const hostEl = document.getElementById("chart-size-container");
-        if (hostEl && hostEl.querySelector('.chart-host')._echartsInstance) {
-          hostEl.querySelector('.chart-host')._echartsInstance.setOption(newOption, true);
-        }
-      });
       document.querySelector('.size-senders-topx-dropdown')?.addEventListener('change', function() {
         const newOption = buildTopSendersChartOption(heavySenders, this.value);
         const hostEl = document.getElementById("chart-size-senders");
@@ -2175,7 +2138,7 @@
     updateBulkButtons();
   }
 
-  function renderSizeCard(title, subtitle, rows, kind) {
+  function renderSizeCard(title, subtitle, rows, kind, chartHtml) {
     const body = rows.length
       ? rows.map((row) => renderSizeRow(row, kind)).join("")
       : `<div class="insight-empty">No matching messages.</div>`;
@@ -2185,6 +2148,7 @@
           <h3>${escHtml(title)}</h3>
           <p>${escHtml(subtitle)}</p>
         </div>
+        ${chartHtml || ""}
         <div class="insight-rows">${body}</div>
       </section>`;
   }
