@@ -968,10 +968,12 @@
     const domainBar = $("#domainBulkButtons");
     const sizeBar = $("#sizeBulkButtons");
     const timelineBar = $("#timelineBulkButtons");
+    const categoriesBar = $("#categoriesBulkButtons");
     if (senderBar) senderBar.style.display = selectedIds.size > 0 && currentView === "sender" ? "flex" : "none";
     if (domainBar) domainBar.style.display = selectedIds.size > 0 && currentView === "domain" ? "flex" : "none";
     if (sizeBar) sizeBar.style.display = selectedIds.size > 0 && currentView === "size" ? "flex" : "none";
     if (timelineBar) timelineBar.style.display = selectedIds.size > 0 && currentView === "timeline" ? "flex" : "none";
+    if (categoriesBar) categoriesBar.style.display = selectedIds.size > 0 && currentView === "categories" ? "flex" : "none";
     document.querySelectorAll(".bulk-delete-count").forEach((el) => {
       el.textContent = String(selectedIds.size);
     });
@@ -3470,33 +3472,88 @@
     }
 
     const entries = categories.map(cat => {
-      const count = allMessages.length > 0 ? allMessages.filter(m => classifyEmail(m, [cat])).length : 0;
-      return { ...cat, count };
+      const msgs = allMessages.length > 0 ? allMessages.filter(m => classifyEmail(m, [cat])) : [];
+      return { ...cat, msgs, count: msgs.length };
     }).sort((a, b) => b.count - a.count);
 
-    container.innerHTML = entries.map((cat, i) => `
-      <div class="category-row">
+    // Distribution pie chart (before the list)
+    const chartContainer = document.getElementById("chart-categories-container");
+    if (chartContainer) {
+      const withCounts = entries.filter(e => e.count > 0);
+      if (withCounts.length) {
+        const data = withCounts.map((e, i) => ({
+          name: e.name,
+          value: e.count,
+          itemStyle: { color: colorFor(i) }
+        }));
+        const isLight = document.documentElement.getAttribute("data-theme") === "light";
+        const textColor = isLight ? "#1a1d24" : "#eaedf2";
+        const option = {
+          backgroundColor: "transparent",
+          tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${p.value.toLocaleString()} emails (${p.percent}%)`, textStyle: { color: textColor } },
+          legend: { show: false },
+          series: [{
+            type: "pie",
+            radius: ["38%", "68%"],
+            center: ["50%", "50%"],
+            data: data,
+            label: { formatter: "{b}\n{d}%", fontSize: 11, color: textColor },
+            emphasis: { itemStyle: { shadowBlur: 8, shadowColor: isLight ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.4)" } }
+          }]
+        };
+        initViewChart("chart-categories-container", option);
+        const chart = chartContainer.querySelector('.chart-host')._echartsInstance;
+        if (chart) {
+          chart.on("click", (params) => {
+            const cat = entries.find(e => e.name === params.name);
+            if (cat && cat.count > 0) filterMessagesByCategory(cat);
+          });
+        }
+      } else {
+        chartContainer.innerHTML = '<div class="ais-folders-empty">No emails to chart yet — run a scan first.</div>';
+      }
+    }
+
+    container.innerHTML = entries.map((cat) => {
+      const selected = cat.count > 0 && cat.msgs.every(m => selectedIds.has(m.id));
+      return `
+      <div class="category-row" data-cat="${escAttr(cat.name)}">
         <div class="category-icon">${escHtml(cat.icon)}</div>
         <div class="category-name"><strong>${escHtml(cat.name)}</strong></div>
         <div class="category-keywords">${escHtml((cat.keywords || []).slice(0, 3).join(", "))}${cat.keywords && cat.keywords.length > 3 ? '...' : ''}</div>
         <div class="category-count">${cat.count} emails</div>
+        <button type="button" class="btn btn-secondary btn-small category-select-btn ${selected ? "active" : ""}" data-cat="${escAttr(cat.name)}" ${cat.count === 0 ? "disabled" : ""}>
+          ${selected ? "✓ Selected" : "Select"}
+        </button>
       </div>
-    `).join('');
+    `;
+    }).join('');
 
     container.querySelectorAll('.category-row').forEach((row, idx) => {
-      row.addEventListener('click', function () {
+      row.addEventListener('click', function (e) {
+        if (e.target.closest('.category-select-btn')) return;
+        filterMessagesByCategory(entries[idx]);
+      });
+    });
+
+    container.querySelectorAll('.category-select-btn').forEach((btn, idx) => {
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
         const cat = entries[idx];
-        filterMessagesByCategory(cat.name);
+        if (!cat.count) return;
+        const allSelected = cat.msgs.every(m => selectedIds.has(m.id));
+        cat.msgs.forEach(m => {
+          if (allSelected) selectedIds.delete(m.id);
+          else selectedIds.add(m.id);
+        });
+        updateStats();
+        renderCategoriesView();
       });
     });
   }
 
-  function filterMessagesByCategory(categoryName) {
-    const filtered = allMessages.filter(m => classifyEmail(m, [
-      DEFAULT_BUILT_IN_CATEGORIES.find(c => c.name === categoryName) ||
-      { name: categoryName, keywords: [] }
-    ]));
-    showCategoryDetail(categoryName, filtered);
+  function filterMessagesByCategory(cat) {
+    showCategoryDetail(cat.name, cat.msgs);
   }
 
   function showCategoryDetail(categoryName, msgs) {
