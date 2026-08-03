@@ -16,6 +16,8 @@
   let senderChartFilterValue = null;
   /** Category currently driving the dynamic sender-breakdown chart on the Categories tab. */
   let categoriesChartSelectedName = null;
+  /** Category names expanded to show their sender sub-rows (accordion, like By Domain/By Sender). */
+  const expandedCategories = new Set();
 
   const timelineState = {
     windowMonths: 24,
@@ -810,6 +812,7 @@
     expandedDomains.clear();
     expandedSenders.clear();
     expandedSenderYears.clear();
+    expandedCategories.clear();
     domainChartFilterValue = null;
     senderChartFilterValue = null;
     timelineState.windowMonths = 24;
@@ -3501,7 +3504,7 @@
     const detail = $("#categoriesDetail");
     const split = $("#categoriesSplit");
     if (detail) { detail.style.display = "none"; detail.innerHTML = ""; }
-    if (split) split.style.display = "grid";
+    if (split) split.style.display = "flex";
 
     // Seed default categories if not already done
     let categories = await loadCategoriesFromStorage();
@@ -3529,40 +3532,108 @@
     const activeCat = entries.find(e => e.name === categoriesChartSelectedName) || entries[0];
     renderCategoriesChart(entries, activeCat);
 
-    container.innerHTML = entries.map((cat) => {
+    container.innerHTML = entries.map((cat, i) => {
       const selected = cat.count > 0 && cat.msgs.every(m => selectedIds.has(m.id));
+      const expanded = expandedCategories.has(cat.name);
+
+      const bySender = {};
+      cat.msgs.forEach(m => {
+        const key = m.senderEmail || m.author || "Unknown";
+        if (!bySender[key]) bySender[key] = [];
+        bySender[key].push(m);
+      });
+      const senderEntries = Object.entries(bySender).sort((a, b) => b[1].length - a[1].length);
+      const subMax = Math.max(1, ...senderEntries.map(([, list]) => list.length));
+
+      const subRows = expanded
+        ? senderEntries
+            .map(([email, subMsgs], si) => {
+              const name = subMsgs[0].senderName || email;
+              const subCount = subMsgs.length;
+              const unread = subMsgs.filter(m => !m.read).length;
+              const partialSel = subMsgs.some(m => selectedIds.has(m.id));
+              const spct = ((subCount / subMax) * 100).toFixed(0);
+              const sc = colorFor(si + i * 3);
+              return `
+        <div class="sender-row ${partialSel ? "selected" : ""}" data-role="sender" data-cat="${escAttr(cat.name)}" data-email="${escAttr(email)}">
+          <div class="sr-check"></div>
+          <div class="sr-info"><div class="sr-name">${escHtml(name)}</div><div class="sr-email">${escHtml(displayEmail(email))}</div></div>
+          <div class="sr-count">${subCount}</div>
+          <div class="sr-bar-wrap"><div class="sr-bar" style="width:${spct}%;background:${sc};"></div></div>
+          <div class="sr-unread">${unread ? unread + " unread" : ""}</div>
+          <div class="sr-expand"></div>
+        </div>`;
+            })
+            .join("")
+        : "";
+
       return `
-      <div class="category-row" data-cat="${escAttr(cat.name)}">
-        <div class="category-icon">${escHtml(cat.icon)}</div>
-        <div class="category-name"><strong>${escHtml(cat.name)}</strong></div>
-        <div class="category-keywords">${escHtml((cat.keywords || []).slice(0, 3).join(", "))}${cat.keywords && cat.keywords.length > 3 ? '...' : ''}</div>
-        <div class="category-count">${cat.count} emails</div>
-        <button type="button" class="btn btn-secondary btn-small category-select-btn ${selected ? "active" : ""}" data-cat="${escAttr(cat.name)}" ${cat.count === 0 ? "disabled" : ""}>
-          ${selected ? "✓ Selected" : "Select"}
-        </button>
+      <div class="category-group" data-cat="${escAttr(cat.name)}">
+        <div class="category-row ${expanded ? "expanded" : ""}" data-cat="${escAttr(cat.name)}">
+          <div class="category-icon">${escHtml(cat.icon)}</div>
+          <div class="category-name"><strong>${escHtml(cat.name)}</strong></div>
+          <div class="category-keywords">${escHtml((cat.keywords || []).slice(0, 3).join(", "))}${cat.keywords && cat.keywords.length > 3 ? '...' : ''}</div>
+          <div class="category-count">${cat.count} emails</div>
+          <button type="button" class="btn btn-secondary btn-small category-select-btn ${selected ? "active" : ""}" data-cat="${escAttr(cat.name)}" ${cat.count === 0 ? "disabled" : ""}>
+            ${selected ? "✓ Selected" : "Select"}
+          </button>
+          <div class="category-expand" title="Show senders">${cat.count > 0 ? "›" : ""}</div>
+        </div>
+        ${expanded ? `<div class="category-sender-list">${subRows}</div>` : ""}
       </div>
     `;
     }).join('');
 
-    container.querySelectorAll('.category-row').forEach((row, idx) => {
-      row.addEventListener('click', function (e) {
-        if (e.target.closest('.category-select-btn')) return;
-        filterMessagesByCategory(entries[idx]);
-      });
-    });
+    container.querySelectorAll('.category-group').forEach((group, idx) => {
+      const cat = entries[idx];
+      const row = group.querySelector('.category-row');
+      const chev = row && row.querySelector('.category-expand');
+      const selectBtn = row && row.querySelector('.category-select-btn');
 
-    container.querySelectorAll('.category-select-btn').forEach((btn, idx) => {
-      btn.addEventListener('click', function (e) {
-        e.stopPropagation();
-        const cat = entries[idx];
-        if (!cat.count) return;
-        const allSelected = cat.msgs.every(m => selectedIds.has(m.id));
-        cat.msgs.forEach(m => {
-          if (allSelected) selectedIds.delete(m.id);
-          else selectedIds.add(m.id);
+      if (chev) {
+        chev.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (!cat.count) return;
+          if (expandedCategories.has(cat.name)) expandedCategories.delete(cat.name);
+          else expandedCategories.add(cat.name);
+          renderCategoriesView();
         });
-        updateStats();
-        renderCategoriesView();
+      }
+
+      if (selectBtn) {
+        selectBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (!cat.count) return;
+          const allSelected = cat.msgs.every(m => selectedIds.has(m.id));
+          cat.msgs.forEach(m => {
+            if (allSelected) selectedIds.delete(m.id);
+            else selectedIds.add(m.id);
+          });
+          updateStats();
+          renderCategoriesView();
+        });
+      }
+
+      if (row) {
+        row.addEventListener('click', (e) => {
+          if (e.target.closest('.category-select-btn') || e.target.closest('.category-expand')) return;
+          filterMessagesByCategory(cat);
+        });
+      }
+
+      group.querySelectorAll('.sender-row[data-role="sender"]').forEach((subRow) => {
+        subRow.addEventListener('click', () => {
+          const email = subRow.dataset.email;
+          const msgs = cat.msgs.filter(m => (m.senderEmail || m.author || "Unknown") === email);
+          if (!msgs.length) return;
+          const allSelected = msgs.every(m => selectedIds.has(m.id));
+          msgs.forEach(m => {
+            if (allSelected) selectedIds.delete(m.id);
+            else selectedIds.add(m.id);
+          });
+          updateStats();
+          renderCategoriesView();
+        });
       });
     });
   }
