@@ -2998,10 +2998,15 @@
     try {
       const cats = await loadCategoriesFromStorage();
       const exists = cats.findIndex(c => c.name === name);
+      // Get icon from default categories if available
+      const defaultCat = DEFAULT_BUILT_IN_CATEGORIES.find(c => c.name === name);
+      const icon = defaultCat ? defaultCat.icon : "🏷️";
+
       if (exists >= 0) {
         cats[exists].keywords = keywords;
+        cats[exists].icon = icon;
       } else {
-        cats.push({ name, icon: "🏷️", keywords, builtin: 0 });
+        cats.push({ name, icon, keywords, builtin: 0 });
       }
       await browser.storage.local.set({ categories: cats });
       return true;
@@ -3334,14 +3339,9 @@
     }
 
     const entries = categories.map(cat => {
-      const count = allMessages.filter(m => classifyEmail(m, [cat])).length;
+      const count = allMessages.length > 0 ? allMessages.filter(m => classifyEmail(m, [cat])).length : 0;
       return { ...cat, count };
     }).sort((a, b) => b.count - a.count);
-
-    if (!entries.some(e => e.count > 0)) {
-      container.innerHTML = '<div class="ais-folders-empty">No emails in any category.</div>';
-      return;
-    }
 
     container.innerHTML = entries.map((cat, i) => `
       <div class="category-row">
