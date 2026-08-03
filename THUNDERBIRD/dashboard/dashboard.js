@@ -991,6 +991,7 @@
       else if (view === "size") renderSizeDashboard();
       else if (view === "timeline") renderTimeline();
       else if (view === "subscriptions") renderSubscriptionsView();
+      else if (view === "categories") renderCategoriesView();
       else if (view === "settings") renderSettingsView();
     }
     updateBulkButtons();
@@ -1042,17 +1043,20 @@
       itemStyle: { color: bucketColors[i % bucketColors.length] }
     })).filter(d => d.value > 0);
 
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    const textColor = isLight ? "#1a1d24" : "#eaedf2";
+
     return {
       backgroundColor: "transparent",
-      tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${p.value.toLocaleString()} emails (${p.percent}%)` },
+      tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${p.value.toLocaleString()} emails (${p.percent}%)`, textStyle: { color: textColor } },
       legend: { show: false },
       series: [{
         type: "pie",
         radius: ["38%", "68%"],
         center: ["50%", "50%"],
         data: data,
-        label: { formatter: "{b}\n{d}%", fontSize: 11 },
-        emphasis: { itemStyle: { shadowBlur: 8, shadowColor: "rgba(0,0,0,0.4)" } }
+        label: { formatter: "{b}\n{d}%", fontSize: 11, color: textColor },
+        emphasis: { itemStyle: { shadowBlur: 8, shadowColor: isLight ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.4)" } }
       }]
     };
   }
@@ -1074,17 +1078,20 @@
       itemStyle: { color: colorFor(i) }
     }));
 
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    const textColor = isLight ? "#1a1d24" : "#eaedf2";
+
     return {
       backgroundColor: "transparent",
-      tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${p.value.toLocaleString()} emails (${p.percent}%)` },
+      tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${p.value.toLocaleString()} emails (${p.percent}%)`, textStyle: { color: textColor } },
       legend: { show: false },
       series: [{
         type: "pie",
         radius: ["38%", "68%"],
         center: ["50%", "50%"],
         data: data,
-        label: { formatter: "{b}\n{d}%", fontSize: 11 },
-        emphasis: { itemStyle: { shadowBlur: 8, shadowColor: "rgba(0,0,0,0.4)" } }
+        label: { formatter: "{b}\n{d}%", fontSize: 11, color: textColor },
+        emphasis: { itemStyle: { shadowBlur: 8, shadowColor: isLight ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.4)" } }
       }]
     };
   }
@@ -1106,17 +1113,20 @@
       itemStyle: { color: colorFor(i) }
     }));
 
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    const textColor = isLight ? "#1a1d24" : "#eaedf2";
+
     return {
       backgroundColor: "transparent",
-      tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${p.value.toLocaleString()} emails (${p.percent}%)` },
+      tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${p.value.toLocaleString()} emails (${p.percent}%)`, textStyle: { color: textColor } },
       legend: { show: false },
       series: [{
         type: "pie",
         radius: ["38%", "68%"],
         center: ["50%", "50%"],
         data: data,
-        label: { formatter: "{b}\n{d}%", fontSize: 11 },
-        emphasis: { itemStyle: { shadowBlur: 8, shadowColor: "rgba(0,0,0,0.4)" } }
+        label: { formatter: "{b}\n{d}%", fontSize: 11, color: textColor },
+        emphasis: { itemStyle: { shadowBlur: 8, shadowColor: isLight ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.4)" } }
       }]
     };
   }
@@ -3072,17 +3082,20 @@
         itemStyle: { color: colorFor(i) }
       }));
 
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    const textColor = isLight ? "#1a1d24" : "#eaedf2";
+
     initViewChart("chart-subscriptions-container", {
       backgroundColor: "transparent",
-      tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${p.value.toLocaleString()} subscriptions (${p.percent}%)` },
+      tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${p.value.toLocaleString()} subscriptions (${p.percent}%)`, textStyle: { color: textColor } },
       legend: { show: false },
       series: [{
         type: "pie",
         radius: ["38%", "68%"],
         center: ["50%", "50%"],
         data: data,
-        label: { formatter: "{b}\n{d}%", fontSize: 11 },
-        emphasis: { itemStyle: { shadowBlur: 8, shadowColor: "rgba(0,0,0,0.4)" } }
+        label: { formatter: "{b}\n{d}%", fontSize: 11, color: textColor },
+        emphasis: { itemStyle: { shadowBlur: 8, shadowColor: isLight ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.4)" } }
       }]
     });
   }
@@ -3129,12 +3142,10 @@
       const dateStr = lastDate.toLocaleDateString();
       const domain = privacyMaskEnabled ? "?" : s.domain;
       return `<div class="an-sub-card" style="border-left: 4px solid ${colorFor(i)}">
-        <div class="an-sub-head">
-          <div class="an-sub-domain">${escHtml(domain)}</div>
-          <div class="an-sub-badges">
-            ${s.is_newsletter ? '<span class="an-sub-badge an-sub-newsletter">Newsletter</span>' : ''}
-            <span class="an-sub-badge an-sub-freq">${escHtml(s.frequency)}</span>
-          </div>
+        <div class="an-sub-domain">${escHtml(domain)}</div>
+        <div class="an-sub-badges">
+          ${s.is_newsletter ? '<span class="an-sub-badge an-sub-newsletter">Newsletter</span>' : ''}
+          <span class="an-sub-badge an-sub-freq">${escHtml(s.frequency)}</span>
         </div>
         <div class="an-sub-meta">
           <div><strong>${s.email_count}</strong> emails</div>
@@ -3143,6 +3154,96 @@
         </div>
       </div>`;
     }).join('');
+  }
+
+  // ══════════════════════════════════════════
+  //  BY CATEGORIES VIEW
+  // ══════════════════════════════════════════
+
+  async function renderCategoriesView() {
+    const container = $("#categoriesTable");
+    if (!container) return;
+
+    const categories = await loadCategoriesFromStorage();
+    if (!categories.length) {
+      container.innerHTML = '<div class="ais-folders-empty">No categories defined.</div>';
+      return;
+    }
+
+    const entries = categories.map(cat => {
+      const count = allMessages.filter(m => classifyEmail(m, [cat])).length;
+      return { ...cat, count };
+    }).sort((a, b) => b.count - a.count);
+
+    if (!entries.some(e => e.count > 0)) {
+      container.innerHTML = '<div class="ais-folders-empty">No emails in any category.</div>';
+      return;
+    }
+
+    container.innerHTML = entries.map((cat, i) => `
+      <div class="category-row">
+        <div class="category-icon">${escHtml(cat.icon)}</div>
+        <div class="category-name"><strong>${escHtml(cat.name)}</strong></div>
+        <div class="category-keywords">${escHtml((cat.keywords || []).slice(0, 3).join(", "))}${cat.keywords && cat.keywords.length > 3 ? '...' : ''}</div>
+        <div class="category-count">${cat.count} emails</div>
+      </div>
+    `).join('');
+
+    container.querySelectorAll('.category-row').forEach((row, idx) => {
+      row.addEventListener('click', function () {
+        const cat = entries[idx];
+        filterMessagesByCategory(cat.name);
+      });
+    });
+  }
+
+  function filterMessagesByCategory(categoryName) {
+    const filtered = allMessages.filter(m => classifyEmail(m, [
+      DEFAULT_BUILT_IN_CATEGORIES.find(c => c.name === categoryName) ||
+      { name: categoryName, keywords: [] }
+    ]));
+    showCategoryDetail(categoryName, filtered);
+  }
+
+  function showCategoryDetail(categoryName, msgs) {
+    const detail = $("#categoriesDetail");
+    if (!detail) return;
+
+    if (!msgs.length) {
+      detail.innerHTML = '<div class="ais-folders-empty">No emails in this category.</div>';
+      return;
+    }
+
+    const grouped = {};
+    msgs.forEach(m => {
+      const key = m.senderEmail || m.author || "Unknown";
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(m);
+    });
+
+    detail.innerHTML = `
+      <div class="category-detail-header">
+        <h3>${escHtml(categoryName)}</h3>
+        <p>${msgs.length} emails</p>
+        <button class="btn btn-secondary" onclick="switchView('categories')">Back</button>
+      </div>
+      <div class="category-emails">
+        ${Object.entries(grouped)
+          .sort((a, b) => b[1].length - a[1].length)
+          .map(([sender, emails]) => `
+            <div class="category-sender">
+              <div><strong>${escHtml(displayEmail(sender))}</strong> (${emails.length})</div>
+              ${emails.slice(0, 5).map(m => `
+                <div class="category-email-item">
+                  ${escHtml(m.subject || "(no subject)")}
+                  <span class="text-muted">${new Date(m.date).toLocaleDateString()}</span>
+                </div>
+              `).join('')}
+              ${emails.length > 5 ? `<div class="text-muted">+${emails.length - 5} more</div>` : ''}
+            </div>
+          `).join('')}
+      </div>
+    `;
   }
 
   init();
