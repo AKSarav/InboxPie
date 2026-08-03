@@ -337,14 +337,23 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 /* Sunburst Layout */
 .sunburst-layout { display: grid; grid-template-columns: 1fr 260px; gap: 20px; align-items: start; }
 .sunburst-container { position: relative; }
-.chart-container.sunburst-chart-host { height: 700px; max-height: 700px; min-height: 700px; margin: 0; }
+.chart-container.sunburst-chart-host { height: 800px; max-height: 800px; min-height: 800px; margin: 0; }
 .sunburst-center-stat {
   position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-  text-align: center; pointer-events: none;
+  text-align: center; pointer-events: none; z-index: 2;
 }
-.sunburst-center-stat .scs-count { display: block; font-family: var(--font-mono); font-size: 26px; font-weight: 700; color: var(--accent); }
-.sunburst-center-stat .scs-label { display: block; font-size: 10px; font-weight: 600; letter-spacing: 0.12em; color: var(--text-muted); margin-top: 2px; }
+.sunburst-center-stat .scs-count { display: block; font-family: var(--font-mono); font-size: 30px; font-weight: 700; color: var(--accent); }
+.sunburst-center-stat .scs-label { display: block; font-size: 11px; font-weight: 600; letter-spacing: 0.12em; color: var(--text-muted); margin-top: 2px; }
 .sunburst-hint { font-size: 11px; color: var(--text-muted); padding: 10px 0 0; text-align: center; }
+/* Ring captions — positioned at 12 o'clock above the mid-radius of each ring, computed for the 800px chart above */
+.sunburst-ring-label {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  font-size: 10px; font-weight: 700; letter-spacing: 0.14em; color: var(--text-label);
+  pointer-events: none; z-index: 1;
+}
+.sunburst-ring-label-year { top: calc(50% - 116px); }
+.sunburst-ring-label-month { top: calc(50% - 228px); }
+.sunburst-ring-label-domain { top: calc(50% - 332px); }
 
 /* Legend Panel */
 .legend-panel { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; max-height: 700px; overflow-y: auto; }
@@ -673,7 +682,7 @@ select option { background: var(--bg-card); color: var(--text-primary); }
   overflow: auto;
 }
 .chart-container canvas, .chart-container svg { max-height: 100%; max-width: 100%; }
-.chart-host { flex: 1; min-width: 250px; min-height: 300px; }
+.chart-host { flex: 1; width: 100%; height: 100%; min-width: 250px; min-height: 300px; }
 .chart-legend { flex: 0 0 200px; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; padding-right: 8px; }
 .chart-legend-item { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 4px 0; cursor: pointer; transition: all 0.2s; }
 .chart-legend-item:hover { background: var(--bg-hover); padding-left: 4px; }
