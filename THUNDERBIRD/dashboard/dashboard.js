@@ -14,6 +14,8 @@
   /** Raw (unmasked) domain/sender set by clicking a pie slice; exact-matches the table, keeping the visible search box masked. */
   let domainChartFilterValue = null;
   let senderChartFilterValue = null;
+  /** Category currently driving the dynamic sender-breakdown chart on the Categories tab. */
+  let categoriesChartSelectedName = null;
 
   const timelineState = {
     windowMonths: 24,
@@ -3444,6 +3446,12 @@
     const container = $("#categoriesTable");
     if (!container) return;
 
+    // Always land back on the list + chart split; a prior drill-down may have hidden it.
+    const detail = $("#categoriesDetail");
+    const split = $("#categoriesSplit");
+    if (detail) { detail.style.display = "none"; detail.innerHTML = ""; }
+    if (split) split.style.display = "grid";
+
     // Seed default categories if not already done
     let categories = await loadCategoriesFromStorage();
     if (!categories || !categories.length) {
@@ -3463,43 +3471,12 @@
       return { ...cat, msgs, count: msgs.length };
     }).sort((a, b) => b.count - a.count);
 
-    // Distribution pie chart (before the list)
-    const chartContainer = document.getElementById("chart-categories-container");
-    if (chartContainer) {
-      const withCounts = entries.filter(e => e.count > 0);
-      if (withCounts.length) {
-        const data = withCounts.map((e, i) => ({
-          name: e.name,
-          value: e.count,
-          itemStyle: { color: colorFor(i) }
-        }));
-        const isLight = document.documentElement.getAttribute("data-theme") === "light";
-        const textColor = isLight ? "#1a1d24" : "#eaedf2";
-        const option = {
-          backgroundColor: "transparent",
-          tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${p.value.toLocaleString()} emails (${p.percent}%)`, textStyle: { color: textColor } },
-          legend: { show: false },
-          series: [{
-            type: "pie",
-            radius: ["38%", "68%"],
-            center: ["50%", "50%"],
-            data: data,
-            label: { formatter: "{b}\n{d}%", fontSize: 11, color: textColor },
-            emphasis: { itemStyle: { shadowBlur: 8, shadowColor: isLight ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.4)" } }
-          }]
-        };
-        initViewChart("chart-categories-container", option);
-        const chart = chartContainer.querySelector('.chart-host')._echartsInstance;
-        if (chart) {
-          chart.on("click", (params) => {
-            const cat = entries.find(e => e.name === params.name);
-            if (cat && cat.count > 0) filterMessagesByCategory(cat);
-          });
-        }
-      } else {
-        chartContainer.innerHTML = '<div class="ais-folders-empty">No emails to chart yet — run a scan first.</div>';
-      }
+    // Pick/validate the category driving the dynamic sender chart
+    if (!categoriesChartSelectedName || !entries.some(e => e.name === categoriesChartSelectedName)) {
+      categoriesChartSelectedName = (entries.find(e => e.count > 0) || entries[0]).name;
     }
+    const activeCat = entries.find(e => e.name === categoriesChartSelectedName) || entries[0];
+    renderCategoriesChart(entries, activeCat);
 
     container.innerHTML = entries.map((cat) => {
       const selected = cat.count > 0 && cat.msgs.every(m => selectedIds.has(m.id));
@@ -3539,16 +3516,107 @@
     });
   }
 
+  /** Dynamic sender ("people") breakdown pie chart for the category chosen in the dropdown. */
+  function renderCategoriesChart(entries, activeCat) {
+    const select = $("#categoriesChartSelect");
+    const chartContainer = document.getElementById("chart-categories-container");
+    const selectBtn = $("#categoriesChartSelectBtn");
+    if (!select || !chartContainer || !selectBtn) return;
+
+    select.innerHTML = entries.map(e =>
+      `<option value="${escAttr(e.name)}" ${e.name === activeCat.name ? "selected" : ""}>${escHtml(e.icon)} ${escHtml(e.name)} (${e.count})</option>`
+    ).join('');
+    select.onchange = function () {
+      categoriesChartSelectedName = this.value;
+      renderCategoriesView();
+    };
+
+    if (!activeCat.count) {
+      chartContainer.innerHTML = '<div class="ais-folders-empty">No emails in this category yet.</div>';
+      selectBtn.disabled = true;
+      selectBtn.classList.remove("active");
+      selectBtn.textContent = "Select for Review";
+      selectBtn.onclick = null;
+      return;
+    }
+
+    const bySender = {};
+    activeCat.msgs.forEach(m => {
+      const key = m.senderEmail || m.author || "Unknown";
+      if (!bySender[key]) bySender[key] = { email: key, count: 0, msgs: [] };
+      bySender[key].count++;
+      bySender[key].msgs.push(m);
+    });
+    const senderEntries = Object.values(bySender).sort((a, b) => b.count - a.count).slice(0, 12);
+
+    const data = senderEntries.map((s, i) => ({
+      name: s.email,
+      value: s.count,
+      itemStyle: { color: colorFor(i) }
+    }));
+
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    const textColor = isLight ? "#1a1d24" : "#eaedf2";
+
+    initViewChart("chart-categories-container", {
+      backgroundColor: "transparent",
+      tooltip: { trigger: "item", formatter: (p) => `${displayEmail(p.name)}: ${p.value.toLocaleString()} emails (${p.percent}%)`, textStyle: { color: textColor } },
+      legend: { show: false },
+      series: [{
+        type: "pie",
+        radius: ["38%", "68%"],
+        center: ["50%", "50%"],
+        data: data,
+        label: { formatter: (p) => `${displayEmail(p.name)}\n${p.percent}%`, fontSize: 11, color: textColor },
+        emphasis: { itemStyle: { shadowBlur: 8, shadowColor: isLight ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.4)" } }
+      }]
+    });
+
+    const chart = chartContainer.querySelector('.chart-host')._echartsInstance;
+    if (chart) {
+      chart.on("click", (params) => {
+        const sender = senderEntries.find(s => s.email === params.name);
+        if (!sender) return;
+        const allSelected = sender.msgs.every(m => selectedIds.has(m.id));
+        sender.msgs.forEach(m => {
+          if (allSelected) selectedIds.delete(m.id);
+          else selectedIds.add(m.id);
+        });
+        updateStats();
+        renderCategoriesView();
+      });
+    }
+
+    const allSelected = activeCat.msgs.every(m => selectedIds.has(m.id));
+    selectBtn.disabled = false;
+    selectBtn.classList.toggle("active", allSelected);
+    selectBtn.textContent = allSelected
+      ? `✓ ${activeCat.count.toLocaleString()} Selected`
+      : `Select ${activeCat.count.toLocaleString()} for Review`;
+    selectBtn.onclick = function () {
+      const nowAllSelected = activeCat.msgs.every(m => selectedIds.has(m.id));
+      activeCat.msgs.forEach(m => {
+        if (nowAllSelected) selectedIds.delete(m.id);
+        else selectedIds.add(m.id);
+      });
+      updateStats();
+      renderCategoriesView();
+    };
+  }
+
   function filterMessagesByCategory(cat) {
     showCategoryDetail(cat.name, cat.msgs);
   }
 
   function showCategoryDetail(categoryName, msgs) {
     const detail = $("#categoriesDetail");
+    const split = $("#categoriesSplit");
     if (!detail) return;
+    if (split) split.style.display = "none";
+    detail.style.display = "block";
 
     if (!msgs.length) {
-      detail.innerHTML = '<div class="ais-folders-empty">No emails in this category.</div>';
+      detail.innerHTML = '<div class="ais-folders-empty">No emails in this category.</div><div style="margin-top:12px;"><button class="btn btn-secondary" onclick="switchView(\'categories\')">Back</button></div>';
       return;
     }
 

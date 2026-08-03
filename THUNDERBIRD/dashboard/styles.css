@@ -706,6 +706,14 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 .an-sub-meta strong { color: var(--text-primary); display: block; }
 
 /* Categories */
+.categories-split { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+@media (max-width: 1200px) { .categories-split { grid-template-columns: 1fr; } }
+.categories-split-col { min-width: 0; }
+.categories-chart-col { display: flex; flex-direction: column; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+.categories-chart-host { height: 320px; margin: 0; }
+.categories-chart-select { padding: 4px 8px; font-size: 11px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary); flex: 1; max-width: 220px; }
+.categories-chart-select-btn { margin-top: 14px; align-self: stretch; }
+.categories-list-col .categories-table { max-height: 700px; overflow-y: auto; padding-right: 4px; }
 .categories-table { display: flex; flex-direction: column; gap: 8px; }
 .category-row { padding: 12px; background: var(--bg-secondary); border-radius: 6px; border: 1px solid var(--border); cursor: pointer; transition: all 0.2s; display: grid; grid-template-columns: 32px 1fr auto 80px auto; gap: 12px; align-items: center; }
 .category-row:hover { background: var(--bg-hover); border-color: var(--accent); }

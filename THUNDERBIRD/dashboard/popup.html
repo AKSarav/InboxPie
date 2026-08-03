@@ -277,8 +277,19 @@
             </div>
           </div>
           <div class="size-note">Note: The Thunderbird extension classifies emails using only sender and subject keywords, so results may be inaccurate. For higher-precision categorization, try the InboxPie desktop app.</div>
-          <div id="chart-categories-container" class="chart-container"></div>
-          <div id="categoriesTable" class="categories-table"></div>
+          <div id="categoriesSplit" class="categories-split">
+            <div class="categories-split-col categories-chart-col">
+              <div style="display: flex; gap: 12px; margin-bottom: 12px; align-items: center;">
+                <h3 style="margin: 0; font-size: 14px;">Senders in</h3>
+                <select id="categoriesChartSelect" class="categories-chart-select"></select>
+              </div>
+              <div id="chart-categories-container" class="chart-container categories-chart-host"></div>
+              <button type="button" id="categoriesChartSelectBtn" class="btn btn-primary categories-chart-select-btn">Select for Review</button>
+            </div>
+            <div class="categories-split-col categories-list-col">
+              <div id="categoriesTable" class="categories-table"></div>
+            </div>
+          </div>
           <div id="categoriesDetail" class="categories-detail" style="display:none;"></div>
         </div>
       </div>
