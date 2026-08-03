@@ -31,6 +31,13 @@
             <path d="M3 4v5h5" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </button>
+        <button id="tourHelpBtn" class="theme-toggle" title="Take a guided tour">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="1.75"/>
+            <path d="M9.3 9.2a2.7 2.7 0 1 1 3.9 2.4c-.8.4-1.2 1-1.2 1.9v.4" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="12" cy="17.2" r="1" fill="currentColor"/>
+          </svg>
+        </button>
         <select id="accountSelect">
           <option value="all">All Accounts</option>
         </select>
@@ -370,6 +377,25 @@
       <div class="modal-actions">
         <button type="button" id="folderModalCancel" class="btn btn-secondary">Cancel</button>
         <button type="button" id="folderModalConfirm" class="btn btn-primary">Move here</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="tourOverlay" class="tour-overlay" style="display:none;">
+    <div id="tourSpotlight" class="tour-spotlight"></div>
+    <div id="tourPopover" class="tour-popover">
+      <div class="tour-popover-head">
+        <span id="tourStepLabel" class="tour-step-label"></span>
+        <button type="button" id="tourSkipBtn" class="tour-skip-btn">Skip tour</button>
+      </div>
+      <h3 id="tourTitle"></h3>
+      <p id="tourText"></p>
+      <div class="tour-popover-actions">
+        <div id="tourDots" class="tour-dots"></div>
+        <div class="tour-nav-buttons">
+          <button type="button" id="tourBackBtn" class="btn btn-secondary btn-small">Back</button>
+          <button type="button" id="tourNextBtn" class="btn btn-primary btn-small">Next</button>
+        </div>
       </div>
     </div>
   </div>

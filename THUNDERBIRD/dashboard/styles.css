@@ -761,11 +761,6 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 
 .timeline-dashboard, .settings-dashboard { max-width: 100%; }
 
-/* Size view specific styles */
-.chart-size-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
-@media (max-width: 1200px) { .chart-size-grid { grid-template-columns: 1fr; } }
-.chart-size-grid .chart-container { margin: 0; }
-
 /* Scrollbar */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg-primary); }
@@ -774,3 +769,30 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 
 @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 .sender-row { animation: fadeIn 0.25s ease forwards; }
+
+/* Guided Tour */
+.tour-overlay { position: fixed; inset: 0; z-index: 9997; }
+.tour-spotlight {
+  position: fixed; z-index: 9998; pointer-events: none;
+  border-radius: 10px;
+  box-shadow: 0 0 0 9999px rgba(4, 7, 13, 0.72);
+  transition: top 0.3s ease, left 0.3s ease, width 0.3s ease, height 0.3s ease;
+}
+[data-theme="light"] .tour-spotlight { box-shadow: 0 0 0 9999px rgba(23, 27, 38, 0.55); }
+.tour-popover {
+  position: fixed; z-index: 9999; width: 320px; max-width: calc(100vw - 32px);
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
+  padding: 16px; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  transition: top 0.3s ease, left 0.3s ease;
+}
+.tour-popover-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; gap: 10px; }
+.tour-step-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+.tour-skip-btn { background: none; border: none; color: var(--text-muted); font-size: 12px; cursor: pointer; padding: 0; }
+.tour-skip-btn:hover { color: var(--text-primary); text-decoration: underline; }
+.tour-popover h3 { font-size: 15px; margin: 0 0 6px; color: var(--text-primary); }
+.tour-popover p { font-size: 13px; color: var(--text-secondary); line-height: 1.5; margin: 0 0 14px; }
+.tour-popover-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.tour-dots { display: flex; gap: 6px; }
+.tour-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--border); transition: background 0.2s, width 0.2s; }
+.tour-dot.active { background: var(--accent); width: 16px; border-radius: 3px; }
+.tour-nav-buttons { display: flex; gap: 8px; }

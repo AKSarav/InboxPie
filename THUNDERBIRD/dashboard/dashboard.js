@@ -186,6 +186,120 @@
         $("#progressText").textContent = `Moving ${msg.moved}/${msg.total} messages…`;
       }
     });
+
+    // Guided tour
+    $("#tourHelpBtn").addEventListener("click", startTour);
+    $("#tourNextBtn").addEventListener("click", advanceTour);
+    $("#tourBackBtn").addEventListener("click", rewindTour);
+    $("#tourSkipBtn").addEventListener("click", endTour);
+    window.addEventListener("resize", () => {
+      if ($("#tourOverlay").style.display !== "none") positionTourStep();
+    });
+    if (localStorage.getItem("mail-audit-tour-completed") !== "true") {
+      setTimeout(startTour, 500);
+    }
+  }
+
+  // ══════════════════════════════════════════
+  //  GUIDED TOUR
+  // ══════════════════════════════════════════
+  const TOUR_STEPS = [
+    {
+      target: "#accountSelect",
+      title: "Select your email account",
+      text: "Choose which mail account InboxPie should analyze, or leave it on “All Accounts” to scan everything at once.",
+    },
+    {
+      target: "#folderSelectBtn",
+      title: "Choose folders",
+      text: "Pick specific folders to scan, or keep the default selection to cover your whole mailbox.",
+    },
+    {
+      target: "#scanBtn",
+      title: "Scan your mailbox",
+      text: "Click Scan Mailbox to start. InboxPie reads only metadata — sender, subject, size, date — never your email content.",
+    },
+    {
+      target: "#privacyToggle",
+      title: "Privacy mode (optional)",
+      text: "Presenting or sitting with someone else? Click the eye icon to mask sender emails and domains before they're shown on screen.",
+    },
+    {
+      target: "#githubLink",
+      title: "Enjoying InboxPie?",
+      text: "If InboxPie helped you clean up your inbox, consider starring the project on GitHub or leaving a review in the Thunderbird Add-ons community — it really helps!",
+    },
+  ];
+  let tourStepIndex = 0;
+
+  function startTour() {
+    tourStepIndex = 0;
+    $("#tourOverlay").style.display = "block";
+    renderTourStep();
+  }
+
+  function endTour() {
+    $("#tourOverlay").style.display = "none";
+    localStorage.setItem("mail-audit-tour-completed", "true");
+  }
+
+  function advanceTour() {
+    if (tourStepIndex >= TOUR_STEPS.length - 1) {
+      endTour();
+      return;
+    }
+    tourStepIndex++;
+    renderTourStep();
+  }
+
+  function rewindTour() {
+    if (tourStepIndex === 0) return;
+    tourStepIndex--;
+    renderTourStep();
+  }
+
+  function renderTourStep() {
+    const step = TOUR_STEPS[tourStepIndex];
+    const target = document.querySelector(step.target);
+    if (!target) {
+      // Target not present in this build; skip to the next step defensively.
+      advanceTour();
+      return;
+    }
+
+    $("#tourStepLabel").textContent = `Step ${tourStepIndex + 1} of ${TOUR_STEPS.length}`;
+    $("#tourTitle").textContent = step.title;
+    $("#tourText").textContent = step.text;
+    $("#tourDots").innerHTML = TOUR_STEPS
+      .map((_, i) => `<span class="tour-dot ${i === tourStepIndex ? "active" : ""}"></span>`)
+      .join("");
+    $("#tourBackBtn").style.visibility = tourStepIndex === 0 ? "hidden" : "visible";
+    $("#tourNextBtn").textContent = tourStepIndex === TOUR_STEPS.length - 1 ? "Finish" : "Next";
+
+    positionTourStep();
+  }
+
+  function positionTourStep() {
+    const step = TOUR_STEPS[tourStepIndex];
+    const target = document.querySelector(step.target);
+    const spotlight = $("#tourSpotlight");
+    const popover = $("#tourPopover");
+    if (!target || !spotlight || !popover) return;
+
+    const rect = target.getBoundingClientRect();
+    const pad = 6;
+    spotlight.style.top = `${rect.top - pad}px`;
+    spotlight.style.left = `${rect.left - pad}px`;
+    spotlight.style.width = `${rect.width + pad * 2}px`;
+    spotlight.style.height = `${rect.height + pad * 2}px`;
+
+    const popW = popover.offsetWidth || 320;
+    const popH = popover.offsetHeight || 160;
+    let top = rect.bottom + 14;
+    if (top + popH > window.innerHeight - 12) top = Math.max(12, rect.top - popH - 14);
+    const left = Math.min(Math.max(12, rect.left), window.innerWidth - popW - 12);
+    popover.style.top = `${top}px`;
+    popover.style.left = `${left}px`;
   }
 
   function updateThemeIcon(theme) {
