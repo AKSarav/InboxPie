@@ -1001,25 +1001,42 @@
   //  ECHARTS UTILITIES & BAR CHART RENDERING
   // ══════════════════════════════════════════
 
-  function initViewChart(hostId, option) {
+  function initViewChart(hostId, option, legendData = null) {
     if (!window.echarts) return;
     const el = document.getElementById(hostId);
     if (!el) return;
 
-    // Set container height based on chart height option
-    if (option.height) {
-      el.style.minHeight = Math.min(option.height, 600) + "px";
+    // Clear container and set up split layout if legend is provided
+    let chartHost = el.querySelector('.chart-host');
+    if (!chartHost) {
+      el.innerHTML = '';
+      chartHost = document.createElement('div');
+      chartHost.className = 'chart-host';
+      el.appendChild(chartHost);
+      if (legendData) {
+        el.classList.add('with-legend');
+        const legendContainer = document.createElement('div');
+        legendContainer.className = 'chart-legend';
+        legendContainer.innerHTML = legendData.map((item, i) => `
+          <div class="chart-legend-item" data-index="${i}">
+            <div class="chart-legend-dot" style="background-color: ${item.color}"></div>
+            <div class="chart-legend-label" title="${escHtml(item.name)}">${escHtml(item.name)}</div>
+            <div class="chart-legend-value">${item.value.toLocaleString()}</div>
+          </div>
+        `).join('');
+        el.appendChild(legendContainer);
+      }
     }
 
-    if (!el._echartsInstance) {
-      el._echartsInstance = echarts.init(el, getChartTheme());
+    if (!chartHost._echartsInstance) {
+      chartHost._echartsInstance = echarts.init(chartHost, getChartTheme());
       new ResizeObserver(() => {
-        if (el._echartsInstance) el._echartsInstance.resize();
-      }).observe(el);
+        if (chartHost._echartsInstance) chartHost._echartsInstance.resize();
+      }).observe(chartHost);
     }
-    el._echartsInstance.setOption(option, true);
+    chartHost._echartsInstance.setOption(option, true);
     requestAnimationFrame(() => {
-      if (el._echartsInstance) el._echartsInstance.resize();
+      if (chartHost._echartsInstance) chartHost._echartsInstance.resize();
     });
   }
 
@@ -1119,6 +1136,31 @@
     return {
       backgroundColor: "transparent",
       tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${p.value.toLocaleString()} emails (${p.percent}%)`, textStyle: { color: textColor } },
+      legend: { show: false },
+      series: [{
+        type: "pie",
+        radius: ["38%", "68%"],
+        center: ["50%", "50%"],
+        data: data,
+        label: { formatter: "{b}\n{d}%", fontSize: 11, color: textColor },
+        emphasis: { itemStyle: { shadowBlur: 8, shadowColor: isLight ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.4)" } }
+      }]
+    };
+  }
+
+  function buildTopSendersChartOption(senders) {
+    const data = senders.slice(0, 12).map((s, i) => ({
+      name: s.title,
+      value: s.count,
+      itemStyle: { color: colorFor(i) }
+    }));
+
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    const textColor = isLight ? "#1a1d24" : "#eaedf2";
+
+    return {
+      backgroundColor: "transparent",
+      tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${formatBytes(p.value)} (${p.percent}%)`, textStyle: { color: textColor } },
       legend: { show: false },
       series: [{
         type: "pie",
@@ -1876,19 +1918,75 @@
       btn.addEventListener("click", () => selectSizeInsight(btn, knownMessages));
     });
 
-    // Render chart
-    initViewChart("chart-size-container", buildSizeBarChartOption());
-    const chart = document.getElementById("chart-size-container")._echartsInstance;
-    if (chart) {
-      chart.on("click", (params) => {
-        if (params.value && params.value > 0) {
-          const bucketLabels = ["0–1 MB", "1–10 MB", "10–100 MB", "100 MB+"];
-          const bucketIndex = bucketLabels.indexOf(params.name);
-          if (bucketIndex >= 0) {
-            const btn = document.querySelector(`[data-size-kind="${["bucket", "domain", "sender", "large"][bucketIndex]}"]`);
-            if (btn) selectSizeInsight(btn, knownMessages);
+    // Render charts with legend
+    const chartContainer = document.getElementById("chart-size-container");
+    if (chartContainer) {
+      chartContainer.innerHTML = `
+        <div style="display: flex; gap: 20px; width: 100%;">
+          <div style="flex: 1;">
+            <div style="display: flex; gap: 12px; margin-bottom: 12px; align-items: center;">
+              <h3 style="margin: 0; font-size: 14px;">Size Buckets</h3>
+              <select class="size-topx-dropdown" style="padding: 4px 8px; font-size: 11px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
+                <option value="5">Top 5</option>
+                <option value="10" selected>Top 10</option>
+                <option value="20">Top 20</option>
+                <option value="all">All</option>
+              </select>
+            </div>
+            <div id="chart-size-buckets" class="chart-container"></div>
+          </div>
+          <div style="flex: 1;">
+            <div style="display: flex; gap: 12px; margin-bottom: 12px; align-items: center;">
+              <h3 style="margin: 0; font-size: 14px;">Top Senders by Space</h3>
+              <select class="size-senders-topx-dropdown" style="padding: 4px 8px; font-size: 11px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
+                <option value="5">Top 5</option>
+                <option value="10" selected>Top 10</option>
+                <option value="20">Top 20</option>
+                <option value="all">All</option>
+              </select>
+            </div>
+            <div id="chart-size-senders" class="chart-container"></div>
+          </div>
+        </div>
+      `;
+
+      // Render size buckets chart
+      initViewChart("chart-size-buckets", buildSizeBarChartOption());
+      const bucketChart = document.getElementById("chart-size-buckets").querySelector('.chart-host')._echartsInstance;
+      if (bucketChart) {
+        bucketChart.on("click", (params) => {
+          if (params.value && params.value > 0) {
+            const bucketLabels = ["0–1 MB", "1–10 MB", "10–100 MB", "100 MB+"];
+            const bucketIndex = bucketLabels.indexOf(params.name);
+            if (bucketIndex >= 0) {
+              const btn = document.querySelector(`[data-size-kind="${["bucket", "domain", "sender", "large"][bucketIndex]}"]`);
+              if (btn) selectSizeInsight(btn, knownMessages);
+            }
           }
-        }
+        });
+      }
+
+      // Render top senders chart
+      initViewChart("chart-size-senders", buildTopSendersChartOption(heavySenders));
+      const sendersChart = document.getElementById("chart-size-senders").querySelector('.chart-host')._echartsInstance;
+      if (sendersChart) {
+        sendersChart.on("click", (params) => {
+          if (params.value && params.value > 0) {
+            const sender = heavySenders.find(s => s.title === params.name);
+            if (sender) {
+              const btn = document.querySelector(`[data-size-kind="sender"][data-value="${escAttr(sender.value || "")}"]`);
+              if (btn) selectSizeInsight(btn, knownMessages);
+            }
+          }
+        });
+      }
+
+      // Wire up dropdowns
+      document.querySelector('.size-topx-dropdown')?.addEventListener('change', function() {
+        // TODO: implement dynamic limiting
+      });
+      document.querySelector('.size-senders-topx-dropdown')?.addEventListener('change', function() {
+        // TODO: implement dynamic limiting
       });
     }
 

@@ -638,16 +638,28 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 /* Chart containers for ECharts visualizations */
 .chart-container {
   height: auto;
-  min-height: 400px;
+  min-height: 300px;
   max-height: 600px;
   margin-bottom: 20px;
-  background: var(--bg-secondary);
+  background: var(--bg-card);
   border-radius: 6px;
   padding: 12px;
   box-sizing: border-box;
+  overflow: visible;
+}
+.chart-container.with-legend {
+  display: flex;
+  gap: 16px;
   overflow: auto;
 }
 .chart-container canvas, .chart-container svg { max-height: 100%; max-width: 100%; }
+.chart-host { flex: 1; min-width: 250px; min-height: 300px; }
+.chart-legend { flex: 0 0 200px; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; padding-right: 8px; }
+.chart-legend-item { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 4px 0; cursor: pointer; transition: all 0.2s; }
+.chart-legend-item:hover { background: var(--bg-hover); padding-left: 4px; }
+.chart-legend-dot { width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0; }
+.chart-legend-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chart-legend-value { font-weight: 600; font-size: 11px; color: var(--text-primary); white-space: nowrap; }
 
 /* Settings & Categories */
 .settings-dashboard { padding: 20px; }
