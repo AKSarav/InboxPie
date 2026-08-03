@@ -337,7 +337,14 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 /* Sunburst Layout */
 .sunburst-layout { display: grid; grid-template-columns: 1fr 260px; gap: 20px; align-items: start; }
 .sunburst-container { position: relative; }
-#sunburstSvg { width: 100%; max-width: 700px; height: auto; display: block; margin: 0 auto; }
+.chart-container.sunburst-chart-host { height: 700px; max-height: 700px; min-height: 700px; margin: 0; }
+.sunburst-center-stat {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  text-align: center; pointer-events: none;
+}
+.sunburst-center-stat .scs-count { display: block; font-family: var(--font-mono); font-size: 26px; font-weight: 700; color: var(--accent); }
+.sunburst-center-stat .scs-label { display: block; font-size: 10px; font-weight: 600; letter-spacing: 0.12em; color: var(--text-muted); margin-top: 2px; }
+.sunburst-hint { font-size: 11px; color: var(--text-muted); padding: 10px 0 0; text-align: center; }
 
 /* Legend Panel */
 .legend-panel { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; max-height: 700px; overflow-y: auto; }
@@ -349,19 +356,6 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 .legend-swatch { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
 .legend-label { flex: 1; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .legend-count { font-family: var(--font-mono); font-size: 11px; color: var(--accent); font-weight: 600; }
-
-/* Tooltip */
-.sunburst-tooltip { position: fixed; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 12px; pointer-events: none; z-index: 100; box-shadow: 0 8px 24px var(--tooltip-shadow); max-width: 280px; }
-.sunburst-tooltip .tt-label { font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
-.sunburst-tooltip .tt-count { font-family: var(--font-mono); color: var(--accent); font-size: 14px; }
-.sunburst-tooltip .tt-pct { color: var(--text-muted); font-size: 11px; }
-
-/* Breadcrumb */
-.breadcrumb { display: flex; gap: 6px; align-items: center; padding: 12px 0; font-size: 12px; color: var(--text-muted); flex-wrap: wrap; }
-.breadcrumb span { cursor: pointer; padding: 3px 8px; border-radius: 4px; transition: background 0.15s; }
-.breadcrumb span:hover { background: var(--bg-hover); }
-.breadcrumb .bc-sep { color: var(--text-muted); cursor: default; padding: 0; }
-.breadcrumb .bc-active { color: var(--accent); font-weight: 600; }
 
 /* Detail panel */
 .detail-panel { margin-top: 16px; }

@@ -373,14 +373,6 @@
     return typeof value === "string" && !value.includes("@") && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(value.trim());
   }
 
-  function displayPrivateLabel(label) {
-    if (!privacyMaskEnabled || label == null) return label;
-    const text = String(label);
-    if (looksLikeEmail(text)) return displayEmail(text);
-    if (looksLikeDomain(text)) return displayDomain(text);
-    return maskAccountText(text);
-  }
-
   function maskFolderName(name) {
     if (!name || typeof name !== "string") return name || "";
     const trimmed = name.trim();
@@ -1099,8 +1091,8 @@
     $("#statUnread").textContent = "0";
     $("#statSelected").textContent = "0";
 
-    clearElement($("#sunburstSvg"));
-    clearElement($("#sunburstBreadcrumb"));
+    clearElement($("#sunburstChart"));
+    clearElement($("#sunburstCenterStat"));
     clearElement($("#legendPanel"));
     clearElement($("#sunburstDetail"));
     clearElement($("#senderTable"));
@@ -1417,40 +1409,28 @@
   }
 
   // ══════════════════════════════════════════
-  //  SUNBURST CHART (theme-aware)
+  //  SUNBURST CHART (ECharts, theme-aware)
   // ══════════════════════════════════════════
-  function renderSunburst(filterFn = null, breadcrumbPath = []) {
-    const svg = $("#sunburstSvg");
-    clearElement(svg);
+  function renderSunburst() {
+    const chartHost = $("#sunburstChart");
+    const centerStat = $("#sunburstCenterStat");
+    const legend = $("#legendPanel");
     clearElement($("#sunburstDetail"));
     sunburstDetailState = null;
-    const tooltip = $("#sunburstTooltip");
-    const breadcrumb = $("#sunburstBreadcrumb");
-    const legend = $("#legendPanel");
+    if (!chartHost) return;
 
-    const accentColor = cssVar("--accent");
-    const textMuted = cssVar("--text-muted");
-    const textLabel = cssVar("--text-label");
-    const gapStroke = cssVar("--svg-gap-stroke");
-
-    const baseMessages = getFilteredMessages();
-    const msgs = filterFn ? baseMessages.filter(filterFn) : baseMessages;
+    const msgs = getFilteredMessages();
     const total = msgs.length;
     if (total === 0) {
-      clearElement(svg);
-      addSvgText(svg, 400, 400, "No messages", { fill: textMuted, fontSize: "14" });
+      chartHost.innerHTML = '<div class="insight-empty">No messages</div>';
+      if (centerStat) centerStat.innerHTML = "";
       clearElement(legend);
       return;
     }
 
-    const cx = 400, cy = 400;
-    const rings = [
-      { key: "year", label: "Year", innerR: 80, outerR: 160 },
-      { key: "monthName", label: "Month", innerR: 165, outerR: 250 },
-      { key: "domain", label: "Domain", innerR: 255, outerR: 340 },
-    ];
+    const MONTH_ORDER = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
-    // Build tree
+    // Build tree: year -> month -> domain -> messages
     const tree = {};
     msgs.forEach((m) => {
       const y = String(m.year), mo = m.monthName, d = m.domain;
@@ -1460,119 +1440,110 @@
       tree[y][mo][d].push(m);
     });
 
-    // Center text
-    addSvgText(svg, cx, cy - 8, total.toLocaleString(), { fill: accentColor, fontSize: "28", fontWeight: "700", fontFamily: "monospace" });
-    addSvgText(svg, cx, cy + 16, "EMAILS", { fill: textMuted, fontSize: "11", letterSpacing: "1.5" });
-
-    // Ring labels
-    rings.forEach((ring) => {
-      const r = (ring.innerR + ring.outerR) / 2;
-      addSvgText(svg, cx, cy - r - 6, ring.label.toUpperCase(), { fill: textLabel, fontSize: "10", fontWeight: "600", letterSpacing: "1.5" });
-    });
-
-    // Legend data collectors
     const legendYears = [];
-    const legendMonths = [];
     const legendDomains = {};
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    const otherColor = cssVar("--text-muted");
 
-    // Ring 0: Year
     const years = Object.keys(tree).sort();
-    let angle0 = 0;
-
-    years.forEach((year, yi) => {
+    const sunburstData = years.map((year, yi) => {
+      const yearColor = colorFor(yi);
       const yearMsgs = msgs.filter((m) => String(m.year) === year);
-      const yearAngle = (yearMsgs.length / total) * 360;
-      const color = colorFor(yi);
-      legendYears.push({ label: year, color, count: yearMsgs.length });
+      legendYears.push({ label: year, color: yearColor, count: yearMsgs.length });
 
-      drawArc(svg, cx, cy, rings[0].innerR, rings[0].outerR, angle0, angle0 + yearAngle, color, 0.9, gapStroke,
-        () => renderSunburst((m) => String(m.year) === year && (!filterFn || filterFn(m)), [...breadcrumbPath, { label: year }]),
-        (e) => showTooltip(tooltip, e, year, yearMsgs.length, total)
-      );
-
-      // Add arc label for years with enough space
-      if (yearAngle > 15) {
-        const midAngle = angle0 + yearAngle / 2;
-        const labelR = (rings[0].innerR + rings[0].outerR) / 2;
-        const pt = polarToCartesian(cx, cy, labelR, midAngle);
-        addSvgText(svg, pt.x, pt.y + 4, year, { fill: "#fff", fontSize: "11", fontWeight: "600" });
-      }
-
-      // Ring 1: Month
-      const months = Object.keys(tree[year]).sort((a, b) => {
-        const mo = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-        return mo.indexOf(a) - mo.indexOf(b);
-      });
-      let angle1 = angle0;
-
-      months.forEach((month, mi) => {
-        const moMsgs = yearMsgs.filter((m) => m.monthName === month);
-        const moAngle = (moMsgs.length / total) * 360;
+      const months = Object.keys(tree[year]).sort((a, b) => MONTH_ORDER.indexOf(a) - MONTH_ORDER.indexOf(b));
+      const monthChildren = months.map((month, mi) => {
         const moColor = colorFor(yi * 4 + mi);
-        const moKey = `${month} ${year}`;
-        legendMonths.push({ label: moKey, color: moColor, count: moMsgs.length });
-
-        drawArc(svg, cx, cy, rings[1].innerR, rings[1].outerR, angle1, angle1 + moAngle, moColor, 0.75, gapStroke,
-          () => renderSunburst((m) => String(m.year) === year && m.monthName === month && (!filterFn || filterFn(m)), [...breadcrumbPath, { label: year }, { label: month }]),
-          (e) => showTooltip(tooltip, e, moKey, moMsgs.length, total)
-        );
-        addArcLabel(svg, cx, cy, rings[1], angle1, angle1 + moAngle, month, {
-          minAngle: 18,
-          maxChars: 6,
-          fill: "rgba(255,255,255,0.88)",
-          fontSize: "10",
-          fontWeight: "600",
-        });
-
-        // Ring 2: Domain
         const domains = Object.keys(tree[year][month]).sort((a, b) => tree[year][month][b].length - tree[year][month][a].length);
-        let angle2 = angle1;
         const topDomains = domains.slice(0, 15);
-        const otherCount = domains.slice(15).reduce((s, d) => s + tree[year][month][d].length, 0);
+        const otherDomains = domains.slice(15);
 
-        topDomains.forEach((domain, di) => {
+        const domainChildren = topDomains.map((domain, di) => {
           const dMsgs = tree[year][month][domain];
-          const dAngle = (dMsgs.length / total) * 360;
           const dColor = colorFor(di + 3);
           if (!legendDomains[domain]) legendDomains[domain] = { color: dColor, count: 0 };
           legendDomains[domain].count += dMsgs.length;
-
-          drawArc(svg, cx, cy, rings[2].innerR, rings[2].outerR, angle2, angle2 + dAngle, dColor, 0.6, gapStroke,
-            () => showDomainDetail(domain, dMsgs),
-            (e) => showTooltip(tooltip, e, displayDomain(domain), dMsgs.length, total)
-          );
-          addArcLabel(svg, cx, cy, rings[2], angle2, angle2 + dAngle, displayDomain(domain), {
-            minAngle: 24,
-            maxChars: 12,
-            fill: "rgba(255,255,255,0.82)",
-            fontSize: "9",
-            fontWeight: "600",
-          });
-          angle2 += dAngle;
+          return {
+            id: `d::${year}::${month}::${domain}`,
+            name: displayDomain(domain),
+            value: dMsgs.length,
+            itemStyle: { color: dColor },
+            __rawDomain: domain,
+            __messages: dMsgs,
+          };
         });
 
-        if (otherCount > 0) {
-          const oAngle = (otherCount / total) * 360;
-          drawArc(svg, cx, cy, rings[2].innerR, rings[2].outerR, angle2, angle2 + oAngle, textMuted, 0.3, gapStroke,
-            null, (e) => showTooltip(tooltip, e, "Other domains", otherCount, total));
+        if (otherDomains.length) {
+          const otherMsgs = otherDomains.flatMap((d) => tree[year][month][d]);
+          domainChildren.push({
+            id: `other::${year}::${month}`,
+            name: "Other",
+            value: otherMsgs.length,
+            itemStyle: { color: otherColor, opacity: 0.5 },
+          });
         }
 
-        angle1 += moAngle;
+        return {
+          id: `m::${year}::${month}`,
+          name: month,
+          itemStyle: { color: moColor },
+          children: domainChildren,
+        };
       });
 
-      angle0 += yearAngle;
+      return {
+        id: `y::${year}`,
+        name: year,
+        itemStyle: { color: yearColor },
+        children: monthChildren,
+      };
     });
 
-    svg.addEventListener("mouseleave", () => (tooltip.style.display = "none"));
+    if (centerStat) {
+      centerStat.innerHTML = `<span class="scs-count">${total.toLocaleString()}</span><span class="scs-label">EMAILS</span>`;
+    }
 
-    // Breadcrumb
-    renderBreadcrumb(breadcrumb, breadcrumbPath, filterFn);
+    initViewChart("sunburstChart", {
+      backgroundColor: "transparent",
+      tooltip: {
+        formatter: (info) => {
+          const value = info.value || 0;
+          const pct = total ? ((value / total) * 100).toFixed(1) : "0";
+          return `<strong>${escHtml(info.name)}</strong><br/>${value.toLocaleString()} emails (${pct}% of total)`;
+        },
+      },
+      series: [{
+        type: "sunburst",
+        radius: ["10%", "92%"],
+        center: ["50%", "50%"],
+        data: sunburstData,
+        nodeClick: "rootToNode",
+        emphasis: { focus: "ancestor" },
+        itemStyle: { borderWidth: 1.5, borderColor: isLight ? "#fff" : "#0c0f14" },
+        label: { show: true, color: "#fff", minAngle: 8 },
+        levels: [
+          {},
+          { r0: "10%", r: "40%", label: { rotate: "tangential", fontSize: 13, fontWeight: 700 } },
+          { r0: "40%", r: "66%", label: { rotate: "tangential", fontSize: 10, fontWeight: 600 } },
+          { r0: "66%", r: "92%", label: { rotate: "radial", fontSize: 9 } },
+        ],
+      }],
+    });
+
+    const chart = chartHost.querySelector(".chart-host")._echartsInstance;
+    if (chart) {
+      chart.on("click", (params) => {
+        if (params.data && params.data.__rawDomain) {
+          showDomainDetail(params.data.__rawDomain, params.data.__messages);
+        }
+      });
+    }
 
     // Legend
-    renderLegend(legend, legendYears, legendMonths, legendDomains);
+    renderLegend(legend, legendYears, legendDomains);
   }
 
-  function renderLegend(panel, years, months, domains) {
+  function renderLegend(panel, years, domains) {
     let html = '<div class="legend-title">Chart Legend</div>';
 
     html += '<div class="legend-section"><div class="legend-section-title">Years (inner ring)</div>';
@@ -1590,26 +1561,6 @@
     html += '</div>';
 
     setSafeHtml(panel, html);
-  }
-
-  function renderBreadcrumb(breadcrumb, path, filterFn) {
-    clearElement(breadcrumb);
-    const allSpan = document.createElement("span");
-    allSpan.textContent = "All Mail";
-    allSpan.classList.toggle("bc-active", path.length === 0);
-    allSpan.addEventListener("click", () => renderSunburst(null, []));
-    breadcrumb.appendChild(allSpan);
-
-    path.forEach((crumb, i) => {
-      const sep = document.createElement("span");
-      sep.className = "bc-sep";
-      sep.textContent = "›";
-      breadcrumb.appendChild(sep);
-      const s = document.createElement("span");
-      s.textContent = crumb.label;
-      s.classList.toggle("bc-active", i === path.length - 1);
-      breadcrumb.appendChild(s);
-    });
   }
 
   function showDomainDetail(domain, msgs) {
@@ -1658,99 +1609,6 @@
     else if (currentView === "sunburst" && sunburstDetailState) {
       showDomainDetail(sunburstDetailState.domain, sunburstDetailState.msgs);
     }
-  }
-
-  // ══════════════════════════════════════════
-  //  SVG HELPERS
-  // ══════════════════════════════════════════
-  function drawArc(svg, cx, cy, r1, r2, startAngle, endAngle, color, opacity, gapStroke, onClick, onHover) {
-    if (endAngle - startAngle < 0.3) return;
-    const gap = 0.5;
-    const sa = startAngle + gap / 2, ea = endAngle - gap / 2;
-    if (ea <= sa) return;
-
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", describeArc(cx, cy, r1, r2, sa, ea));
-    path.setAttribute("fill", color);
-    path.setAttribute("opacity", opacity);
-    path.setAttribute("stroke", gapStroke);
-    path.setAttribute("stroke-width", "1.5");
-    path.style.cursor = onClick ? "pointer" : "default";
-    path.style.transition = "opacity 0.15s";
-
-    path.addEventListener("mouseenter", (e) => { path.setAttribute("opacity", Math.min(1, opacity + 0.25)); if (onHover) onHover(e); });
-    path.addEventListener("mousemove", (e) => { if (onHover) onHover(e); });
-    path.addEventListener("mouseleave", () => { path.setAttribute("opacity", opacity); });
-    if (onClick) path.addEventListener("click", onClick);
-
-    svg.appendChild(path);
-  }
-
-  function describeArc(cx, cy, r1, r2, startAngle, endAngle) {
-    const s1 = polarToCartesian(cx, cy, r2, endAngle);
-    const s2 = polarToCartesian(cx, cy, r2, startAngle);
-    const s3 = polarToCartesian(cx, cy, r1, startAngle);
-    const s4 = polarToCartesian(cx, cy, r1, endAngle);
-    const large = endAngle - startAngle > 180 ? 1 : 0;
-    return `M ${s2.x} ${s2.y} A ${r2} ${r2} 0 ${large} 1 ${s1.x} ${s1.y} L ${s4.x} ${s4.y} A ${r1} ${r1} 0 ${large} 0 ${s3.x} ${s3.y} Z`;
-  }
-
-  function polarToCartesian(cx, cy, r, angleDeg) {
-    const rad = ((angleDeg - 90) * Math.PI) / 180;
-    return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
-  }
-
-  function addSvgText(svg, x, y, text, opts = {}) {
-    const el = document.createElementNS("http://www.w3.org/2000/svg", "text");
-    el.setAttribute("x", x);
-    el.setAttribute("y", y);
-    el.setAttribute("text-anchor", "middle");
-    el.setAttribute("fill", opts.fill || "#fff");
-    el.setAttribute("font-size", opts.fontSize || "12");
-    if (opts.fontWeight) el.setAttribute("font-weight", opts.fontWeight);
-    if (opts.fontFamily) el.setAttribute("font-family", opts.fontFamily);
-    if (opts.letterSpacing) el.setAttribute("letter-spacing", opts.letterSpacing);
-    el.textContent = text;
-    svg.appendChild(el);
-    return el;
-  }
-
-  function addArcLabel(svg, cx, cy, ring, startAngle, endAngle, label, opts = {}) {
-    const angle = endAngle - startAngle;
-    if (angle < (opts.minAngle || 20)) return;
-
-    const midAngle = startAngle + angle / 2;
-    const labelR = (ring.innerR + ring.outerR) / 2;
-    const pt = polarToCartesian(cx, cy, labelR, midAngle);
-    const text = truncateLabel(label, opts.maxChars || 10);
-    const el = addSvgText(svg, pt.x, pt.y + 3, text, {
-      fill: opts.fill || "rgba(255,255,255,0.85)",
-      fontSize: opts.fontSize || "10",
-      fontWeight: opts.fontWeight || "600",
-    });
-
-    if (angle > 36 && ring.outerR > 200) {
-      const rotation = midAngle > 90 && midAngle < 270 ? midAngle + 90 : midAngle - 90;
-      el.setAttribute("transform", `rotate(${rotation} ${pt.x} ${pt.y})`);
-    }
-  }
-
-  function truncateLabel(label, maxChars) {
-    const s = String(label || "");
-    if (s.length <= maxChars) return s;
-    return `${s.slice(0, Math.max(1, maxChars - 1))}…`;
-  }
-
-  function showTooltip(tooltip, event, label, count, total) {
-    const pct = ((count / total) * 100).toFixed(1);
-    setSafeHtml(tooltip, `
-      <div class="tt-label">${escHtml(displayPrivateLabel(label))}</div>
-      <div class="tt-count">${count.toLocaleString()} emails</div>
-      <div class="tt-pct">${pct}% of total</div>
-    `);
-    tooltip.style.display = "block";
-    tooltip.style.left = event.clientX + 14 + "px";
-    tooltip.style.top = event.clientY - 10 + "px";
   }
 
   // ══════════════════════════════════════════
@@ -3744,7 +3602,7 @@
           radius: ["45%", "72%"],
           center: ["50%", "50%"],
           data: data,
-          label: { show: false },
+          label: { formatter: (p) => `${displayEmail(p.name)}\n${p.percent}%`, fontSize: 10, color: textColor },
           emphasis: { itemStyle: { shadowBlur: 8, shadowColor: isLight ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.4)" } }
         }]
       });
