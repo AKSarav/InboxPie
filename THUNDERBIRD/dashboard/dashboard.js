@@ -1078,7 +1078,7 @@
     };
   }
 
-  function buildDomainBarChartOption() {
+  function buildDomainBarChartOption(limit = 12) {
     const domains = {};
     allMessages.forEach(m => {
       if (!m.domain) return;
@@ -1086,10 +1086,11 @@
     });
 
     const sorted = Object.entries(domains)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 12);
+      .sort((a, b) => b[1] - a[1]);
 
-    const data = sorted.map(([domain, count], i) => ({
+    const sliced = limit === "all" ? sorted : sorted.slice(0, parseInt(limit) || 12);
+
+    const data = sliced.map(([domain, count], i) => ({
       name: domain,
       value: count,
       itemStyle: { color: colorFor(i) }
@@ -1113,7 +1114,7 @@
     };
   }
 
-  function buildSenderBarChartOption() {
+  function buildSenderBarChartOption(limit = 12) {
     const senders = {};
     allMessages.forEach(m => {
       const key = m.senderEmail || m.author || "Unknown";
@@ -1121,10 +1122,11 @@
     });
 
     const sorted = Object.entries(senders)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 12);
+      .sort((a, b) => b[1] - a[1]);
 
-    const data = sorted.map(([sender, count], i) => ({
+    const sliced = limit === "all" ? sorted : sorted.slice(0, parseInt(limit) || 12);
+
+    const data = sliced.map(([sender, count], i) => ({
       name: sender,
       value: count,
       itemStyle: { color: colorFor(i) }
@@ -1148,8 +1150,9 @@
     };
   }
 
-  function buildTopSendersChartOption(senders) {
-    const data = senders.slice(0, 12).map((s, i) => ({
+  function buildTopSendersChartOption(senders, limit = 12) {
+    const sliced = limit === "all" ? senders : senders.slice(0, parseInt(limit) || 12);
+    const data = sliced.map((s, i) => ({
       name: s.title,
       value: s.count,
       itemStyle: { color: colorFor(i) }
@@ -1722,6 +1725,17 @@
           }
         });
       }
+      // Wire up Top X dropdown for sender
+      const senderDropdown = document.querySelector('.sender-topx-dropdown');
+      if (senderDropdown) {
+        senderDropdown.addEventListener('change', function() {
+          const newOption = buildSenderBarChartOption(this.value);
+          const hostEl = document.getElementById("chart-sender-host");
+          if (hostEl && hostEl.querySelector('.chart-host')._echartsInstance) {
+            hostEl.querySelector('.chart-host')._echartsInstance.setOption(newOption, true);
+          }
+        });
+      }
     } else {
       initViewChart("chart-sender-container", buildSenderBarChartOption());
       const chart = document.getElementById("chart-sender-container").querySelector('.chart-host')._echartsInstance;
@@ -1874,6 +1888,17 @@
           if (params.value && params.value > 0) {
             searchInput.value = params.name;
             renderDomainTable();
+          }
+        });
+      }
+      // Wire up Top X dropdown for domain
+      const domainDropdown = document.querySelector('.domain-topx-dropdown');
+      if (domainDropdown) {
+        domainDropdown.addEventListener('change', function() {
+          const newOption = buildDomainBarChartOption(this.value);
+          const hostEl = document.getElementById("chart-domain-host");
+          if (hostEl && hostEl.querySelector('.chart-host')._echartsInstance) {
+            hostEl.querySelector('.chart-host')._echartsInstance.setOption(newOption, true);
           }
         });
       }
@@ -2037,10 +2062,18 @@
 
       // Wire up dropdowns
       document.querySelector('.size-topx-dropdown')?.addEventListener('change', function() {
-        // TODO: implement dynamic limiting
+        const newOption = buildSizeBarChartOption(this.value);
+        const hostEl = document.getElementById("chart-size-container");
+        if (hostEl && hostEl.querySelector('.chart-host')._echartsInstance) {
+          hostEl.querySelector('.chart-host')._echartsInstance.setOption(newOption, true);
+        }
       });
       document.querySelector('.size-senders-topx-dropdown')?.addEventListener('change', function() {
-        // TODO: implement dynamic limiting
+        const newOption = buildTopSendersChartOption(heavySenders, this.value);
+        const hostEl = document.getElementById("chart-size-senders");
+        if (hostEl && hostEl.querySelector('.chart-host')._echartsInstance) {
+          hostEl.querySelector('.chart-host')._echartsInstance.setOption(newOption, true);
+        }
       });
     }
 
