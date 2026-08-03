@@ -1696,9 +1696,35 @@
     searchInput.oninput = () => renderSenderTable();
     sortSelect.onchange = () => renderSenderTable();
 
-    // Render chart
-    initViewChart("chart-sender-container", buildSenderBarChartOption());
-    const chart = document.getElementById("chart-sender-container")._echartsInstance;
+    // Render chart with Top X dropdown
+    const senderChartContainer = document.getElementById("chart-sender-container");
+    if (senderChartContainer) {
+      senderChartContainer.innerHTML = `
+        <div style="display: flex; gap: 12px; margin-bottom: 12px; align-items: center;">
+          <h3 style="margin: 0; font-size: 14px;">Top Senders</h3>
+          <select class="sender-topx-dropdown" style="padding: 4px 8px; font-size: 11px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
+            <option value="5">Top 5</option>
+            <option value="10" selected>Top 10</option>
+            <option value="20">Top 20</option>
+            <option value="all">All</option>
+          </select>
+        </div>
+        <div id="chart-sender-host" class="chart-container" style="margin: 0;"></div>
+      `;
+      // Move chart rendering into the new host
+      initViewChart("chart-sender-host", buildSenderBarChartOption());
+      const chart = document.getElementById("chart-sender-host").querySelector('.chart-host')._echartsInstance;
+      if (chart) {
+        chart.on("click", (params) => {
+          if (params.value && params.value > 0) {
+            searchInput.value = params.name;
+            renderSenderTable();
+          }
+        });
+      }
+    } else {
+      initViewChart("chart-sender-container", buildSenderBarChartOption());
+      const chart = document.getElementById("chart-sender-container").querySelector('.chart-host')._echartsInstance;
     if (chart) {
       chart.on("click", (params) => {
         if (params.value && params.value > 0) {
@@ -1824,16 +1850,43 @@
       });
     });
 
-    // Render chart
-    initViewChart("chart-domain-container", buildDomainBarChartOption());
-    const chart = document.getElementById("chart-domain-container")._echartsInstance;
-    if (chart) {
-      chart.on("click", (params) => {
-        if (params.value && params.value > 0) {
-          searchInput.value = params.name;
-          renderDomainTable();
-        }
-      });
+    // Render chart with Top X dropdown
+    const domainChartContainer = document.getElementById("chart-domain-container");
+    if (domainChartContainer) {
+      domainChartContainer.innerHTML = `
+        <div style="display: flex; gap: 12px; margin-bottom: 12px; align-items: center;">
+          <h3 style="margin: 0; font-size: 14px;">Top Domains</h3>
+          <select class="domain-topx-dropdown" style="padding: 4px 8px; font-size: 11px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
+            <option value="5">Top 5</option>
+            <option value="10" selected>Top 10</option>
+            <option value="20">Top 20</option>
+            <option value="all">All</option>
+          </select>
+        </div>
+        <div id="chart-domain-host" class="chart-container" style="margin: 0;"></div>
+      `;
+      // Move chart rendering into the new host
+      initViewChart("chart-domain-host", buildDomainBarChartOption());
+      const chart = document.getElementById("chart-domain-host").querySelector('.chart-host')._echartsInstance;
+      if (chart) {
+        chart.on("click", (params) => {
+          if (params.value && params.value > 0) {
+            searchInput.value = params.name;
+            renderDomainTable();
+          }
+        });
+      }
+    } else {
+      initViewChart("chart-domain-container", buildDomainBarChartOption());
+      const chart = document.getElementById("chart-domain-container").querySelector('.chart-host')._echartsInstance;
+      if (chart) {
+        chart.on("click", (params) => {
+          if (params.value && params.value > 0) {
+            searchInput.value = params.name;
+            renderDomainTable();
+          }
+        });
+      }
     }
 
     updateBulkButtons();
@@ -2985,7 +3038,7 @@
 
     // Seed default categories if not already done
     const existing = await loadCategoriesFromStorage();
-    if (!existing.length) {
+    if (!existing || !existing.length) {
       for (const cat of DEFAULT_BUILT_IN_CATEGORIES) {
         await saveCategoryToStorage(cat.name, cat.keywords);
       }
@@ -2993,6 +3046,9 @@
 
     await renderCategoryList();
     wireUpCategoryAdd();
+
+    // Also classify emails when Settings is opened
+    await reclassifyAllEmails();
   }
 
   async function renderCategoryList() {
@@ -3262,8 +3318,16 @@
     const container = $("#categoriesTable");
     if (!container) return;
 
-    const categories = await loadCategoriesFromStorage();
-    if (!categories.length) {
+    // Seed default categories if not already done
+    let categories = await loadCategoriesFromStorage();
+    if (!categories || !categories.length) {
+      for (const cat of DEFAULT_BUILT_IN_CATEGORIES) {
+        await saveCategoryToStorage(cat.name, cat.keywords);
+      }
+      categories = await loadCategoriesFromStorage();
+    }
+
+    if (!categories || !categories.length) {
       container.innerHTML = '<div class="ais-folders-empty">No categories defined.</div>';
       return;
     }
