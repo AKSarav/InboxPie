@@ -1725,13 +1725,14 @@
     } else {
       initViewChart("chart-sender-container", buildSenderBarChartOption());
       const chart = document.getElementById("chart-sender-container").querySelector('.chart-host')._echartsInstance;
-    if (chart) {
-      chart.on("click", (params) => {
-        if (params.value && params.value > 0) {
-          searchInput.value = params.name;
-          renderSenderTable();
-        }
-      });
+      if (chart) {
+        chart.on("click", (params) => {
+          if (params.value && params.value > 0) {
+            searchInput.value = params.name;
+            renderSenderTable();
+          }
+        });
+      }
     }
 
     updateBulkButtons();
