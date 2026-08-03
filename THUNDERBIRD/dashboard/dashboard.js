@@ -2069,13 +2069,6 @@
     const totalBytes = knownMessages.reduce((sum, m) => sum + messageSize(m), 0);
     const unknownCount = filteredMsgs.length - knownMessages.length;
     const largest = knownMessages.slice().sort((a, b) => messageSize(b) - messageSize(a));
-    const topLargest = largest.slice(0, 12).map((m) => ({
-      title: m.subject || "(No Subject)",
-      subtitle: `${m.senderName || displayEmail(m.senderEmail)} · ${displayFolderName("", m.folder) || "Unknown folder"} · ${formatDate(m.date)}`,
-      count: messageSize(m),
-      value: String(m.id),
-      messages: [m],
-    }));
 
     const buckets = buildSizeBuckets(knownMessages);
     const heavySenders = groupBySize(knownMessages, (m) => m.senderEmail, (m) => ({
@@ -2127,93 +2120,14 @@
           </div>
           <div id="chart-size-senders" class="chart-container insight-chart-host"></div>
         ` : "")}
-        ${renderSizeCard("Top Space-Heavy Domains", "Domains consuming storage across many senders.", heavyDomains, "domain")}
-        ${renderSizeCard("Large Old Messages", "Large messages older than one year.", largeOld, "message")}
+        ${renderSizeCard("Top Space-Heavy Domains", "Domains consuming storage across many senders.", heavyDomains, "domain", heavyDomains.length ? `<div id="chart-size-domains" class="chart-container insight-chart-host"></div>` : "")}
+        ${renderSizeCard("Large Old Messages", "Large messages older than one year.", largeOld, "message", largeOld.length ? `<div id="chart-size-large-old" class="chart-container insight-chart-host"></div>` : "")}
       </div>
-      <section class="insight-card size-wide-card">
-        <div class="insight-card-head">
-          <h3>Largest Individual Messages</h3>
-          <p>Fastest path to reclaiming space. Select rows and use Move to Trash or Move to Folder.</p>
-        </div>
-        <div class="insight-rows">
-          ${topLargest.length ? topLargest.map((row) => renderSizeRow(row, "message")).join("") : `<div class="insight-empty">No message sizes available.</div>`}
-        </div>
-      </section>
     `);
 
     container.querySelectorAll("[data-size-kind]").forEach((btn) => {
       btn.addEventListener("click", () => selectSizeInsight(btn, knownMessages));
     });
-
-    // Render domain chart at top
-    const domainSizeChartContainer = document.getElementById("chart-domain-size-container");
-    if (domainSizeChartContainer) {
-      domainSizeChartContainer.innerHTML = `
-        <div style="display: flex; gap: 12px; margin-bottom: 12px; align-items: center;">
-          <h3 style="margin: 0; font-size: 14px;">Storage by Domain</h3>
-          <select class="domain-size-topx-dropdown" style="padding: 4px 8px; font-size: 11px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
-            <option value="5">Top 5</option>
-            <option value="10" selected>Top 10</option>
-            <option value="20">Top 20</option>
-            <option value="all">All</option>
-          </select>
-        </div>
-        <div id="chart-domain-size-host" class="chart-container" style="height: 300px; margin-bottom: 30px;"></div>
-      `;
-
-      const buildDomainSizeChartOption = (limit) => {
-        const domainSize = {};
-        knownMessages.forEach(m => {
-          if (!m.domain) return;
-          domainSize[m.domain] = (domainSize[m.domain] || 0) + messageSize(m);
-        });
-        const sorted = Object.entries(domainSize).sort((a, b) => b[1] - a[1]);
-        const sliced = limit === "all" ? sorted : sorted.slice(0, parseInt(limit) || 10);
-        const data = sliced.map(([domain, size], i) => ({
-          name: domain,
-          value: size,
-          itemStyle: { color: colorFor(i) }
-        }));
-        const isLight = document.documentElement.getAttribute("data-theme") === "light";
-        const textColor = isLight ? "#1a1d24" : "#eaedf2";
-        return {
-          backgroundColor: "transparent",
-          tooltip: { trigger: "item", formatter: (p) => `${displayDomain(p.name)}: ${formatBytes(p.value)} (${p.percent}%)`, textStyle: { color: textColor } },
-          legend: { show: false },
-          series: [{
-            type: "pie",
-            radius: ["38%", "68%"],
-            center: ["50%", "50%"],
-            data: data,
-            label: { formatter: (p) => `${displayDomain(p.name)}\n${p.percent}%`, fontSize: 11, color: textColor },
-            emphasis: { itemStyle: { shadowBlur: 8, shadowColor: isLight ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.4)" } }
-          }]
-        };
-      };
-
-      initViewChart("chart-domain-size-host", buildDomainSizeChartOption(10));
-      const domainSizeChart = document.getElementById("chart-domain-size-host").querySelector('.chart-host')._echartsInstance;
-      if (domainSizeChart) {
-        domainSizeChart.on("click", (params) => {
-          if (params.value && params.value > 0) {
-            const domainEntry = heavyDomains.find(d => d.value === params.name);
-            if (domainEntry) {
-              const btn = document.querySelector(`[data-size-kind="domain"][data-value="${escAttr(domainEntry.value || "")}"]`);
-              if (btn) selectSizeInsight(btn, knownMessages);
-            }
-          }
-        });
-      }
-
-      // Wire up domain size dropdown
-      document.querySelector('.domain-size-topx-dropdown')?.addEventListener('change', function() {
-        const newOption = buildDomainSizeChartOption(this.value);
-        const hostEl = document.getElementById("chart-domain-size-host");
-        if (hostEl && hostEl.querySelector('.chart-host')._echartsInstance) {
-          hostEl.querySelector('.chart-host')._echartsInstance.setOption(newOption, true);
-        }
-      });
-    }
 
     // Size Buckets chart — lives inside the "Size Buckets" card, built from the same rows as its rows list
     if (buckets.length && document.getElementById("chart-size-buckets")) {
@@ -2247,6 +2161,36 @@
           hostEl.querySelector('.chart-host')._echartsInstance.setOption(newOption, true);
         }
       });
+    }
+
+    // Top Space-Heavy Domains chart — lives inside its card; heavyDomains titles are already displayDomain()-masked
+    if (heavyDomains.length && document.getElementById("chart-size-domains")) {
+      initViewChart("chart-size-domains", buildTopSendersChartOption(heavyDomains));
+      const domainsChart = document.getElementById("chart-size-domains").querySelector('.chart-host')._echartsInstance;
+      if (domainsChart) {
+        domainsChart.on("click", (params) => {
+          const domainEntry = heavyDomains.find(d => d.title === params.name);
+          if (domainEntry) {
+            const btn = document.querySelector(`[data-size-kind="domain"][data-value="${escAttr(domainEntry.value || "")}"]`);
+            if (btn) selectSizeInsight(btn, knownMessages);
+          }
+        });
+      }
+    }
+
+    // Large Old Messages chart — lives inside its card; one slice per message, sized by bytes
+    if (largeOld.length && document.getElementById("chart-size-large-old")) {
+      initViewChart("chart-size-large-old", buildTopSendersChartOption(largeOld));
+      const largeOldChart = document.getElementById("chart-size-large-old").querySelector('.chart-host')._echartsInstance;
+      if (largeOldChart) {
+        largeOldChart.on("click", (params) => {
+          const msgEntry = largeOld.find(m => m.title === params.name);
+          if (msgEntry) {
+            const btn = document.querySelector(`[data-size-kind="message"][data-value="${escAttr(msgEntry.value || "")}"]`);
+            if (btn) selectSizeInsight(btn, knownMessages);
+          }
+        });
+      }
     }
 
     updateBulkButtons();
