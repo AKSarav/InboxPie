@@ -1997,6 +1997,106 @@
       btn.addEventListener("click", () => selectSizeInsight(btn, knownMessages));
     });
 
+    // Render domain chart at top
+    const domainSizeChartContainer = document.getElementById("chart-domain-size-container");
+    if (domainSizeChartContainer) {
+      domainSizeChartContainer.innerHTML = `
+        <div style="display: flex; gap: 12px; margin-bottom: 12px; align-items: center;">
+          <h3 style="margin: 0; font-size: 14px;">Storage by Domain</h3>
+          <select class="domain-size-topx-dropdown" style="padding: 4px 8px; font-size: 11px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
+            <option value="5">Top 5</option>
+            <option value="10" selected>Top 10</option>
+            <option value="20">Top 20</option>
+            <option value="all">All</option>
+          </select>
+        </div>
+        <div id="chart-domain-size-host" class="chart-container" style="height: 300px; margin-bottom: 30px;"></div>
+      `;
+
+      // Build domain storage data
+      const domainSize = {};
+      knownMessages.forEach(m => {
+        if (!m.domain) return;
+        domainSize[m.domain] = (domainSize[m.domain] || 0) + messageSize(m);
+      });
+
+      const sortedDomains = Object.entries(domainSize)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10)
+        .map(([domain, size], i) => ({
+          name: domain,
+          value: size,
+          itemStyle: { color: colorFor(i) }
+        }));
+
+      const isLight = document.documentElement.getAttribute("data-theme") === "light";
+      const textColor = isLight ? "#1a1d24" : "#eaedf2";
+
+      const domainSizeOption = {
+        backgroundColor: "transparent",
+        tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${formatBytes(p.value)} (${p.percent}%)`, textStyle: { color: textColor } },
+        legend: { show: false },
+        series: [{
+          type: "pie",
+          radius: ["38%", "68%"],
+          center: ["50%", "50%"],
+          data: sortedDomains,
+          label: { formatter: "{b}\n{d}%", fontSize: 11, color: textColor },
+          emphasis: { itemStyle: { shadowBlur: 8, shadowColor: isLight ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.4)" } }
+        }]
+      };
+
+      initViewChart("chart-domain-size-host", domainSizeOption);
+      const domainSizeChart = document.getElementById("chart-domain-size-host").querySelector('.chart-host')._echartsInstance;
+      if (domainSizeChart) {
+        domainSizeChart.on("click", (params) => {
+          if (params.value && params.value > 0) {
+            const domain = params.name;
+            const filtered = knownMessages.filter(m => m.domain === domain);
+            console.log(`Selected domain: ${domain}, ${filtered.length} messages`);
+          }
+        });
+      }
+
+      // Wire up domain size dropdown
+      document.querySelector('.domain-size-topx-dropdown')?.addEventListener('change', function() {
+        const domainSize2 = {};
+        knownMessages.forEach(m => {
+          if (!m.domain) return;
+          domainSize2[m.domain] = (domainSize2[m.domain] || 0) + messageSize(m);
+        });
+
+        const sorted2 = Object.entries(domainSize2)
+          .sort((a, b) => b[1] - a[1]);
+
+        const sliced = this.value === "all" ? sorted2 : sorted2.slice(0, parseInt(this.value) || 10);
+        const data2 = sliced.map(([domain, size], i) => ({
+          name: domain,
+          value: size,
+          itemStyle: { color: colorFor(i) }
+        }));
+
+        const newOption = {
+          backgroundColor: "transparent",
+          tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${formatBytes(p.value)} (${p.percent}%)`, textStyle: { color: textColor } },
+          legend: { show: false },
+          series: [{
+            type: "pie",
+            radius: ["38%", "68%"],
+            center: ["50%", "50%"],
+            data: data2,
+            label: { formatter: "{b}\n{d}%", fontSize: 11, color: textColor },
+            emphasis: { itemStyle: { shadowBlur: 8, shadowColor: isLight ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.4)" } }
+          }]
+        };
+
+        const hostEl = document.getElementById("chart-domain-size-host");
+        if (hostEl && hostEl.querySelector('.chart-host')._echartsInstance) {
+          hostEl.querySelector('.chart-host')._echartsInstance.setOption(newOption, true);
+        }
+      });
+    }
+
     // Render charts with legend
     const chartContainer = document.getElementById("chart-size-container");
     if (chartContainer) {
