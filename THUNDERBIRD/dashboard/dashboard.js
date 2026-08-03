@@ -997,14 +997,14 @@
     const btn = $("#dateRangeBtn");
     if (!label || !btn) return;
     if (!scanDateRange) {
-      label.textContent = "Date Range";
+      label.textContent = "Scan Range";
       btn.classList.remove("active");
-      btn.title = "Limit scan to a date range (currently: all time)";
+      btn.title = "Scan Range — limits which messages get scanned (currently: all time)";
     } else {
       const { fromYear, fromMonth, toYear, toMonth } = scanDateRange;
       label.textContent = `${MONTH_NAMES[fromMonth - 1]} ${fromYear} – ${MONTH_NAMES[toMonth - 1]} ${toYear}`;
       btn.classList.add("active");
-      btn.title = "Limit scan to a date range (click to change)";
+      btn.title = "Scan Range — limits which messages get scanned (click to change)";
     }
   }
 
@@ -2398,6 +2398,15 @@
     const controls = $("#timelineControls");
     const insights = $("#timelineInsights");
     const label = $("#timelineRangeLabel");
+    const scanRangeNote = $("#timelineScanRangeNote");
+    if (scanRangeNote) {
+      if (scanDateRange) {
+        scanRangeNote.style.display = "block";
+        scanRangeNote.textContent = `Data limited to ${$("#dateRangeLabel").textContent} by the Scan Range filter — this applies to every view, not just Timeline. Clear it (top bar) and rescan to see full history.`;
+      } else {
+        scanRangeNote.style.display = "none";
+      }
+    }
     const textMuted = cssVar("--text-muted");
     const border = cssVar("--border");
     const accent = cssVar("--accent");

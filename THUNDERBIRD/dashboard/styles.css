@@ -249,6 +249,9 @@ select, .search-input {
 select:focus, .search-input:focus { border-color: var(--accent); }
 select option { background: var(--bg-card); color: var(--text-primary); }
 .search-input { width: 220px; }
+.account-select-wrap { position: relative; display: flex; align-items: center; flex-shrink: 0; }
+.account-select-icon { position: absolute; left: 10px; color: var(--text-muted); pointer-events: none; }
+.account-select-wrap select { padding-left: 30px; }
 
 /* Buttons */
 .btn {
@@ -256,6 +259,8 @@ select option { background: var(--bg-card); color: var(--text-primary); }
   padding: 8px 18px; border: none; border-radius: 6px;
   cursor: pointer; transition: all 0.2s;
 }
+#scanBtn { display: flex; align-items: center; gap: 6px; }
+#scanBtn svg { flex-shrink: 0; }
 .btn-primary { background: var(--accent); color: var(--accent-text); }
 .btn-primary:hover { filter: brightness(1.1); }
 .btn-danger { background: var(--danger); color: white; }
