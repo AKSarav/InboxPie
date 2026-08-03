@@ -308,7 +308,15 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 .landing-visual { display: flex; justify-content: center; align-items: center; width: 100%; }
 .landing-visual svg { animation: pulse-ring 3s ease-in-out infinite; }
 @keyframes pulse-ring { 0%, 100% { opacity: 0.6; transform: scale(1); } 50% { opacity: 1; transform: scale(1.03); } }
-.landing-text { font-size: 14px; color: var(--text-muted); text-align: center; line-height: 1.7; max-width: 400px; }
+.landing-steps { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 12px; text-align: left; max-width: 380px; width: 100%; }
+.landing-steps li { display: flex; align-items: flex-start; gap: 12px; font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
+.landing-step-num {
+  flex-shrink: 0; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--accent-dim); color: var(--accent); font-weight: 700; font-size: 11px;
+  display: flex; align-items: center; justify-content: center; margin-top: 1px;
+}
+.landing-steps strong { color: var(--text-primary); font-weight: 600; }
+.landing-steps em { color: var(--text-muted); font-style: normal; }
 
 /* Sunburst Layout */
 .sunburst-layout { display: grid; grid-template-columns: 1fr 260px; gap: 20px; align-items: start; }
