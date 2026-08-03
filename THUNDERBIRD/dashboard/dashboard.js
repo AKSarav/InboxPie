@@ -14,12 +14,6 @@
   /** Raw (unmasked) domain/sender set by clicking a pie slice; exact-matches the table, keeping the visible search box masked. */
   let domainChartFilterValue = null;
   let senderChartFilterValue = null;
-  /** Category currently driving the dynamic sender-breakdown chart on the Categories tab. */
-  let categoriesChartSelectedName = null;
-  /** Category names expanded to show their domain sub-rows (accordion, like By Domain/By Sender). */
-  const expandedCategories = new Set();
-  /** `${categoryName}::${domain}` keys expanded to show sender sub-rows within a category's domain. */
-  const expandedCategoryDomains = new Set();
 
   const timelineState = {
     windowMonths: 24,
@@ -928,8 +922,6 @@
     expandedDomains.clear();
     expandedSenders.clear();
     expandedSenderYears.clear();
-    expandedCategories.clear();
-    expandedCategoryDomains.clear();
     domainChartFilterValue = null;
     senderChartFilterValue = null;
     timelineState.windowMonths = 24;
@@ -3522,7 +3514,7 @@
   // ══════════════════════════════════════════
 
   async function renderCategoriesView() {
-    const container = $("#categoriesTable");
+    const container = $("#categoriesGrid");
     if (!container) return;
 
     // Seed default categories if not already done
@@ -3541,262 +3533,115 @@
 
     const entries = categories.map(cat => {
       const msgs = allMessages.length > 0 ? allMessages.filter(m => classifyEmail(m, [cat])) : [];
-      return { ...cat, msgs, count: msgs.length };
+      const bySender = {};
+      msgs.forEach(m => {
+        const key = m.senderEmail || m.author || "Unknown";
+        if (!bySender[key]) bySender[key] = { email: key, name: m.senderName || key, count: 0, msgs: [] };
+        bySender[key].count++;
+        bySender[key].msgs.push(m);
+      });
+      const senders = Object.values(bySender).sort((a, b) => b.count - a.count);
+      return { ...cat, msgs, count: msgs.length, senders };
     }).sort((a, b) => b.count - a.count);
-
-    // Pick/validate the category driving the dynamic sender chart
-    if (!categoriesChartSelectedName || !entries.some(e => e.name === categoriesChartSelectedName)) {
-      categoriesChartSelectedName = (entries.find(e => e.count > 0) || entries[0]).name;
-    }
-    const activeCat = entries.find(e => e.name === categoriesChartSelectedName) || entries[0];
-    renderCategoriesChart(entries, activeCat);
 
     container.innerHTML = entries.map((cat, i) => {
       const selected = cat.count > 0 && cat.msgs.every(m => selectedIds.has(m.id));
-      const expanded = expandedCategories.has(cat.name);
+      const topSenders = cat.senders.slice(0, 5);
 
-      const domainRowsHtml = expanded ? renderCategoryDomainRows(cat, i) : "";
+      const miniRows = topSenders.length
+        ? topSenders.map(s => {
+            const sSelected = s.msgs.every(m => selectedIds.has(m.id));
+            return `
+              <div class="category-mini-row ${sSelected ? "selected" : ""}" data-email="${escAttr(s.email)}">
+                <div class="category-mini-info">
+                  <div class="category-mini-name">${escHtml(s.name)}</div>
+                  <div class="category-mini-email">${escHtml(displayEmail(s.email))}</div>
+                </div>
+                <div class="category-mini-count">${s.count.toLocaleString()}</div>
+              </div>`;
+          }).join("")
+        : `<div class="insight-empty">No emails in this category yet.</div>`;
 
       return `
-      <div class="category-group" data-cat="${escAttr(cat.name)}">
-        <div class="category-row ${expanded ? "expanded" : ""}" data-cat="${escAttr(cat.name)}">
-          <div class="category-icon">${escHtml(cat.icon)}</div>
-          <div class="category-name"><strong>${escHtml(cat.name)}</strong></div>
-          <div class="category-keywords">${escHtml((cat.keywords || []).slice(0, 3).join(", "))}${cat.keywords && cat.keywords.length > 3 ? '...' : ''}</div>
-          <div class="category-count">${cat.count} emails</div>
-          <button type="button" class="btn btn-secondary btn-small category-select-btn ${selected ? "active" : ""}" data-cat="${escAttr(cat.name)}" ${cat.count === 0 ? "disabled" : ""}>
-            ${selected ? "✓ Selected" : "Select"}
-          </button>
-          <div class="category-expand" title="Show domains">${cat.count > 0 ? "›" : ""}</div>
+      <div class="category-card" data-cat="${escAttr(cat.name)}">
+        <div class="category-card-head">
+          <div class="category-card-title"><span class="category-icon">${escHtml(cat.icon)}</span><strong>${escHtml(cat.name)}</strong></div>
+          <div class="category-card-count">${cat.count.toLocaleString()} emails</div>
         </div>
-        ${expanded ? `<div class="category-sender-list">${domainRowsHtml}</div>` : ""}
-      </div>
-    `;
+        <div class="category-keywords">${escHtml((cat.keywords || []).slice(0, 4).join(", "))}${cat.keywords && cat.keywords.length > 4 ? '…' : ''}</div>
+        ${cat.count > 0 ? `<div id="chart-cat-${i}" class="chart-container category-card-chart"></div>` : ""}
+        <div class="category-mini-list">${miniRows}</div>
+        <button type="button" class="btn btn-secondary btn-small category-select-btn ${selected ? "active" : ""}" data-cat="${escAttr(cat.name)}" ${cat.count === 0 ? "disabled" : ""}>
+          ${selected ? "✓ Selected" : `Select all ${cat.count.toLocaleString()} for Review`}
+        </button>
+      </div>`;
     }).join('');
 
-    container.querySelectorAll('.category-group').forEach((group, idx) => {
-      const cat = entries[idx];
-      const row = group.querySelector('.category-row');
-      const chev = row && row.querySelector('.category-expand');
-      const selectBtn = row && row.querySelector('.category-select-btn');
-
-      const toggleSelectAll = (msgs) => {
-        if (!msgs.length) return;
-        const allSelected = msgs.every(m => selectedIds.has(m.id));
-        msgs.forEach(m => {
-          if (allSelected) selectedIds.delete(m.id);
-          else selectedIds.add(m.id);
-        });
-        updateStats();
-        renderCategoriesView();
-      };
-
-      if (chev) {
-        chev.addEventListener('click', (e) => {
-          e.stopPropagation();
-          if (!cat.count) return;
-          if (expandedCategories.has(cat.name)) expandedCategories.delete(cat.name);
-          else expandedCategories.add(cat.name);
-          renderCategoriesView();
-        });
-      }
-
-      if (selectBtn) {
-        selectBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          toggleSelectAll(cat.msgs);
-        });
-      }
-
-      if (row) {
-        row.addEventListener('click', (e) => {
-          if (e.target.closest('.category-select-btn') || e.target.closest('.category-expand')) return;
-          toggleSelectAll(cat.msgs);
-        });
-      }
-
-      // Level 2: domain rows within this category
-      group.querySelectorAll('[data-role="cat-domain-head"]').forEach((domainRow) => {
-        const domain = domainRow.dataset.domain;
-        const domainMsgs = cat.msgs.filter(m => (m.domain || "Unknown") === domain);
-        const domainChev = domainRow.querySelector('.sr-expand');
-        const domainKey = `${cat.name}::${domain}`;
-
-        if (domainChev) {
-          domainChev.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (expandedCategoryDomains.has(domainKey)) expandedCategoryDomains.delete(domainKey);
-            else expandedCategoryDomains.add(domainKey);
-            renderCategoriesView();
-          });
-        }
-        domainRow.addEventListener('click', (e) => {
-          if (e.target.closest('.sr-expand')) return;
-          toggleSelectAll(domainMsgs);
-        });
-      });
-
-      // Level 3: sender rows within an expanded domain
-      group.querySelectorAll('.sender-row[data-role="sender"]').forEach((subRow) => {
-        subRow.addEventListener('click', () => {
-          const email = subRow.dataset.email;
-          const domain = subRow.dataset.domain;
-          const msgs = cat.msgs.filter(m => (m.domain || "Unknown") === domain && (m.senderEmail || m.author || "Unknown") === email);
-          toggleSelectAll(msgs);
-        });
-      });
-    });
-  }
-
-  /** Level-2 accordion rows: domains within a category, each expandable to its senders (level 3). */
-  function renderCategoryDomainRows(cat, catIndex) {
-    const byDomain = {};
-    cat.msgs.forEach(m => {
-      const key = m.domain || "Unknown";
-      if (!byDomain[key]) byDomain[key] = [];
-      byDomain[key].push(m);
-    });
-    const domainEntries = Object.entries(byDomain).sort((a, b) => b[1].length - a[1].length);
-    const domainMax = Math.max(1, ...domainEntries.map(([, list]) => list.length));
-
-    return domainEntries.map(([domain, domainMsgs], di) => {
-      const domainExpanded = expandedCategoryDomains.has(`${cat.name}::${domain}`);
-      const senderNum = new Set(domainMsgs.map(m => m.senderEmail || m.author || "Unknown")).size;
-      const dcount = domainMsgs.length;
-      const dpct = ((dcount / domainMax) * 100).toFixed(0);
-      const dcolor = colorFor(di + catIndex * 3);
-      const anySel = domainMsgs.some(m => selectedIds.has(m.id));
-
-      const bySender = {};
-      domainMsgs.forEach(m => {
-        const key = m.senderEmail || m.author || "Unknown";
-        if (!bySender[key]) bySender[key] = [];
-        bySender[key].push(m);
-      });
-      const senderEntries = Object.entries(bySender).sort((a, b) => b[1].length - a[1].length);
-      const subMax = Math.max(1, ...senderEntries.map(([, list]) => list.length));
-
-      const senderRowsHtml = domainExpanded
-        ? senderEntries.map(([email, subMsgs], si) => {
-            const name = subMsgs[0].senderName || email;
-            const subCount = subMsgs.length;
-            const unread = subMsgs.filter(m => !m.read).length;
-            const partialSel = subMsgs.some(m => selectedIds.has(m.id));
-            const spct = ((subCount / subMax) * 100).toFixed(0);
-            const sc = colorFor(si + di * 3);
-            return `
-        <div class="sender-row ${partialSel ? "selected" : ""}" data-role="sender" data-domain="${escAttr(domain)}" data-email="${escAttr(email)}">
-          <div class="sr-check"></div>
-          <div class="sr-info"><div class="sr-name">${escHtml(name)}</div><div class="sr-email">${escHtml(displayEmail(email))}</div></div>
-          <div class="sr-count">${subCount}</div>
-          <div class="sr-bar-wrap"><div class="sr-bar" style="width:${spct}%;background:${sc};"></div></div>
-          <div class="sr-unread">${unread ? unread + " unread" : ""}</div>
-          <div class="sr-expand"></div>
-        </div>`;
-          }).join("")
-        : "";
-
-      return `
-        <div class="domain-group" data-domain="${escAttr(domain)}">
-          <div class="sender-row domain-row ${domainExpanded ? "expanded" : ""} ${anySel ? "selected" : ""}" data-role="cat-domain-head" data-domain="${escAttr(domain)}">
-            <div class="sr-check"></div>
-            <div class="sr-info"><div class="sr-name">${escHtml(displayDomain(domain))}</div><div class="sr-email">${senderNum} sender${senderNum > 1 ? "s" : ""} · click › to expand</div></div>
-            <div class="sr-count">${dcount}</div>
-            <div class="sr-bar-wrap"><div class="sr-bar" style="width:${dpct}%;background:${dcolor};"></div></div>
-            <div class="sr-unread"></div>
-            <div class="sr-expand" title="Show senders">›</div>
-          </div>
-          ${domainExpanded ? `<div class="domain-sender-list">${senderRowsHtml}</div>` : ""}
-        </div>`;
-    }).join("");
-  }
-
-  /** Dynamic sender ("people") breakdown pie chart for the category chosen in the dropdown. */
-  function renderCategoriesChart(entries, activeCat) {
-    const select = $("#categoriesChartSelect");
-    const chartContainer = document.getElementById("chart-categories-container");
-    const selectBtn = $("#categoriesChartSelectBtn");
-    if (!select || !chartContainer || !selectBtn) return;
-
-    select.innerHTML = entries.map(e =>
-      `<option value="${escAttr(e.name)}" ${e.name === activeCat.name ? "selected" : ""}>${escHtml(e.icon)} ${escHtml(e.name)} (${e.count})</option>`
-    ).join('');
-    select.onchange = function () {
-      categoriesChartSelectedName = this.value;
-      renderCategoriesView();
-    };
-
-    if (!activeCat.count) {
-      chartContainer.innerHTML = '<div class="ais-folders-empty">No emails in this category yet.</div>';
-      selectBtn.disabled = true;
-      selectBtn.classList.remove("active");
-      selectBtn.textContent = "Select for Review";
-      selectBtn.onclick = null;
-      return;
-    }
-
-    const bySender = {};
-    activeCat.msgs.forEach(m => {
-      const key = m.senderEmail || m.author || "Unknown";
-      if (!bySender[key]) bySender[key] = { email: key, count: 0, msgs: [] };
-      bySender[key].count++;
-      bySender[key].msgs.push(m);
-    });
-    const senderEntries = Object.values(bySender).sort((a, b) => b.count - a.count).slice(0, 12);
-
-    const data = senderEntries.map((s, i) => ({
-      name: s.email,
-      value: s.count,
-      itemStyle: { color: colorFor(i) }
-    }));
-
-    const isLight = document.documentElement.getAttribute("data-theme") === "light";
-    const textColor = isLight ? "#1a1d24" : "#eaedf2";
-
-    initViewChart("chart-categories-container", {
-      backgroundColor: "transparent",
-      tooltip: { trigger: "item", formatter: (p) => `${displayEmail(p.name)}: ${p.value.toLocaleString()} emails (${p.percent}%)`, textStyle: { color: textColor } },
-      legend: { show: false },
-      series: [{
-        type: "pie",
-        radius: ["38%", "68%"],
-        center: ["50%", "50%"],
-        data: data,
-        label: { formatter: (p) => `${displayEmail(p.name)}\n${p.percent}%`, fontSize: 11, color: textColor },
-        emphasis: { itemStyle: { shadowBlur: 8, shadowColor: isLight ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.4)" } }
-      }]
-    });
-
-    const chart = chartContainer.querySelector('.chart-host')._echartsInstance;
-    if (chart) {
-      chart.on("click", (params) => {
-        const sender = senderEntries.find(s => s.email === params.name);
-        if (!sender) return;
-        const allSelected = sender.msgs.every(m => selectedIds.has(m.id));
-        sender.msgs.forEach(m => {
-          if (allSelected) selectedIds.delete(m.id);
-          else selectedIds.add(m.id);
-        });
-        updateStats();
-        renderCategoriesView();
-      });
-    }
-
-    const allSelected = activeCat.msgs.every(m => selectedIds.has(m.id));
-    selectBtn.disabled = false;
-    selectBtn.classList.toggle("active", allSelected);
-    selectBtn.textContent = allSelected
-      ? `✓ ${activeCat.count.toLocaleString()} Selected`
-      : `Select ${activeCat.count.toLocaleString()} for Review`;
-    selectBtn.onclick = function () {
-      const nowAllSelected = activeCat.msgs.every(m => selectedIds.has(m.id));
-      activeCat.msgs.forEach(m => {
-        if (nowAllSelected) selectedIds.delete(m.id);
+    const toggleSelectAll = (msgs) => {
+      if (!msgs.length) return;
+      const allSelected = msgs.every(m => selectedIds.has(m.id));
+      msgs.forEach(m => {
+        if (allSelected) selectedIds.delete(m.id);
         else selectedIds.add(m.id);
       });
       updateStats();
       renderCategoriesView();
     };
+
+    // Per-card chart: top senders in that category
+    entries.forEach((cat, i) => {
+      if (!cat.count) return;
+      const hostId = `chart-cat-${i}`;
+      if (!document.getElementById(hostId)) return;
+
+      const chartSenders = cat.senders.slice(0, 8);
+      const data = chartSenders.map((s, si) => ({
+        name: s.email,
+        value: s.count,
+        itemStyle: { color: colorFor(si) }
+      }));
+
+      const isLight = document.documentElement.getAttribute("data-theme") === "light";
+      const textColor = isLight ? "#1a1d24" : "#eaedf2";
+
+      initViewChart(hostId, {
+        backgroundColor: "transparent",
+        tooltip: { trigger: "item", formatter: (p) => `${displayEmail(p.name)}: ${p.value.toLocaleString()} emails (${p.percent}%)`, textStyle: { color: textColor } },
+        legend: { show: false },
+        series: [{
+          type: "pie",
+          radius: ["45%", "72%"],
+          center: ["50%", "50%"],
+          data: data,
+          label: { show: false },
+          emphasis: { itemStyle: { shadowBlur: 8, shadowColor: isLight ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.4)" } }
+        }]
+      });
+
+      const chart = document.getElementById(hostId).querySelector('.chart-host')._echartsInstance;
+      if (chart) {
+        chart.on("click", (params) => {
+          const sender = chartSenders.find(s => s.email === params.name);
+          if (sender) toggleSelectAll(sender.msgs);
+        });
+      }
+    });
+
+    container.querySelectorAll('.category-card').forEach((card, idx) => {
+      const cat = entries[idx];
+
+      card.querySelectorAll('.category-mini-row').forEach((row) => {
+        row.addEventListener('click', () => {
+          const sender = cat.senders.find(s => s.email === row.dataset.email);
+          if (sender) toggleSelectAll(sender.msgs);
+        });
+      });
+
+      const selectBtn = card.querySelector('.category-select-btn');
+      if (selectBtn) {
+        selectBtn.addEventListener('click', () => toggleSelectAll(cat.msgs));
+      }
+    });
   }
 
   init();
