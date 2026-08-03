@@ -131,6 +131,8 @@ body {
   transition: all 0.2s; font-size: 18px; line-height: 1;
 }
 .theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
+#githubLink { text-decoration: none; color: var(--text-secondary); }
+#githubLink:hover { color: var(--accent); }
 .reset-icon {
   width: 18px; height: 18px; display: block; flex-shrink: 0;
 }
@@ -756,17 +758,6 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 .category-sender-list .sender-row { margin-left: 0; border: 1px solid var(--border); cursor: pointer; transition: all 0.15s; }
 .category-sender-list .sender-row:hover { border-color: var(--accent); background: var(--bg-hover); }
 .category-sender-list .sender-row.selected { border-color: var(--selection); background: var(--selection-dim); }
-.categories-detail { padding: 16px 0; }
-.category-detail-header { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
-.category-detail-header h3 { margin: 0; font-size: 16px; }
-.category-detail-header p { margin: 0; font-size: 12px; color: var(--text-muted); }
-.category-detail-header .btn { flex-shrink: 0; }
-.category-emails { display: flex; flex-direction: column; gap: 16px; }
-.category-sender { background: var(--bg-secondary); padding: 12px; border-radius: 6px; }
-.category-sender > div:first-child { font-weight: 600; font-size: 13px; margin-bottom: 8px; }
-.category-email-item { padding: 6px 0; font-size: 12px; border-top: 1px solid var(--border); padding-top: 6px; }
-.category-email-item span { display: inline; margin-left: 8px; }
-.text-muted { color: var(--text-muted); font-size: 11px; }
 
 .timeline-dashboard, .settings-dashboard { max-width: 100%; }
 
