@@ -1148,6 +1148,7 @@
     $("#statSenders").textContent = "0";
     $("#statSize").textContent = "0";
     $("#statSelected").textContent = "0";
+    $("#lastScanLabel").style.display = "none";
 
     clearElement($("#sunburstChart"));
     clearElement($("#sunburstCenterStat"));
@@ -1234,6 +1235,7 @@
         updateStats();
         renderViewFilterDropdown();
         switchView("sunburst");
+        updateLastScanLabel();
         if (localStorage.getItem("mail-audit-app-tour-completed") !== "true") {
           setTimeout(startTour, 500);
         }
@@ -1255,6 +1257,13 @@
     $("#statSize").textContent = formatBytes(msgs.reduce((sum, m) => sum + messageSize(m), 0));
     $("#statSelected").textContent = selectedIds.size.toLocaleString();
     updateBulkButtons();
+  }
+
+  function updateLastScanLabel() {
+    const label = $("#lastScanLabel");
+    if (!label) return;
+    label.textContent = `Last scanned ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    label.style.display = "inline";
   }
 
   function updateBulkButtons() {
