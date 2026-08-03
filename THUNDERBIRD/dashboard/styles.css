@@ -60,6 +60,8 @@ body {
   background: var(--bg-primary);
   color: var(--text-primary);
   width: 100%;
+  max-width: 80vw;
+  margin: 0 auto;
   min-height: 100vh;
   overflow-x: hidden;
   overflow-y: auto;
@@ -75,14 +77,14 @@ body {
 
 /* Header */
 #header {
-  display: flex; flex-direction: column; gap: 12px;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
   padding: 14px 24px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-secondary);
   position: sticky; top: 0; z-index: 20;
+  flex-wrap: wrap;
 }
-.header-top { display: flex; align-items: center; justify-content: space-between; }
-.header-left { display: flex; align-items: center; gap: 10px; }
+.header-left { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .logo-icon { color: var(--accent); }
 #header .header-title {
   display: flex;
@@ -119,8 +121,8 @@ body {
   color: var(--text-muted);
   text-transform: uppercase;
 }
-.header-utility { display: flex; align-items: center; gap: 10px; }
-.header-scan-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.header-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.header-divider { width: 1px; height: 24px; background: var(--border); flex-shrink: 0; margin: 0 2px; }
 
 /* Theme Toggle */
 .theme-toggle {
