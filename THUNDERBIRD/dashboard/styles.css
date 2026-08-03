@@ -307,7 +307,7 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 .progress-text { font-size: 12px; color: var(--text-muted); margin-top: 8px; font-family: var(--font-mono); }
 
 /* Tabs */
-.view-tabs { display: flex; gap: 0; padding: 0 24px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); }
+.view-tabs { display: flex; gap: 0; padding: 0 24px; border-bottom: 1px solid var(--border); background: linear-gradient(180deg, rgba(var(--accent-rgb, 37, 99, 235), 0.08), transparent), var(--bg-card); }
 .tab { font-family: var(--font-body); font-size: 13px; font-weight: 500; color: var(--text-muted); background: none; border: none; padding: 12px 18px; cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.2s; display: inline-flex; align-items: center; gap: 7px; }
 .tab-icon { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; opacity: 0.9; }
 .tab:hover { color: var(--text-secondary); }
