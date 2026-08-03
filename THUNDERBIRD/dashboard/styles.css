@@ -337,6 +337,10 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 /* Sunburst Layout */
 .sunburst-layout { display: grid; grid-template-columns: 1fr 260px; gap: 20px; align-items: start; }
 .sunburst-container { position: relative; }
+.sunburst-reset-btn {
+  position: absolute; top: 8px; right: 8px; z-index: 3;
+  display: flex; align-items: center; gap: 6px;
+}
 .chart-container.sunburst-chart-host { height: 800px; max-height: 800px; min-height: 800px; margin: 0; }
 .sunburst-center-stat {
   position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
