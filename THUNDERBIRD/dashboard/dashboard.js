@@ -186,6 +186,13 @@
       }
     });
 
+    // Sunburst zoom reset
+    $("#sunburstResetBtn").addEventListener("click", () => {
+      const chartHost = $("#sunburstChart");
+      const chart = chartHost && chartHost.querySelector(".chart-host")?._echartsInstance;
+      if (chart) chart.dispatchAction({ type: "restore" });
+    });
+
     // Guided tour
     $("#tourHelpBtn").addEventListener("click", startTour);
     $("#tourNextBtn").addEventListener("click", advanceTour);
@@ -202,7 +209,8 @@
   // ══════════════════════════════════════════
   //  GUIDED TOUR
   // ══════════════════════════════════════════
-  const TOUR_STEPS = [
+  // Pre-scan: shown on the landing screen, walks through how to start a scan.
+  const GETTING_STARTED_TOUR_STEPS = [
     {
       target: "#accountSelect",
       title: "Select your email account",
@@ -229,9 +237,59 @@
       text: "If InboxPie helped you clean up your inbox, consider starring the project on GitHub or leaving a review in the Thunderbird Add-ons community — it really helps!",
     },
   ];
+
+  // Post-scan: shown once results are in, walks through what each tab does.
+  const APP_TOUR_STEPS = [
+    {
+      target: '.tab[data-view="sunburst"]',
+      title: "PieView — the big picture",
+      text: "A sunburst of your mailbox: Year → Month → Domain. Click a ring to zoom in, click a domain to see exactly who's emailing you from it.",
+    },
+    {
+      target: '.tab[data-view="sender"]',
+      title: "By Sender",
+      text: "Every sender ranked by volume, with a year/month breakdown per sender. Select and bulk move or trash straight from here.",
+    },
+    {
+      target: '.tab[data-view="domain"]',
+      title: "By Domain",
+      text: "The same idea grouped by sending domain — handy for spotting newsletter or notification domains worth unsubscribing from in bulk.",
+    },
+    {
+      target: '.tab[data-view="size"]',
+      title: "By Size",
+      text: "Find what's eating your mailbox storage: size buckets, the heaviest senders and domains, and old large messages worth clearing out.",
+    },
+    {
+      target: '.tab[data-view="timeline"]',
+      title: "Timeline",
+      text: "Monthly email volume over time. Click a month to focus the cleanup insights below on just that period.",
+    },
+    {
+      target: '.tab[data-view="subscriptions"]',
+      title: "Subscriptions",
+      text: "Recurring senders and newsletters, auto-detected with a frequency breakdown (daily, weekly, monthly...).",
+    },
+    {
+      target: '.tab[data-view="categories"]',
+      title: "Categories",
+      text: "Emails auto-sorted into smart categories like Finance, Shopping, and Travel, each with its own sender chart.",
+    },
+    {
+      target: '.tab[data-view="settings"]',
+      title: "Settings",
+      text: "Manage your categories here — edit keywords, add your own categories, or remove ones you don't need.",
+    },
+  ];
+
+  let activeTourSteps = GETTING_STARTED_TOUR_STEPS;
+  let activeTourFlag = "mail-audit-tour-completed";
   let tourStepIndex = 0;
 
   function startTour() {
+    const isPostScan = allMessages.length > 0;
+    activeTourSteps = isPostScan ? APP_TOUR_STEPS : GETTING_STARTED_TOUR_STEPS;
+    activeTourFlag = isPostScan ? "mail-audit-app-tour-completed" : "mail-audit-tour-completed";
     tourStepIndex = 0;
     $("#tourOverlay").style.display = "block";
     renderTourStep();
@@ -239,11 +297,11 @@
 
   function endTour() {
     $("#tourOverlay").style.display = "none";
-    localStorage.setItem("mail-audit-tour-completed", "true");
+    localStorage.setItem(activeTourFlag, "true");
   }
 
   function advanceTour() {
-    if (tourStepIndex >= TOUR_STEPS.length - 1) {
+    if (tourStepIndex >= activeTourSteps.length - 1) {
       endTour();
       return;
     }
@@ -258,7 +316,7 @@
   }
 
   function renderTourStep() {
-    const step = TOUR_STEPS[tourStepIndex];
+    const step = activeTourSteps[tourStepIndex];
     const target = document.querySelector(step.target);
     if (!target) {
       // Target not present in this build; skip to the next step defensively.
@@ -266,20 +324,20 @@
       return;
     }
 
-    $("#tourStepLabel").textContent = `Step ${tourStepIndex + 1} of ${TOUR_STEPS.length}`;
+    $("#tourStepLabel").textContent = `Step ${tourStepIndex + 1} of ${activeTourSteps.length}`;
     $("#tourTitle").textContent = step.title;
     $("#tourText").textContent = step.text;
-    $("#tourDots").innerHTML = TOUR_STEPS
+    $("#tourDots").innerHTML = activeTourSteps
       .map((_, i) => `<span class="tour-dot ${i === tourStepIndex ? "active" : ""}"></span>`)
       .join("");
     $("#tourBackBtn").style.visibility = tourStepIndex === 0 ? "hidden" : "visible";
-    $("#tourNextBtn").textContent = tourStepIndex === TOUR_STEPS.length - 1 ? "Finish" : "Next";
+    $("#tourNextBtn").textContent = tourStepIndex === activeTourSteps.length - 1 ? "Finish" : "Next";
 
     positionTourStep();
   }
 
   function positionTourStep() {
-    const step = TOUR_STEPS[tourStepIndex];
+    const step = activeTourSteps[tourStepIndex];
     const target = document.querySelector(step.target);
     const spotlight = $("#tourSpotlight");
     const popover = $("#tourPopover");
@@ -1176,6 +1234,9 @@
         updateStats();
         renderViewFilterDropdown();
         switchView("sunburst");
+        if (localStorage.getItem("mail-audit-app-tour-completed") !== "true") {
+          setTimeout(startTour, 500);
+        }
       }, 600);
     } catch (e) {
       $("#progressText").textContent = `Error: ${e.message}`;
