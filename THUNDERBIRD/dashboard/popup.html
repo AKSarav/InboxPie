@@ -39,9 +39,12 @@
           </svg>
         </button>
         <span class="header-divider"></span>
-        <select id="accountSelect">
-          <option value="all">All Accounts</option>
-        </select>
+        <div class="account-select-wrap">
+          <svg class="account-select-icon" viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><path d="M2.5 5.5h15v9h-15z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="m2.5 5.5 7.5 5.5 7.5-5.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+          <select id="accountSelect">
+            <option value="all">All Accounts</option>
+          </select>
+        </div>
         <div class="folder-select-wrap">
           <button type="button" id="folderSelectBtn" class="btn btn-secondary folder-select-btn">
             <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><path d="M2 4h5l2 2h9v10H2V4z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
@@ -61,12 +64,12 @@
           </div>
         </div>
         <div class="date-range-wrap">
-          <button type="button" id="dateRangeBtn" class="btn btn-secondary folder-select-btn" title="Limit scan to a date range">
+          <button type="button" id="dateRangeBtn" class="btn btn-secondary folder-select-btn" title="Scan Range — limits which messages get scanned">
             <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><rect x="3" y="4" width="14" height="13" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M3 8h14M6.5 2.5v3M13.5 2.5v3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-            <span id="dateRangeLabel">Date Range</span>
+            <span id="dateRangeLabel">Scan Range</span>
           </button>
           <div id="dateRangeDropdown" class="folder-dropdown date-range-dropdown" style="display:none;">
-            <div class="folder-dropdown-header">Limit scan to a date range</div>
+            <div class="folder-dropdown-header">Scan Range</div>
             <div class="date-range-row">
               <label>From</label>
               <select id="dateRangeFromMonth"></select>
@@ -77,7 +80,7 @@
               <select id="dateRangeToMonth"></select>
               <select id="dateRangeToYear"></select>
             </div>
-            <p class="date-range-hint">Leave as-is to scan all mail (default).</p>
+            <p class="date-range-hint">Limits which messages get scanned — applies to every view, including Timeline. Leave as-is to scan all mail (default).</p>
             <div class="folder-dropdown-actions">
               <button type="button" class="btn btn-secondary btn-small" id="dateRangeClear">All time</button>
               <button type="button" class="btn btn-primary btn-small" id="dateRangeApply">Apply</button>
@@ -85,6 +88,7 @@
           </div>
         </div>
         <button id="scanBtn" class="btn btn-primary">
+          <svg viewBox="0 0 20 20" width="14" height="14" aria-hidden="true"><circle cx="9" cy="9" r="6.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M13.6 13.6 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
           <span class="btn-text">Scan</span>
           <span class="btn-loader" style="display:none;">Scanning…</span>
         </button>
@@ -280,6 +284,7 @@
               </button>
             </div>
           </div>
+          <div id="timelineScanRangeNote" class="size-note" style="display:none;"></div>
           <div id="timelineControls" class="timeline-controls"></div>
           <div id="timelineChart" class="timeline-chart"></div>
           <div id="timelineInsights" class="timeline-insights"></div>
