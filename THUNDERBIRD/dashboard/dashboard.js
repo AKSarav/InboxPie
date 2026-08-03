@@ -2101,31 +2101,29 @@
     const chartContainer = document.getElementById("chart-size-container");
     if (chartContainer) {
       chartContainer.innerHTML = `
-        <div style="display: flex; gap: 20px; width: 100%;">
-          <div style="flex: 1;">
-            <div style="display: flex; gap: 12px; margin-bottom: 12px; align-items: center;">
-              <h3 style="margin: 0; font-size: 14px;">Size Buckets</h3>
-              <select class="size-topx-dropdown" style="padding: 4px 8px; font-size: 11px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
-                <option value="5">Top 5</option>
-                <option value="10" selected>Top 10</option>
-                <option value="20">Top 20</option>
-                <option value="all">All</option>
-              </select>
-            </div>
-            <div id="chart-size-buckets" class="chart-container"></div>
+        <div>
+          <div style="display: flex; gap: 12px; margin-bottom: 12px; align-items: center;">
+            <h3 style="margin: 0; font-size: 14px;">Size Buckets</h3>
+            <select class="size-topx-dropdown" style="padding: 4px 8px; font-size: 11px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
+              <option value="5">Top 5</option>
+              <option value="10" selected>Top 10</option>
+              <option value="20">Top 20</option>
+              <option value="all">All</option>
+            </select>
           </div>
-          <div style="flex: 1;">
-            <div style="display: flex; gap: 12px; margin-bottom: 12px; align-items: center;">
-              <h3 style="margin: 0; font-size: 14px;">Top Senders by Space</h3>
-              <select class="size-senders-topx-dropdown" style="padding: 4px 8px; font-size: 11px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
-                <option value="5">Top 5</option>
-                <option value="10" selected>Top 10</option>
-                <option value="20">Top 20</option>
-                <option value="all">All</option>
-              </select>
-            </div>
-            <div id="chart-size-senders" class="chart-container"></div>
+          <div id="chart-size-buckets" class="chart-container"></div>
+        </div>
+        <div>
+          <div style="display: flex; gap: 12px; margin-bottom: 12px; align-items: center;">
+            <h3 style="margin: 0; font-size: 14px;">Top Senders by Space</h3>
+            <select class="size-senders-topx-dropdown" style="padding: 4px 8px; font-size: 11px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
+              <option value="5">Top 5</option>
+              <option value="10" selected>Top 10</option>
+              <option value="20">Top 20</option>
+              <option value="all">All</option>
+            </select>
           </div>
+          <div id="chart-size-senders" class="chart-container"></div>
         </div>
       `;
 
