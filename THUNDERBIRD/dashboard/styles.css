@@ -539,7 +539,6 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 /* Size Dashboard */
 .size-dashboard { display: flex; flex-direction: column; gap: 16px; }
 .size-grid { align-items: start; }
-.size-wide-card { grid-column: 1 / -1; }
 .size-note {
   padding: 10px 12px; border-radius: 8px;
   background: var(--accent-dim); color: var(--text-secondary); font-size: 12px;

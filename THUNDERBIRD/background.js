@@ -8,30 +8,35 @@ browser.browserAction.onClicked.addListener(() => {
   });
 });
 
-browser.runtime.onMessage.addListener(async (message, sender) => {
+// The listener itself must stay synchronous: an `async` listener always
+// returns a Promise, even for message types it doesn't recognize, which
+// breaks the "return nothing so another listener can respond" contract.
+// Returning the handler's own Promise directly for recognized messages
+// still resolves the response asynchronously.
+browser.runtime.onMessage.addListener((message, sender) => {
   if (message.action === "fetchAllMail") {
-    return await fetchAllMail(message.options || {});
+    return fetchAllMail(message.options || {});
   }
   if (message.action === "deleteMessages") {
-    return await deleteMessages(message.messageIds);
+    return deleteMessages(message.messageIds);
   }
   if (message.action === "moveMessagesToFolder") {
-    return await moveMessagesToFolder(message.messageIds, message.accountId, message.folderPath);
+    return moveMessagesToFolder(message.messageIds, message.accountId, message.folderPath);
   }
   if (message.action === "listFolders") {
-    return await listFoldersFlat(message.accountId);
+    return listFoldersFlat(message.accountId);
   }
   if (message.action === "listFoldersForScan") {
-    return await listFoldersForScan(message.accountId);
+    return listFoldersForScan(message.accountId);
   }
   if (message.action === "getAccounts") {
-    return await browser.accounts.list();
+    return browser.accounts.list();
   }
   if (message.action === "getTrashFolder") {
-    return await getTrashFolder(message.accountId);
+    return getTrashFolder(message.accountId);
   }
   if (message.action === "openMessage") {
-    return await openMessageInTab(message.messageId);
+    return openMessageInTab(message.messageId);
   }
 });
 
