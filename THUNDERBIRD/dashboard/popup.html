@@ -136,6 +136,12 @@
         </svg>
         Subscriptions
       </button>
+      <button class="tab" data-view="categories">
+        <svg class="tab-icon" viewBox="0 0 20 20" aria-hidden="true">
+          <path d="M3 3h6v6H3zM11 3h6v6h-6zM3 11h6v6H3zM11 11h6v6h-6z"></path>
+        </svg>
+        Categories
+      </button>
       <button class="tab" data-view="settings">
         <svg class="tab-icon" viewBox="0 0 20 20" aria-hidden="true">
           <circle cx="10" cy="10" r="1.5"></circle>
@@ -155,7 +161,7 @@
             <circle cx="100" cy="100" r="8" fill="var(--accent)" opacity="0.8"/>
           </svg>
         </div>
-        <p class="landing-text">Connect your mailbox and scan to generate<br>a sunburst report of all your emails.</p>
+        <p class="landing-text">Select your Email inbox and Scan<br>Your Email Analytics should begin</p>
       </div>
 
       <div id="sunburstView" class="view-panel" style="display:none;">
@@ -252,6 +258,19 @@
           <div id="chart-subscriptions-container" class="chart-container"></div>
           <div id="subscriptionsFreqTabs" class="subscriptions-freq-tabs"></div>
           <div id="subscriptionsCards" class="subscriptions-cards"></div>
+        </div>
+      </div>
+
+      <div id="categoriesView" class="view-panel" style="display:none;">
+        <div class="timeline-dashboard">
+          <div class="timeline-header">
+            <div>
+              <h2>Categories</h2>
+              <p>Emails organized by smart categories</p>
+            </div>
+          </div>
+          <div id="categoriesTable" class="categories-table"></div>
+          <div id="categoriesDetail" class="categories-detail" style="display:none;"></div>
         </div>
       </div>
 

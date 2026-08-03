@@ -289,7 +289,7 @@ class LanceStore {
   async searchExhaustive(term: string, opts: { limit?: number } = {}): Promise<SearchResult[]> {
     await this.open();
     if (!this.table || !term.trim()) return [];
-    const limit = opts.limit ?? 1000; // safety ceiling only, not a meaningful cap
+    const limit = opts.limit ?? 50000; // high limit for aggregation queries; LanceDB still enforces reasonable bounds
     const toResult = (r: Record<string, unknown>): SearchResult => ({
       id:           String(r["id"]           ?? ""),
       subject:      String(r["subject"]      ?? ""),

@@ -461,6 +461,44 @@ type AgentEventFn = (ev: { action: string; tool?: string; label?: string; detail
 const _checkpointer = new MemorySaver();
 let _currentThreadId: string | null = null;
 
+// ── Deep aggregation pipeline helpers ─────────────────────────────────────────
+
+function isAggregationQuery(query: string): boolean {
+  const keywords = ["pie chart", "bar chart", "group by", "grouped", "sum", "total", "count", "breakdown", "distribution"];
+  const lowerQuery = query.toLowerCase();
+  return keywords.some((kw) => lowerQuery.includes(kw));
+}
+
+async function runDeepAggregationPipeline(
+  userMessage: string,
+  llm: any,
+  emit: (label: string, detail?: string, tool?: string) => void,
+  signal?: AbortSignal,
+): Promise<AgentResponse> {
+  console.log(`[SmartSearch] ▶▶▶ DEEP AGGREGATION PIPELINE invoked for: "${userMessage.substring(0, 100)}..."`);
+  const { buildDeepAggregateGraph } = await import("./deep-aggregate/graph");
+
+  const stepEmitter = (step: AgentStep) => {
+    emit(step.label, step.detail, step.type);
+  };
+
+  console.log(`[SmartSearch]   Building LangGraph StateGraph...`);
+  const graph = buildDeepAggregateGraph(llm, stepEmitter);
+
+  console.log(`[SmartSearch]   Invoking graph with question...`);
+  const result = await graph.invoke(
+    { question: userMessage, plan: null, mailIds: [], partials: {}, agentSteps: [], answer: null },
+    { signal }
+  );
+
+  console.log(`[SmartSearch] ▶▶▶ PIPELINE COMPLETE`);
+  return result.answer || {
+    intent: "aggregation",
+    response_type: "data_table",
+    answer_text: "Unable to complete aggregation",
+  };
+}
+
 export async function runAppleMailAgent(
   userMessage: string,
   conversationHistory: Array<{ role: string; content: string }>,
@@ -472,14 +510,7 @@ export async function runAppleMailAgent(
   provider = "ollama",
   apiKey?: string,
 ): Promise<AgentResponse> {
-  const agentSteps: AgentStep[]     = [];
-  let thinkingText      = "";
-  let lastAssistantText = "";
-  let semanticRows:  Record<string, unknown>[] | null = null;
-  let aggregateRows: Record<string, unknown>[] | null = null;
-
   const queryStart     = Date.now();
-  const toolStartTimes = new Map<string, number>();
   const log  = (...args: unknown[]) => console.log(ts(queryStart), ...args);
   const emit = (tool: string, label: string, detail?: string, elapsed?: number) => {
     log(`[SmartSearch] ${label}${detail ? ` — ${detail}` : ""}${elapsed != null ? ` (${elapsed}ms)` : ""}`);
@@ -490,6 +521,28 @@ export async function runAppleMailAgent(
 
   if (provider === "ollama") { try { await loadOllamaThinkingModels(); } catch { /* offline */ } }
   const llm = createLLM(provider, model, apiKey);
+
+  // Route deep mode to new aggregation pipeline if query looks like a grouping task
+  if (mode === "deep" && isAggregationQuery(userMessage)) {
+    try {
+      return await runDeepAggregationPipeline(userMessage, llm, (label, detail, tool = "aggregation") => {
+        emit(tool, label, detail);
+      }, signal);
+    } catch (e) {
+      log(`[SmartSearch] Deep aggregation pipeline failed: ${(e as Error).message}`);
+      log("[SmartSearch] Falling back to ReAct mode");
+      // Fall through to regular ReAct pipeline
+    }
+  }
+
+  // Regular ReAct pipeline (fast mode + fallback for deep mode)
+  const agentSteps: AgentStep[]     = [];
+  let thinkingText      = "";
+  let lastAssistantText = "";
+  let semanticRows:  Record<string, unknown>[] | null = null;
+  let aggregateRows: Record<string, unknown>[] | null = null;
+
+  const toolStartTimes = new Map<string, number>();
 
   const profileBlock = await buildIndexProfileBlock();
 

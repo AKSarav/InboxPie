@@ -666,6 +666,22 @@ export class ThunderbirdProvider implements MailProvider {
     return { messages: records, total: records.length, accounts: targetAccounts };
   }
 
+  /**
+   * Fetch email body text using the Thunderbird message key (mbox file path + message offset).
+   * Used during VirtualBox deferred indexing when user confirms indexing.
+   * Returns the full email body text, or null if not found/accessible.
+   *
+   * For Thunderbird, identifier_id is expected to be in format: "folder_path|message_offset"
+   */
+  async fetchMessageBody(identifier_id: string): Promise<string | null> {
+    // TODO: Implement Thunderbird body fetching
+    // For now, return null as Thunderbird full-text body extraction is complex
+    // and requires parsing mbox format with MIME headers.
+    // The identifier_id format for Thunderbird needs to be defined (folder path + offset)
+    console.warn(`[Thunderbird] fetchMessageBody not yet implemented for ${identifier_id}`);
+    return null;
+  }
+
   async deleteMessages(_ids: Array<string | number>): Promise<MoveDeleteResult> {
     return { success: false, error: "Open Thunderbird to delete messages." };
   }

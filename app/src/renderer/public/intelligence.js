@@ -1351,6 +1351,7 @@
             '<button class="id-galaxy-zoom-btn" id="idGalaxyZoomIn"  title="Zoom in">+</button>' +
             '<button class="id-galaxy-zoom-btn" id="idGalaxyZoomOut" title="Zoom out">−</button>' +
             '<button class="id-galaxy-zoom-btn" id="idGalaxyZoomReset" title="Reset view" style="font-size:11px;">⊙</button>' +
+            '<button class="id-galaxy-zoom-btn" id="idGalaxyToggleLabels" title="Toggle edge labels">Å</button>' +
           '</div>' +
         '</div>' +
         '<div class="id-graph-sidebar">' +
@@ -1514,6 +1515,9 @@
     var btnZoomIn    = document.getElementById('idGalaxyZoomIn');
     var btnZoomOut   = document.getElementById('idGalaxyZoomOut');
     var btnZoomReset = document.getElementById('idGalaxyZoomReset');
+    var btnToggleLabels = document.getElementById('idGalaxyToggleLabels');
+    var showEdgeLabels = true;
+
     // Native wheel/pinch zoom implicitly anchors on the cursor position; dispatchAction
     // has no such default, so we must pass an explicit origin (viewport center) or the
     // roam ends up zooming around the container's corner — compounding into the
@@ -1526,6 +1530,16 @@
     });
     if (btnZoomReset) btnZoomReset.addEventListener('click', function() {
       chart.setOption({ series: [{ roam: true, draggable: true, zoom: 1, center: [host.offsetWidth / 2, host.offsetHeight / 2] }] });
+    });
+    if (btnToggleLabels) btnToggleLabels.addEventListener('click', function() {
+      showEdgeLabels = !showEdgeLabels;
+      chart.setOption({
+        series: [{
+          links: _initEdges.map(function(link) {
+            return Object.assign({}, link, { label: { show: showEdgeLabels } });
+          })
+        }]
+      });
     });
 
     // ── Node detail panel ────────────────────────────────────────────────────
