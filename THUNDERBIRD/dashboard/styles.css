@@ -114,7 +114,7 @@ body {
   background-clip: text;
 }
 
-.header-tagline {
+.version-badge {
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.05em;
@@ -139,13 +139,6 @@ body {
   width: 18px; height: 18px; display: block; flex-shrink: 0;
 }
 
-/* Icon buttons that also show a text label (privacy, tour help) — the icon
-   alone reads as ambiguous, so these get a visible caption at all times. */
-.icon-btn-labeled {
-  width: auto; padding: 0 12px; gap: 6px;
-  font-size: 12px; font-weight: 600;
-}
-
 /* Privacy Toggle */
 .privacy-toggle {
   width: 36px; height: 36px; border-radius: 8px;
@@ -157,7 +150,6 @@ body {
 }
 .privacy-toggle:hover { border-color: var(--accent); color: var(--accent); }
 .privacy-toggle.active { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
-.privacy-toggle.icon-btn-labeled { width: auto; padding: 0 12px; gap: 6px; line-height: 1; }
 .privacy-icon {
   width: 18px; height: 18px; display: block; flex-shrink: 0; overflow: visible;
 }
@@ -239,13 +231,6 @@ body {
 .btn-small { padding: 5px 10px; font-size: 11px; }
 
 .date-range-wrap { position: relative; }
-/* Scan Range is reached far less often than Folders, so it defaults to a
-   quieter "ghost" look and only picks up full button styling once a range
-   is actually set (see .active, applied by updateDateRangeLabel()). */
-#dateRangeBtn { background: transparent; border-color: transparent; color: var(--text-muted); }
-#dateRangeBtn:hover { background: var(--bg-card); border-color: var(--border); color: var(--text-secondary); }
-#dateRangeBtn.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
-.last-scan-label { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
 .date-range-dropdown { padding: 12px 14px; min-width: 260px; }
 .date-range-dropdown .folder-dropdown-header { padding: 0 0 10px; margin-bottom: 10px; }
 .date-range-dropdown .folder-dropdown-actions { padding: 10px 0 0; margin-top: 10px; }
