@@ -13,7 +13,7 @@
         <img src="../icons/icon-96.png" alt="InboxPie Logo" class="logo-icon" height="40" width="40">
         <div class="header-title">
           <h1 class="brand-gradient">InboxPie</h1>
-          <span class="version-badge">v1.0.3</span>
+          <span class="version-badge">Email analytics v1.0.3</span>
         </div>
       </div>
       <div class="header-right">
@@ -108,11 +108,11 @@
         </div>
         <div><div class="stat-number" id="statSenders">0</div><div class="stat-label">Unique Senders</div></div>
       </div>
-      <div class="stat-card">
+      <div class="stat-card" title="Total size of messages with a known size (see By Size for messages with unknown size)">
         <div class="stat-icon" aria-hidden="true">
-          <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7"></circle><path d="M3 10h14M10 3c2 2.2 3 4.5 3 7s-1 4.8-3 7M10 3c-2 2.2-3 4.5-3 7s1 4.8 3 7"></path></svg>
+          <svg viewBox="0 0 20 20"><ellipse cx="10" cy="5" rx="6" ry="2.2"></ellipse><path d="M4 5v10c0 1.2 2.7 2.2 6 2.2s6-1 6-2.2V5"></path><path d="M4 10c0 1.2 2.7 2.2 6 2.2s6-1 6-2.2"></path></svg>
         </div>
-        <div><div class="stat-number" id="statDomains">0</div><div class="stat-label">Unique Domains</div></div>
+        <div><div class="stat-number" id="statSize">0</div><div class="stat-label">Mailbox Size</div></div>
       </div>
       <div class="stat-card stat-card-selected stat-card-clickable" id="statCardSelected" title="Click to review selected emails">
         <div class="stat-icon" aria-hidden="true">
