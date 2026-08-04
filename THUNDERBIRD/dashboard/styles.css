@@ -249,6 +249,9 @@ select, .search-input {
 select:focus, .search-input:focus { border-color: var(--accent); }
 select option { background: var(--bg-card); color: var(--text-primary); }
 .search-input { width: 220px; }
+/* Signals a specific (non-default) value is set, matching .btn-secondary.active used elsewhere in the scan-controls row */
+.account-select-wrap.active select { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.account-select-wrap.active .account-select-icon { color: var(--accent); }
 .account-select-wrap { position: relative; display: flex; align-items: center; flex-shrink: 0; }
 .account-select-icon { position: absolute; left: 10px; color: var(--text-muted); pointer-events: none; }
 .account-select-wrap select { padding-left: 30px; }

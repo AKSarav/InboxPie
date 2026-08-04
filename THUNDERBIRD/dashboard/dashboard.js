@@ -144,9 +144,13 @@
     } catch (e) {
       console.warn("Could not fetch accounts:", e);
     }
+    updateAccountSelectActiveState();
 
     scanBtn.addEventListener("click", startScan);
-    accountSelect.addEventListener("change", resetDashboard);
+    accountSelect.addEventListener("change", () => {
+      updateAccountSelectActiveState();
+      resetDashboard();
+    });
     document.querySelectorAll(".tab").forEach((t) =>
       t.addEventListener("click", () => switchView(t.dataset.view))
     );
@@ -760,10 +764,16 @@
     updateFolderBadge();
   }
 
+  function updateAccountSelectActiveState() {
+    $(".account-select-wrap")?.classList.toggle("active", accountSelect.value !== "all");
+  }
+
   function updateFolderBadge() {
     const badge = $("#folderCountBadge");
     const label = $("#folderSelectLabel");
+    const btn = $("#folderSelectBtn");
     if (label) label.textContent = "Folders";
+    if (btn) btn.classList.toggle("active", selectedFolderKeys.size > 0);
     if (!badge) return;
     badge.textContent = selectedFolderKeys.size;
     badge.style.display = selectedFolderKeys.size > 0 ? "inline-block" : "none";
