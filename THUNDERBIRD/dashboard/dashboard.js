@@ -1614,12 +1614,21 @@
     renderLegend(legend, legendYears, legendDomains);
   }
 
+  function legendItemMessages(filterType, filterValue) {
+    if (filterType === 'year') {
+      return allMessages.filter((m) => m.year.toString() === filterValue);
+    } else if (filterType === 'domain') {
+      return allMessages.filter((m) => m.domain === filterValue);
+    }
+    return [];
+  }
+
   function renderLegend(panel, years, domains) {
     let html = '<div class="legend-title">Chart Legend</div>';
 
     html += '<div class="legend-section"><div class="legend-section-title">Years (inner ring)</div>';
     years.forEach((y) => {
-      html += `<div class="legend-item"><div class="legend-swatch" style="background:${escAttr(y.color)}"></div><span class="legend-label">${escHtml(y.label)}</span><span class="legend-count">${y.count.toLocaleString()}</span></div>`;
+      html += renderLegendItem('year', y.label, y.color, y.label, y.count);
     });
     html += '</div>';
 
@@ -1627,11 +1636,50 @@
     const topDomains = Object.entries(domains).sort((a, b) => b[1].count - a[1].count).slice(0, 15);
     html += '<div class="legend-section"><div class="legend-section-title">Top Domains (outer ring)</div>';
     topDomains.forEach(([name, d]) => {
-      html += `<div class="legend-item"><div class="legend-swatch" style="background:${escAttr(d.color)}"></div><span class="legend-label">${escHtml(displayDomain(name))}</span><span class="legend-count">${d.count.toLocaleString()}</span></div>`;
+      html += renderLegendItem('domain', name, d.color, displayDomain(name), d.count);
     });
     html += '</div>';
 
     setSafeHtml(panel, html);
+    attachLegendClickHandlers();
+  }
+
+  function renderLegendItem(filterType, filterValue, color, displayLabel, count) {
+    const itemMessages = legendItemMessages(filterType, filterValue);
+    const selectedCount = itemMessages.filter((m) => selectedIds.has(m.id)).length;
+    const isFullySelected = selectedCount > 0 && selectedCount === itemMessages.length;
+    const isPartiallySelected = selectedCount > 0 && !isFullySelected;
+    const selectedClass = isFullySelected ? 'legend-fully-selected' : isPartiallySelected ? 'legend-partially-selected' : '';
+    const marker = isFullySelected ? `<span class="legend-check">✓</span>` : isPartiallySelected ? `<span class="legend-check legend-check-partial">–</span>` : '';
+    const title = isFullySelected
+      ? `Click to unselect all emails from ${escAttr(displayLabel)}`
+      : `Click to select all emails from ${escAttr(displayLabel)}`;
+    return `<div class="legend-item legend-clickable ${selectedClass}" data-filter-type="${filterType}" data-filter-value="${escAttr(filterValue)}" title="${title}">${marker}<div class="legend-swatch" style="background:${escAttr(color)}"></div><span class="legend-label">${escHtml(displayLabel)}</span><span class="legend-count">${count.toLocaleString()}</span></div>`;
+  }
+
+  function attachLegendClickHandlers() {
+    const legendItems = document.querySelectorAll('.legend-clickable');
+    legendItems.forEach((item) => {
+      item.style.cursor = 'pointer';
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const filterType = item.dataset.filterType;
+        const filterValue = item.dataset.filterValue;
+
+        const matchingMessages = legendItemMessages(filterType, filterValue);
+        const allSelected = matchingMessages.length > 0 && matchingMessages.every((m) => selectedIds.has(m.id));
+
+        if (allSelected) {
+          matchingMessages.forEach((m) => selectedIds.delete(m.id));
+        } else {
+          matchingMessages.forEach((m) => selectedIds.add(m.id));
+        }
+
+        updateStats();
+        // Re-render sunburst to show updated selection markers in legend
+        renderSunburst();
+      });
+    });
   }
 
   function showDomainDetail(domain, msgs) {
@@ -3553,7 +3601,7 @@
     setSafeHtml(cards, filtered.map((s, i) => {
       const lastDate = new Date(s.last_date_unix * 1000);
       const dateStr = lastDate.toLocaleDateString();
-      const domain = privacyMaskEnabled ? "?" : s.domain;
+      const domain = displayDomain(s.domain);
       return `<div class="an-sub-card" style="border-left: 4px solid ${colorFor(i)}">
         <div class="an-sub-domain">${escHtml(domain)}</div>
         <div class="an-sub-badges">
