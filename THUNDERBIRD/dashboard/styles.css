@@ -244,7 +244,7 @@ select, .search-input {
   font-family: var(--font-body); font-size: 13px;
   background: var(--bg-card); color: var(--text-primary);
   border: 1px solid var(--border); border-radius: 6px;
-  padding: 7px 12px; outline: none; transition: border-color 0.2s;
+  padding: 8px 12px; outline: none; transition: border-color 0.2s;
 }
 select:focus, .search-input:focus { border-color: var(--accent); }
 select option { background: var(--bg-card); color: var(--text-primary); }
@@ -371,6 +371,12 @@ select option { background: var(--bg-card); color: var(--text-primary); }
 .legend-section-title { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-label); margin-bottom: 6px; }
 .legend-item { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 4px; cursor: pointer; transition: background 0.15s; font-size: 12px; }
 .legend-item:hover { background: var(--bg-hover); }
+.legend-clickable { border: 1px solid transparent; transition: all 0.15s; }
+.legend-clickable:hover { border-color: var(--accent); background: var(--accent-dim); }
+.legend-check { font-weight: 600; color: var(--success); margin-right: 4px; font-size: 14px; width: 12px; text-align: center; flex-shrink: 0; }
+.legend-check-partial { color: var(--text-muted); }
+.legend-fully-selected { background: var(--selection-dim); border-color: var(--selection); }
+.legend-partially-selected { border-color: var(--border); opacity: 0.9; }
 .legend-swatch { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
 .legend-label { flex: 1; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .legend-count { font-family: var(--font-mono); font-size: 11px; color: var(--accent); font-weight: 600; }

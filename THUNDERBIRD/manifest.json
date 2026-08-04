@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "InboxPie",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Privacy-first email insights and cleanup. Explore patterns by year, month, domain, and sender — review locally, then act with confidence.",
   "author": "AKSarav",
   "browser_specific_settings": {
