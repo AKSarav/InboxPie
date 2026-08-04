@@ -1146,7 +1146,7 @@
 
     $("#statTotal").textContent = "0";
     $("#statSenders").textContent = "0";
-    $("#statDomains").textContent = "0";
+    $("#statSize").textContent = "0";
     $("#statSelected").textContent = "0";
 
     clearElement($("#sunburstChart"));
@@ -1252,7 +1252,7 @@
     const msgs = getFilteredMessages();
     $("#statTotal").textContent = msgs.length.toLocaleString();
     $("#statSenders").textContent = new Set(msgs.map((m) => m.senderEmail)).size.toLocaleString();
-    $("#statDomains").textContent = new Set(msgs.map((m) => m.domain)).size.toLocaleString();
+    $("#statSize").textContent = formatBytes(msgs.reduce((sum, m) => sum + messageSize(m), 0));
     $("#statSelected").textContent = selectedIds.size.toLocaleString();
     updateBulkButtons();
   }
