@@ -331,9 +331,9 @@
     $("#tourStepLabel").textContent = `Step ${tourStepIndex + 1} of ${activeTourSteps.length}`;
     $("#tourTitle").textContent = step.title;
     $("#tourText").textContent = step.text;
-    $("#tourDots").innerHTML = activeTourSteps
+    setSafeHtml($("#tourDots"), activeTourSteps
       .map((_, i) => `<span class="tour-dot ${i === tourStepIndex ? "active" : ""}"></span>`)
-      .join("");
+      .join(""));
     $("#tourBackBtn").style.visibility = tourStepIndex === 0 ? "hidden" : "visible";
     $("#tourNextBtn").textContent = tourStepIndex === activeTourSteps.length - 1 ? "Finish" : "Next";
 
@@ -995,10 +995,10 @@
     for (let y = nowYear; y >= DATE_RANGE_EARLIEST_YEAR; y--) {
       yearOptions += `<option value="${y}">${y}</option>`;
     }
-    $("#dateRangeFromMonth").innerHTML = monthOptions;
-    $("#dateRangeToMonth").innerHTML = monthOptions;
-    $("#dateRangeFromYear").innerHTML = yearOptions;
-    $("#dateRangeToYear").innerHTML = yearOptions;
+    setSafeHtml($("#dateRangeFromMonth"), monthOptions);
+    setSafeHtml($("#dateRangeToMonth"), monthOptions);
+    setSafeHtml($("#dateRangeFromYear"), yearOptions);
+    setSafeHtml($("#dateRangeToYear"), yearOptions);
 
     loadSavedDateRange();
     applyDateRangeToSelects();
@@ -1315,7 +1315,7 @@
     // Clear container and set up split layout if legend is provided
     let chartHost = el.querySelector('.chart-host');
     if (!chartHost) {
-      el.innerHTML = '';
+      clearElement(el);
       chartHost = document.createElement('div');
       chartHost.className = 'chart-host';
       el.appendChild(chartHost);
@@ -1323,13 +1323,13 @@
         el.classList.add('with-legend');
         const legendContainer = document.createElement('div');
         legendContainer.className = 'chart-legend';
-        legendContainer.innerHTML = legendData.map((item, i) => `
+        setSafeHtml(legendContainer, legendData.map((item, i) => `
           <div class="chart-legend-item" data-index="${i}">
             <div class="chart-legend-dot" style="background-color: ${item.color}"></div>
             <div class="chart-legend-label" title="${escHtml(item.name)}">${escHtml(item.name)}</div>
             <div class="chart-legend-value">${item.value.toLocaleString()}</div>
           </div>
-        `).join('');
+        `).join(''));
         el.appendChild(legendContainer);
       }
     }
@@ -1493,8 +1493,8 @@
     const msgs = getFilteredMessages();
     const total = msgs.length;
     if (total === 0) {
-      chartHost.innerHTML = '<div class="insight-empty">No messages</div>';
-      if (centerStat) centerStat.innerHTML = "";
+      setSafeHtml(chartHost, '<div class="insight-empty">No messages</div>');
+      if (centerStat) clearElement(centerStat);
       clearElement(legend);
       return;
     }
@@ -1571,7 +1571,7 @@
     });
 
     if (centerStat) {
-      centerStat.innerHTML = `<span class="scs-count">${total.toLocaleString()}</span><span class="scs-label">EMAILS</span>`;
+      setSafeHtml(centerStat, `<span class="scs-count">${total.toLocaleString()}</span><span class="scs-label">EMAILS</span>`);
     }
 
     initViewChart("sunburstChart", {
@@ -1875,7 +1875,7 @@
     // Render chart with Top X dropdown
     const senderChartContainer = document.getElementById("chart-sender-container");
     if (senderChartContainer) {
-      senderChartContainer.innerHTML = `
+      setSafeHtml(senderChartContainer, `
         <div style="display: flex; gap: 12px; margin-bottom: 12px; align-items: center;">
           <h3 style="margin: 0; font-size: 14px;">Top Senders</h3>
           <select class="sender-topx-dropdown" style="padding: 4px 8px; font-size: 11px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
@@ -1886,7 +1886,7 @@
           </select>
         </div>
         <div id="chart-sender-host" class="chart-container" style="margin: 0;"></div>
-      `;
+      `);
       // Move chart rendering into the new host
       initViewChart("chart-sender-host", buildSenderBarChartOption());
       const chart = document.getElementById("chart-sender-host").querySelector('.chart-host')._echartsInstance;
@@ -2047,7 +2047,7 @@
     // Render chart with Top X dropdown
     const domainChartContainer = document.getElementById("chart-domain-container");
     if (domainChartContainer) {
-      domainChartContainer.innerHTML = `
+      setSafeHtml(domainChartContainer, `
         <div style="display: flex; gap: 12px; margin-bottom: 12px; align-items: center;">
           <h3 style="margin: 0; font-size: 14px;">Top Domains</h3>
           <select class="domain-topx-dropdown" style="padding: 4px 8px; font-size: 11px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
@@ -2058,7 +2058,7 @@
           </select>
         </div>
         <div id="chart-domain-host" class="chart-container" style="margin: 0;"></div>
-      `;
+      `);
       // Move chart rendering into the new host
       initViewChart("chart-domain-host", buildDomainBarChartOption());
       const chart = document.getElementById("chart-domain-host").querySelector('.chart-host')._echartsInstance;
@@ -3316,14 +3316,14 @@
 
     const categories = await loadCategoriesFromStorage();
     if (!categories.length) {
-      list.innerHTML = '<div class="ais-folders-empty">No categories. Add one below.</div>';
+      setSafeHtml(list, '<div class="ais-folders-empty">No categories. Add one below.</div>');
       return;
     }
 
     const byName = {};
     categories.forEach(c => { byName[c.name] = (c.keywords || []).slice(); });
 
-    list.innerHTML = categories.map(c => {
+    setSafeHtml(list, categories.map(c => {
       const chips = (c.keywords || []).map(k => {
         return '<span class="ais-cat-chip" data-cat="' + escAttr(c.name) + '" data-kw="' + escAttr(k) + '">' +
           escHtml(k) + '<button class="ais-cat-chip-x" title="Remove keyword">×</button></span>';
@@ -3337,7 +3337,7 @@
           '<input type="text" class="ais-cat-kwadd" data-cat="' + escAttr(c.name) + '" placeholder="+ keyword">' +
         '</div>' +
       '</div>';
-    }).join('');
+    }).join(''));
 
     // Wire up keyword chip removal
     list.querySelectorAll('.ais-cat-chip-x').forEach(btn => {
@@ -3472,7 +3472,7 @@
     const stats = computeSubscriptionStats(allMessages);
     if (!stats.length) {
       const container = $("#subscriptionsCards");
-      if (container) container.innerHTML = '<div class="ais-folders-empty">No subscriptions detected.</div>';
+      if (container) setSafeHtml(container, '<div class="ais-folders-empty">No subscriptions detected.</div>');
       return;
     }
 
@@ -3518,12 +3518,12 @@
     if (!tabs) return;
 
     const freqs = ["All", "Newsletter", ...["Daily", "Every few days", "Weekly", "Bi-weekly", "Monthly", "Quarterly"]];
-    tabs.innerHTML = freqs.map(f => {
+    setSafeHtml(tabs, freqs.map(f => {
       const count = f === "All" ? stats.length :
                     f === "Newsletter" ? stats.filter(s => s.is_newsletter).length :
                     stats.filter(s => s.frequency === f).length;
       return `<button class="sub-freq-tab ${f === 'All' ? 'active' : ''}" data-freq="${f}">${f} (${count})</button>`;
-    }).join('');
+    }).join(''));
 
     tabs.querySelectorAll('.sub-freq-tab').forEach(btn => {
       btn.addEventListener('click', function () {
@@ -3546,11 +3546,11 @@
     if (!cards) return;
 
     if (!filtered.length) {
-      cards.innerHTML = '<div class="ais-folders-empty">No subscriptions in this category.</div>';
+      setSafeHtml(cards, '<div class="ais-folders-empty">No subscriptions in this category.</div>');
       return;
     }
 
-    cards.innerHTML = filtered.map((s, i) => {
+    setSafeHtml(cards, filtered.map((s, i) => {
       const lastDate = new Date(s.last_date_unix * 1000);
       const dateStr = lastDate.toLocaleDateString();
       const domain = privacyMaskEnabled ? "?" : s.domain;
@@ -3566,7 +3566,7 @@
           <div>Last: ${dateStr}</div>
         </div>
       </div>`;
-    }).join('');
+    }).join(''));
   }
 
   // ══════════════════════════════════════════
@@ -3587,7 +3587,7 @@
     }
 
     if (!categories || !categories.length) {
-      container.innerHTML = '<div class="ais-folders-empty">No categories defined.</div>';
+      setSafeHtml(container, '<div class="ais-folders-empty">No categories defined.</div>');
       return;
     }
 
@@ -3604,7 +3604,7 @@
       return { ...cat, msgs, count: msgs.length, senders };
     }).sort((a, b) => b.count - a.count);
 
-    container.innerHTML = entries.map((cat, i) => {
+    setSafeHtml(container, entries.map((cat, i) => {
       const selected = cat.count > 0 && cat.msgs.every(m => selectedIds.has(m.id));
       const topSenders = cat.senders.slice(0, 5);
 
@@ -3635,7 +3635,7 @@
           ${selected ? "✓ Selected" : `Select all ${cat.count.toLocaleString()} for Review`}
         </button>
       </div>`;
-    }).join('');
+    }).join(''));
 
     const toggleSelectAll = (msgs) => {
       if (!msgs.length) return;
