@@ -26,6 +26,8 @@ CLI/src/inboxpie.egg-info/
 CLI/*.csv
 CLI/*.json
 
+# Local tooling state (not part of the extension)
+THUNDERBIRD/data/
 
 # Local environment files
 .env
