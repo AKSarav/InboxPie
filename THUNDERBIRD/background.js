@@ -47,14 +47,7 @@ async function fetchAllMail(options) {
     ? accounts.filter(a => a.id === accountId)
     : accounts;
 
-  // Optional scan-time date filter (epoch ms, inclusive). null bound = unbounded on that side.
-  const inDateRange = (msg) => {
-    if (dateFrom == null && dateTo == null) return true;
-    const t = msg.date instanceof Date ? msg.date.getTime() : new Date(msg.date).getTime();
-    if (dateFrom != null && t < dateFrom) return false;
-    if (dateTo != null && t > dateTo) return false;
-    return true;
-  };
+  const hasDateRange = dateFrom != null || dateTo != null;
 
   const allMessages = [];
   let totalProcessed = 0;
@@ -72,13 +65,24 @@ async function fetchAllMail(options) {
 
     for (const folder of foldersToScan) {
       try {
-        let page = await browser.messages.list(folder);
-        allMessages.push(...page.messages.filter(inDateRange).map(m => extractMessageData(m, account, folder)));
+        // When a scan range is set, ask Thunderbird's own message store to filter by
+        // date (messages.query) instead of fetching every header over the WebExtension
+        // boundary and discarding out-of-range ones in JS — genuinely less work, not
+        // just a smaller kept set.
+        let page = hasDateRange
+          ? await browser.messages.query({
+              folder,
+              fromDate: dateFrom != null ? new Date(dateFrom) : undefined,
+              toDate: dateTo != null ? new Date(dateTo) : undefined,
+              autoPaginationTimeout: 0,
+            })
+          : await browser.messages.list(folder);
+        allMessages.push(...page.messages.map(m => extractMessageData(m, account, folder)));
         totalProcessed += page.messages.length;
 
         while (page.id) {
           page = await browser.messages.continueList(page.id);
-          allMessages.push(...page.messages.filter(inDateRange).map(m => extractMessageData(m, account, folder)));
+          allMessages.push(...page.messages.map(m => extractMessageData(m, account, folder)));
           totalProcessed += page.messages.length;
 
           browser.runtime.sendMessage({
