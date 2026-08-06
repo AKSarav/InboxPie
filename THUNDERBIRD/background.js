@@ -8,39 +8,53 @@ browser.browserAction.onClicked.addListener(() => {
   });
 });
 
-browser.runtime.onMessage.addListener(async (message, sender) => {
+// The listener itself must stay synchronous: an `async` listener always
+// returns a Promise, even for message types it doesn't recognize, which
+// breaks the "return nothing so another listener can respond" contract.
+// Returning the handler's own Promise directly for recognized messages
+// still resolves the response asynchronously.
+browser.runtime.onMessage.addListener((message, sender) => {
   if (message.action === "fetchAllMail") {
-    return await fetchAllMail(message.options || {});
+    return fetchAllMail(message.options || {});
   }
   if (message.action === "deleteMessages") {
-    return await deleteMessages(message.messageIds);
+    return deleteMessages(message.messageIds);
   }
   if (message.action === "moveMessagesToFolder") {
-    return await moveMessagesToFolder(message.messageIds, message.accountId, message.folderPath);
+    return moveMessagesToFolder(message.messageIds, message.accountId, message.folderPath);
   }
   if (message.action === "listFolders") {
-    return await listFoldersFlat(message.accountId);
+    return listFoldersFlat(message.accountId);
   }
   if (message.action === "listFoldersForScan") {
-    return await listFoldersForScan(message.accountId);
+    return listFoldersForScan(message.accountId);
   }
   if (message.action === "getAccounts") {
-    return await browser.accounts.list();
+    return browser.accounts.list();
   }
   if (message.action === "getTrashFolder") {
-    return await getTrashFolder(message.accountId);
+    return getTrashFolder(message.accountId);
   }
   if (message.action === "openMessage") {
-    return await openMessageInTab(message.messageId);
+    return openMessageInTab(message.messageId);
   }
 });
 
 async function fetchAllMail(options) {
-  const { accountId, folderTypes, folderSelections } = options;
+  const { accountId, folderTypes, folderSelections, dateFrom, dateTo } = options;
   const accounts = await browser.accounts.list();
   const targetAccounts = accountId
     ? accounts.filter(a => a.id === accountId)
     : accounts;
+
+  // Optional scan-time date filter (epoch ms, inclusive). null bound = unbounded on that side.
+  const inDateRange = (msg) => {
+    if (dateFrom == null && dateTo == null) return true;
+    const t = msg.date instanceof Date ? msg.date.getTime() : new Date(msg.date).getTime();
+    if (dateFrom != null && t < dateFrom) return false;
+    if (dateTo != null && t > dateTo) return false;
+    return true;
+  };
 
   const allMessages = [];
   let totalProcessed = 0;
@@ -59,12 +73,12 @@ async function fetchAllMail(options) {
     for (const folder of foldersToScan) {
       try {
         let page = await browser.messages.list(folder);
-        allMessages.push(...page.messages.map(m => extractMessageData(m, account, folder)));
+        allMessages.push(...page.messages.filter(inDateRange).map(m => extractMessageData(m, account, folder)));
         totalProcessed += page.messages.length;
 
         while (page.id) {
           page = await browser.messages.continueList(page.id);
-          allMessages.push(...page.messages.map(m => extractMessageData(m, account, folder)));
+          allMessages.push(...page.messages.filter(inDateRange).map(m => extractMessageData(m, account, folder)));
           totalProcessed += page.messages.length;
 
           browser.runtime.sendMessage({
