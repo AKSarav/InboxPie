@@ -91,7 +91,7 @@ Click the **Folders** button in the header to load your mailbox tree and choose 
 
 ## Changelog
 
-### 1.1.0
+### 1.0.4
 
 **New: Contacts and Browse pages**
 
