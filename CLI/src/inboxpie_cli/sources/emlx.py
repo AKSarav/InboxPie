@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import email
+import html as html_lib
 import plistlib
 import re
 from datetime import datetime, timedelta, timezone
@@ -43,8 +44,64 @@ def _decode_header_value(value: object) -> str:
         return text
 
 
-def _parse_emlx(path: Path) -> tuple[dict[str, str], dict[str, object]]:
-    """Parse an emlx file, returning (headers_dict, plist_dict)."""
+def _decode_part(part: email.message.Message) -> str:
+    """Decode a single MIME part's payload to a string (best effort)."""
+    try:
+        payload = part.get_payload(decode=True)
+        if payload:
+            charset = part.get_content_charset() or "utf-8"
+            return payload.decode(charset, errors="replace")
+    except Exception:
+        pass
+    return ""
+
+
+def _html_to_text(raw_html: str) -> str:
+    """Strip HTML to readable text (stdlib only) — for HTML-only emails."""
+    if not raw_html:
+        return ""
+    # Drop script/style blocks entirely
+    raw_html = re.sub(r"(?is)<(script|style)\b[^>]*>.*?</\1>", " ", raw_html)
+    # Turn block-level boundaries into line breaks so words don't run together
+    raw_html = re.sub(r"(?i)<(br|/p|/div|/tr|/li|/h[1-6]|/table)\b[^>]*>", "\n", raw_html)
+    # Remove all remaining tags
+    raw_html = re.sub(r"(?s)<[^>]+>", " ", raw_html)
+    # Decode HTML entities (&amp; &rupee; &nbsp; …)
+    return html_lib.unescape(raw_html)
+
+
+def _extract_body_text(msg: email.message.Message, max_chars: int = 4000) -> str:
+    """Extract readable body text, preferring text/plain, falling back to HTML.
+
+    Many transactional emails (bank/MF receipts) are HTML-only — without the HTML
+    fallback their body comes back empty and Full-content indexing has nothing to read.
+    """
+    plain = ""
+    html = ""
+
+    if msg.is_multipart():
+        for part in msg.walk():
+            disp = str(part.get("Content-Disposition") or "").lower()
+            if "attachment" in disp:
+                continue
+            ctype = part.get_content_type()
+            if ctype == "text/plain" and not plain:
+                plain = _decode_part(part)
+            elif ctype == "text/html" and not html:
+                html = _decode_part(part)
+    else:
+        ctype = msg.get_content_type()
+        if ctype == "text/plain":
+            plain = _decode_part(msg)
+        elif ctype == "text/html":
+            html = _decode_part(msg)
+
+    text = plain if plain.strip() else _html_to_text(html)
+    return " ".join(text.split())[:max_chars]
+
+
+def _parse_emlx(path: Path, include_body: bool = False) -> tuple[dict[str, str], dict[str, object], str]:
+    """Parse an emlx file, returning (headers_dict, plist_dict, body_preview)."""
     raw = path.read_bytes()
 
     newline_idx = raw.find(b"\n")
@@ -75,7 +132,8 @@ def _parse_emlx(path: Path) -> tuple[dict[str, str], dict[str, object]]:
         except Exception:
             pass
 
-    return headers, plist_data
+    body_preview = _extract_body_text(msg) if include_body else ""
+    return headers, plist_data, body_preview
 
 
 def _parse_author(author: object) -> tuple[str, str]:
@@ -164,9 +222,9 @@ def _folder_matches(folder_name: str, filters: set[str]) -> bool:
     return any(fragment.lower() in haystack for fragment in filters)
 
 
-def _record_from_emlx(emlx_path: Path, mail_root: Path) -> MessageRecord | None:
+def _record_from_emlx(emlx_path: Path, mail_root: Path, include_body: bool = False) -> MessageRecord | None:
     folder, account_id, account = _extract_folder_account(emlx_path, mail_root)
-    headers, plist = _parse_emlx(emlx_path)
+    headers, plist, body_preview = _parse_emlx(emlx_path, include_body=include_body)
 
     sender_name, sender_email = _parse_author(headers.get("from", ""))
     domain = sender_email.split("@", 1)[1] if "@" in sender_email else "unknown"
@@ -199,10 +257,11 @@ def _record_from_emlx(emlx_path: Path, mail_root: Path) -> MessageRecord | None:
         accountId=account_id,
         tags=[],
         size=emlx_path.stat().st_size,
+        body_preview=body_preview,
     )
 
 
-def scan_emlx(mail_root: Path, folders: set[str] | None = None) -> list[MessageRecord]:
+def scan_emlx(mail_root: Path, folders: set[str] | None = None, include_body: bool = False) -> list[MessageRecord]:
     """Scan all .emlx files under mail_root."""
     root = _find_mail_root(mail_root)
     filter_folders = folders or set()
@@ -217,7 +276,7 @@ def scan_emlx(mail_root: Path, folders: set[str] | None = None) -> list[MessageR
             continue
 
         try:
-            record = _record_from_emlx(emlx_path, root)
+            record = _record_from_emlx(emlx_path, root, include_body=include_body)
         except Exception:
             continue
 

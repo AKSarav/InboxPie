@@ -11,6 +11,9 @@
   const expandedSenders = new Set();
   /** Sender/year rows expanded in By Sender (month breakdown). */
   const expandedSenderYears = new Set();
+  /** Raw (unmasked) domain/sender set by clicking a pie slice; exact-matches the table, keeping the visible search box masked. */
+  let domainChartFilterValue = null;
+  let senderChartFilterValue = null;
 
   const timelineState = {
     windowMonths: 24,
@@ -21,12 +24,25 @@
     query: "",
     sort: "date-desc",
   };
+  /** IDs (as strings) checked via the checkbox column in the Review Selected modal. Reset to "all checked" whenever the modal opens or a bulk action runs. */
+  let reviewCheckedIds = new Set();
+  /** Virtual scroll tuning for the selection review table — must match .selection-review-row height in CSS. */
+  const SR_ROW_HEIGHT = 54;
+  const SR_VIRTUAL_BUFFER = 8;
+  const browseState = {
+    query: "",
+    sort: "date-desc",
+  };
   let privacyMaskEnabled = false;
-  const DEFAULT_FOLDER_TYPES = ["inbox", "sent", "archives", "junk"];
+  const DEFAULT_FOLDER_TYPES = ["inbox"];
   /** Selected scan folders as `${accountId}::${path}` keys. */
   let selectedFolderKeys = new Set();
   let scanFolderList = [];
   let folderListLoaded = false;
+  /** True only once the folder checkboxes have actually been painted into #folderDropdownList — distinct from folderListLoaded, which can become true via a background fetch (e.g. right after switching accounts) with no checkboxes in the DOM at all. */
+  let folderDropdownRendered = false;
+  /** Scan date-range filter: { fromYear, fromMonth, toYear, toMonth } (1-indexed months), or null for all time. */
+  let scanDateRange = null;
   /** Last domain drill-down shown under PieView (for refresh on privacy toggle). */
   let sunburstDetailState = null;
   
@@ -55,6 +71,12 @@
   //  INIT
   // ══════════════════════════════════════════
   async function init() {
+    // Version badge reads straight from manifest.json so it can't silently drift out of sync on future releases.
+    const versionBadge = $(".version-badge");
+    if (versionBadge && browser?.runtime?.getManifest) {
+      versionBadge.textContent = `v${browser.runtime.getManifest().version}`;
+    }
+
     // Load saved theme
     const saved = localStorage.getItem("mail-audit-theme") || "dark";
     document.documentElement.setAttribute("data-theme", saved);
@@ -114,13 +136,24 @@
       selectSenderForReview(btn.getAttribute("data-select-email"), sunburstDetailState.msgs);
     });
 
-    // Clickable stat card for selected emails
-    $("#statCardSelected").addEventListener("click", () => {
+    // Floating selection bar — follows the user around the app and opens the review modal
+    $("#floatingSelectionBar").addEventListener("click", () => {
       if (selectedIds.size > 0) showSelectionReviewModal();
+    });
+    $("#floatingSelectionReviewBtn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (selectedIds.size > 0) showSelectionReviewModal();
+    });
+    $("#floatingSelectionResetBtn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (selectedIds.size > 0) clearSelection();
     });
 
     // Folder selection
     initFolderSelection();
+
+    // Scan date range
+    initDateRangeSelection();
 
     // Accounts
     try {
@@ -136,9 +169,17 @@
     } catch (e) {
       console.warn("Could not fetch accounts:", e);
     }
+    updateAccountSelectActiveState();
 
     scanBtn.addEventListener("click", startScan);
-    accountSelect.addEventListener("change", resetDashboard);
+    accountSelect.addEventListener("change", () => {
+      updateAccountSelectActiveState();
+      resetDashboard();
+      // Proactively load this account's folders and apply the default selection so the
+      // Folders button shows the real (active, correctly-counted) state immediately —
+      // not just once the user happens to open the dropdown or click Scan.
+      loadScanFolders().catch((e) => console.warn("Could not load folders for account:", e));
+    });
     document.querySelectorAll(".tab").forEach((t) =>
       t.addEventListener("click", () => switchView(t.dataset.view))
     );
@@ -146,8 +187,17 @@
     // Export buttons
     $("#exportCsvBtn").addEventListener("click", exportCSV);
     $("#exportJsonBtn").addEventListener("click", exportJSON);
+    $("#contactsExportCsvBtn").addEventListener("click", exportContactsCSV);
+    $("#contactsExportJsonBtn").addEventListener("click", exportContactsJSON);
 
     $("#selectionReviewTable").addEventListener("click", (e) => {
+      const link = e.target.closest("[data-open-message]");
+      if (!link) return;
+      e.preventDefault();
+      openMessageInThunderbird(link.getAttribute("data-open-message"));
+    });
+
+    $("#browseTable").addEventListener("click", (e) => {
       const link = e.target.closest("[data-open-message]");
       if (!link) return;
       e.preventDefault();
@@ -164,19 +214,317 @@
       }
     });
 
-    // Progress listener
+    // Per-page tip banners — dismissed state persists (per tip id) across sessions.
+    initTipBanners();
+    $("#app").addEventListener("click", (e) => {
+      const closeBtn = e.target.closest("[data-tip-close]");
+      if (!closeBtn) return;
+      const tipId = closeBtn.dataset.tipClose;
+      localStorage.setItem(`inboxpie-tip-dismissed-${tipId}`, "true");
+      const banner = closeBtn.closest(".tip-banner");
+      if (banner) banner.style.display = "none";
+    });
+
+    // Scan progress listener. deleteProgress/moveProgress are handled locally by
+    // showDeleteModal()/showMoveFolderModal() so their in-modal pie ring can update live.
     browser.runtime.onMessage.addListener((msg) => {
       if (msg.action === "progress") {
         $("#progressText").textContent = `Scanned ${msg.count.toLocaleString()} messages…`;
         $("#progressFill").style.width = "60%";
       }
-      if (msg.action === "deleteProgress") {
-        $("#progressText").textContent = `Moving ${msg.moved}/${msg.total} to Trash…`;
-      }
-      if (msg.action === "moveProgress") {
-        $("#progressText").textContent = `Moving ${msg.moved}/${msg.total} messages…`;
+    });
+
+    // Tab bar horizontal scroll (small screens / lots of tabs) — fade-edge arrows
+    // only appear once the tab row actually overflows its container.
+    const tabsScrollEl = $("#viewTabs");
+    $("#tabsScrollLeft").addEventListener("click", () => {
+      tabsScrollEl.scrollBy({ left: -160, behavior: "smooth" });
+    });
+    $("#tabsScrollRight").addEventListener("click", () => {
+      tabsScrollEl.scrollBy({ left: 160, behavior: "smooth" });
+    });
+    let tabsScrollRafPending = false;
+    tabsScrollEl.addEventListener("scroll", () => {
+      if (tabsScrollRafPending) return;
+      tabsScrollRafPending = true;
+      requestAnimationFrame(() => { tabsScrollRafPending = false; updateTabsScrollState(); });
+    });
+    window.addEventListener("resize", updateTabsScrollState);
+
+    // Sunburst zoom reset
+    $("#sunburstResetBtn").addEventListener("click", () => {
+      const chartHost = $("#sunburstChart");
+      const chart = chartHost && chartHost.querySelector(".chart-host")?._echartsInstance;
+      if (chart) chart.dispatchAction({ type: "restore" });
+    });
+
+    // Guided tour
+    $("#tourHelpBtn").addEventListener("click", startTour);
+    $("#tourNextBtn").addEventListener("click", advanceTour);
+    $("#tourBackBtn").addEventListener("click", rewindTour);
+    $("#tourSkipBtn").addEventListener("click", endTour);
+    window.addEventListener("resize", () => {
+      if ($("#tourOverlay").style.display !== "none") positionTourStep();
+    });
+    if (localStorage.getItem("mail-audit-tour-completed") !== "true") {
+      setTimeout(startTour, 500);
+    }
+
+    // Support popover — scheduled once the user has actually scanned and spent some time
+    // in the app (see scan-completion handler below), not on cold page load.
+    $("#supportPopoverClose").addEventListener("click", () => {
+      $("#supportPopover").style.display = "none";
+      sessionStorage.setItem("inboxpie-support-dismissed", "true");
+    });
+  }
+
+  // ══════════════════════════════════════════
+  //  GUIDED TOUR
+  // ══════════════════════════════════════════
+  // Pre-scan: shown on the landing screen, walks through how to start a scan.
+  const GETTING_STARTED_TOUR_STEPS = [
+    {
+      target: "#accountSelect",
+      title: "Select your email account",
+      text: "Choose which mail account InboxPie should analyze, or leave it on “All Accounts” to scan everything at once.",
+    },
+    {
+      target: "#folderSelectBtn",
+      title: "Choose folders",
+      text: "Pick specific folders to scan, or keep the default selection to cover your whole mailbox.",
+    },
+    {
+      target: "#scanBtn",
+      title: "Scan your mailbox",
+      text: "Click Scan Mailbox to start. InboxPie reads only metadata — sender, subject, size, date — never your email content.",
+    },
+    {
+      target: "#privacyToggle",
+      title: "Privacy mode (optional)",
+      text: "Presenting or sitting with someone else? Click the eye icon to mask sender emails and domains before they're shown on screen.",
+    },
+    {
+      target: "#githubLink",
+      title: "Enjoying InboxPie?",
+      text: "If InboxPie helped you clean up your inbox, consider starring the project on GitHub or leaving a review in the Thunderbird Add-ons community — it really helps!",
+    },
+  ];
+
+  // Post-scan: shown once results are in, walks through what each tab does.
+  const APP_TOUR_STEPS = [
+    {
+      target: '.tab[data-view="sunburst"]',
+      title: "PieView — the big picture",
+      text: "A sunburst of your mailbox: Year → Month → Domain. Click a ring to zoom in, click a domain to see exactly who's emailing you from it.",
+    },
+    {
+      target: '.tab[data-view="sender"]',
+      title: "By Sender",
+      text: "Every sender ranked by volume, with a year/month breakdown per sender. Select and bulk move or trash straight from here.",
+    },
+    {
+      target: '.tab[data-view="domain"]',
+      title: "By Domain",
+      text: "The same idea grouped by sending domain — handy for spotting newsletter or notification domains worth unsubscribing from in bulk.",
+    },
+    {
+      target: '.tab[data-view="size"]',
+      title: "By Size",
+      text: "Find what's eating your mailbox storage: size buckets, the heaviest senders and domains, and old large messages worth clearing out.",
+    },
+    {
+      target: '.tab[data-view="timeline"]',
+      title: "Timeline",
+      text: "Monthly email volume over time. Click a month to focus the cleanup insights below on just that period.",
+    },
+    {
+      target: '.tab[data-view="subscriptions"]',
+      title: "Subscriptions",
+      text: "Recurring senders and newsletters, auto-detected with a frequency breakdown (daily, weekly, monthly...).",
+    },
+    {
+      target: '.tab[data-view="categories"]',
+      title: "Categories",
+      text: "Emails auto-sorted into smart categories like Finance, Shopping, and Travel, each with its own sender chart.",
+    },
+    {
+      target: '.tab[data-view="contacts"]',
+      title: "Contacts",
+      text: "Every unique sender as a searchable contact card, grouped A–Z. Export the list to CSV or JSON whenever you need it.",
+    },
+    {
+      target: '.tab[data-view="settings"]',
+      title: "Settings",
+      text: "Manage your categories here — edit keywords, add your own categories, or remove ones you don't need.",
+    },
+  ];
+
+  // Review Selected modal: walks through search/sort, the checkbox selection engine, and every action button.
+  const REVIEW_TOUR_STEPS = [
+    {
+      target: "#selectionReviewSearch",
+      title: "Search within your selection",
+      text: "Narrow the list down to a subject, sender, or folder. Everything below — including the action buttons — reacts to what's currently matched.",
+    },
+    {
+      target: "#selectionReviewSort",
+      title: "Sort the list",
+      text: "Reorder by date, size, sender, or subject to make it easier to spot what you're looking for.",
+    },
+    {
+      target: "#selectionReviewSelectAllVisible",
+      title: "Select all",
+      text: "Ticks or unticks every matched row — including ones you'd have to scroll to see. Rows start checked by default — everything you selected is included unless you uncheck it.",
+    },
+    {
+      target: ".selection-row-checkbox",
+      title: "Per-row checkbox",
+      text: "Uncheck individual emails you want to spare from whatever bulk action you're about to run — without losing them from your overall selection permanently.",
+    },
+    {
+      target: "#selectionReviewExcludeMatches",
+      title: "Exclude checked",
+      text: "Removes every checked, currently-matched email from your selection. Nothing is deleted or moved — it just drops out of the review list.",
+    },
+    {
+      target: "#selectionReviewKeepOnlyMatches",
+      title: "Keep only checked",
+      text: "The opposite: keeps just the checked, matched emails in your selection and drops everything else. Handy after a search — narrow down, then prune the rest away.",
+    },
+    {
+      target: "#selectionReviewExport",
+      title: "Export CSV",
+      text: "Save the checked, matched emails to a CSV file for your records before taking any action.",
+    },
+    {
+      target: "#selectionReviewFolder",
+      title: "Move to Folder",
+      text: "Moves only the checked, matched emails to a folder you choose. The count on the button always reflects exactly what will move.",
+    },
+    {
+      target: "#selectionReviewTrash",
+      title: "Move to Trash",
+      text: "Moves the checked, matched emails to Trash — not permanently deleted. You can recover them from Trash afterward if needed.",
+    },
+  ];
+
+  let activeTourSteps = GETTING_STARTED_TOUR_STEPS;
+  let activeTourFlag = "mail-audit-tour-completed";
+  let tourStepIndex = 0;
+
+  /** Support popover: only offered once the user has scanned and spent ~30s actually using the app — not on cold load. One timer per tab session. */
+  let supportPopoverScheduled = false;
+  function scheduleSupportPopover() {
+    if (supportPopoverScheduled) return;
+    if (sessionStorage.getItem("inboxpie-support-dismissed") === "true") return;
+    supportPopoverScheduled = true;
+    setTimeout(() => {
+      if (sessionStorage.getItem("inboxpie-support-dismissed") === "true") return;
+      const popover = $("#supportPopover");
+      if (popover) popover.style.display = "block";
+    }, 30000);
+  }
+
+  /** Hide any per-page tip banners the user already dismissed in a previous session (localStorage — permanent, unlike the session-scoped support popover). */
+  function initTipBanners() {
+    document.querySelectorAll(".tip-banner[data-tip-id]").forEach((banner) => {
+      if (localStorage.getItem(`inboxpie-tip-dismissed-${banner.dataset.tipId}`) === "true") {
+        banner.style.display = "none";
       }
     });
+  }
+
+  function startTour() {
+    const isPostScan = allMessages.length > 0;
+    const steps = isPostScan ? APP_TOUR_STEPS : GETTING_STARTED_TOUR_STEPS;
+    const flag = isPostScan ? "mail-audit-app-tour-completed" : "mail-audit-tour-completed";
+    startCustomTour(steps, flag);
+  }
+
+  function startReviewTour() {
+    startCustomTour(REVIEW_TOUR_STEPS, "mail-audit-review-tour-completed");
+  }
+
+  function startCustomTour(steps, flag) {
+    activeTourSteps = steps;
+    activeTourFlag = flag;
+    tourStepIndex = 0;
+    $("#tourOverlay").style.display = "block";
+    renderTourStep();
+  }
+
+  function endTour() {
+    $("#tourOverlay").style.display = "none";
+    localStorage.setItem(activeTourFlag, "true");
+  }
+
+  function advanceTour() {
+    if (tourStepIndex >= activeTourSteps.length - 1) {
+      endTour();
+      return;
+    }
+    tourStepIndex++;
+    renderTourStep();
+  }
+
+  function rewindTour() {
+    if (tourStepIndex === 0) return;
+    tourStepIndex--;
+    renderTourStep();
+  }
+
+  function renderTourStep() {
+    const step = activeTourSteps[tourStepIndex];
+    const target = document.querySelector(step.target);
+    if (!target) {
+      // Target not present in this build; skip to the next step defensively.
+      advanceTour();
+      return;
+    }
+
+    $("#tourStepLabel").textContent = `Step ${tourStepIndex + 1} of ${activeTourSteps.length}`;
+    $("#tourTitle").textContent = step.title;
+    $("#tourText").textContent = step.text;
+    setSafeHtml($("#tourDots"), activeTourSteps
+      .map((_, i) => `<span class="tour-dot ${i === tourStepIndex ? "active" : ""}"></span>`)
+      .join(""));
+    $("#tourBackBtn").style.visibility = tourStepIndex === 0 ? "hidden" : "visible";
+    $("#tourNextBtn").textContent = tourStepIndex === activeTourSteps.length - 1 ? "Finish" : "Next";
+
+    positionTourStep();
+  }
+
+  function positionTourStep() {
+    const step = activeTourSteps[tourStepIndex];
+    const target = document.querySelector(step.target);
+    const spotlight = $("#tourSpotlight");
+    const popover = $("#tourPopover");
+    if (!target || !spotlight || !popover) return;
+
+    const rect = target.getBoundingClientRect();
+    const pad = 6;
+    spotlight.style.top = `${rect.top - pad}px`;
+    spotlight.style.left = `${rect.left - pad}px`;
+    spotlight.style.width = `${rect.width + pad * 2}px`;
+    spotlight.style.height = `${rect.height + pad * 2}px`;
+
+    const popW = popover.offsetWidth || 320;
+    const popH = popover.offsetHeight || 160;
+    let top = rect.bottom + 14;
+    if (top + popH > window.innerHeight - 12) top = Math.max(12, rect.top - popH - 14);
+    const left = Math.min(Math.max(12, rect.left), window.innerWidth - popW - 12);
+    popover.style.top = `${top}px`;
+    popover.style.left = `${left}px`;
+  }
+
+  /** Toggles the fade-edge scroll arrows on the tab bar based on actual overflow/scroll position. */
+  function updateTabsScrollState() {
+    const wrap = $("#viewTabsWrap");
+    const tabs = $("#viewTabs");
+    if (!wrap || !tabs || wrap.style.display === "none") return;
+    const maxScroll = tabs.scrollWidth - tabs.clientWidth;
+    wrap.classList.toggle("can-scroll-left", tabs.scrollLeft > 2);
+    wrap.classList.toggle("can-scroll-right", tabs.scrollLeft < maxScroll - 2);
   }
 
   function updateThemeIcon(theme) {
@@ -249,14 +597,6 @@
 
   function looksLikeDomain(value) {
     return typeof value === "string" && !value.includes("@") && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(value.trim());
-  }
-
-  function displayPrivateLabel(label) {
-    if (!privacyMaskEnabled || label == null) return label;
-    const text = String(label);
-    if (looksLikeEmail(text)) return displayEmail(text);
-    if (looksLikeDomain(text)) return displayDomain(text);
-    return maskAccountText(text);
   }
 
   function maskFolderName(name) {
@@ -358,12 +698,14 @@
       if (inbox) selectedFolderKeys.add(folderKey(inbox.accountId, inbox.path));
     }
     saveFolderSelections();
+    updateFolderBadge();
   }
 
   function syncFolderSelectionsToList() {
     const validKeys = new Set(scanFolderList.map((f) => folderKey(f.accountId, f.path)));
     selectedFolderKeys = new Set(Array.from(selectedFolderKeys).filter((key) => validKeys.has(key)));
     if (selectedFolderKeys.size === 0) applyDefaultFolderSelections();
+    updateFolderBadge();
   }
 
   async function loadScanFolders() {
@@ -483,6 +825,7 @@
       label.appendChild(span);
       list.appendChild(label);
     });
+    folderDropdownRendered = true;
     updateFolderBadge();
   }
 
@@ -588,10 +931,16 @@
     updateFolderBadge();
   }
 
+  function updateAccountSelectActiveState() {
+    $(".account-select-wrap")?.classList.toggle("active", accountSelect.value !== "all");
+  }
+
   function updateFolderBadge() {
     const badge = $("#folderCountBadge");
     const label = $("#folderSelectLabel");
+    const btn = $("#folderSelectBtn");
     if (label) label.textContent = "Folders";
+    if (btn) btn.classList.toggle("active", selectedFolderKeys.size > 0);
     if (!badge) return;
     badge.textContent = selectedFolderKeys.size;
     badge.style.display = selectedFolderKeys.size > 0 ? "inline-block" : "none";
@@ -772,7 +1121,7 @@
 
     if (label) {
       if (viewFilterFolderKeys.size === 0 || checkedCount === totalCount || checkedCount === 0) {
-        label.textContent = "All scanned";
+        label.textContent = "Folders";
       } else if (viewFilterFolderKeys.size === 1) {
         const checked = Array.from(checkboxes).find((cb) => cb.checked);
         label.textContent = displayFolderName(checked?.dataset.folderName) || "1 folder";
@@ -797,6 +1146,119 @@
   }
 
   // ══════════════════════════════════════════
+  //  SCAN DATE RANGE
+  // ══════════════════════════════════════════
+  const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const DATE_RANGE_EARLIEST_YEAR = 1995;
+
+  function initDateRangeSelection() {
+    const btn = $("#dateRangeBtn");
+    const dropdown = $("#dateRangeDropdown");
+    if (!btn || !dropdown) return;
+
+    const nowYear = new Date().getFullYear();
+    const monthOptions = MONTH_NAMES.map((name, i) => `<option value="${i + 1}">${name}</option>`).join("");
+    let yearOptions = "";
+    for (let y = nowYear; y >= DATE_RANGE_EARLIEST_YEAR; y--) {
+      yearOptions += `<option value="${y}">${y}</option>`;
+    }
+    setSafeHtml($("#dateRangeFromMonth"), monthOptions);
+    setSafeHtml($("#dateRangeToMonth"), monthOptions);
+    setSafeHtml($("#dateRangeFromYear"), yearOptions);
+    setSafeHtml($("#dateRangeToYear"), yearOptions);
+
+    loadSavedDateRange();
+    applyDateRangeToSelects();
+    updateDateRangeLabel();
+
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isVisible = dropdown.style.display === "block";
+      dropdown.style.display = isVisible ? "none" : "block";
+    });
+
+    document.addEventListener("click", (e) => {
+      if (!e.target.closest("#dateRangeBtn") && !e.target.closest("#dateRangeDropdown")) {
+        dropdown.style.display = "none";
+      }
+    });
+
+    $("#dateRangeApply").addEventListener("click", () => {
+      const fromYear = parseInt($("#dateRangeFromYear").value, 10);
+      const fromMonth = parseInt($("#dateRangeFromMonth").value, 10);
+      const toYear = parseInt($("#dateRangeToYear").value, 10);
+      const toMonth = parseInt($("#dateRangeToMonth").value, 10);
+
+      if (fromYear > toYear || (fromYear === toYear && fromMonth > toMonth)) {
+        alert("The \"From\" date must be before the \"To\" date.");
+        return;
+      }
+
+      scanDateRange = { fromYear, fromMonth, toYear, toMonth };
+      saveDateRange();
+      updateDateRangeLabel();
+      dropdown.style.display = "none";
+    });
+
+    $("#dateRangeClear").addEventListener("click", () => {
+      scanDateRange = null;
+      saveDateRange();
+      applyDateRangeToSelects();
+      updateDateRangeLabel();
+      dropdown.style.display = "none";
+    });
+  }
+
+  function applyDateRangeToSelects() {
+    const nowYear = new Date().getFullYear();
+    const nowMonth = new Date().getMonth() + 1;
+    const range = scanDateRange || { fromYear: nowYear - 1, fromMonth: nowMonth, toYear: nowYear, toMonth: nowMonth };
+    $("#dateRangeFromYear").value = String(range.fromYear);
+    $("#dateRangeFromMonth").value = String(range.fromMonth);
+    $("#dateRangeToYear").value = String(range.toYear);
+    $("#dateRangeToMonth").value = String(range.toMonth);
+  }
+
+  function updateDateRangeLabel() {
+    const label = $("#dateRangeLabel");
+    const btn = $("#dateRangeBtn");
+    if (!label || !btn) return;
+    if (!scanDateRange) {
+      label.textContent = "Scan Range";
+      btn.classList.remove("active");
+      btn.title = "Scan Range — limits which messages get scanned (currently: all time)";
+    } else {
+      const { fromYear, fromMonth, toYear, toMonth } = scanDateRange;
+      label.textContent = `${MONTH_NAMES[fromMonth - 1]} ${fromYear} – ${MONTH_NAMES[toMonth - 1]} ${toYear}`;
+      btn.classList.add("active");
+      btn.title = "Scan Range — limits which messages get scanned (click to change)";
+    }
+  }
+
+  function saveDateRange() {
+    if (scanDateRange) localStorage.setItem("mail-audit-date-range", JSON.stringify(scanDateRange));
+    else localStorage.removeItem("mail-audit-date-range");
+  }
+
+  function loadSavedDateRange() {
+    try {
+      const saved = localStorage.getItem("mail-audit-date-range");
+      scanDateRange = saved ? JSON.parse(saved) : null;
+    } catch (e) {
+      scanDateRange = null;
+    }
+  }
+
+  /** First/last instant of the saved range, as epoch ms, for filtering message dates. Null fields mean unbounded. */
+  function getDateRangeBounds() {
+    if (!scanDateRange) return null;
+    const { fromYear, fromMonth, toYear, toMonth } = scanDateRange;
+    const from = new Date(fromYear, fromMonth - 1, 1, 0, 0, 0, 0).getTime();
+    const to = new Date(toYear, toMonth, 0, 23, 59, 59, 999).getTime(); // day 0 of next month = last day of toMonth
+    return { from, to };
+  }
+
+  // ══════════════════════════════════════════
   //  RESET (account change)
   // ══════════════════════════════════════════
   function resetDashboard() {
@@ -805,6 +1267,8 @@
     expandedDomains.clear();
     expandedSenders.clear();
     expandedSenderYears.clear();
+    domainChartFilterValue = null;
+    senderChartFilterValue = null;
     timelineState.windowMonths = 24;
     timelineState.offsetMonths = 0;
     timelineState.selectedMonth = null;
@@ -813,11 +1277,13 @@
     currentView = "sunburst";
     sunburstDetailState = null;
     folderListLoaded = false;
+    folderDropdownRendered = false;
     viewFilterFolderKeys.clear();
     scannedFolderList = [];
     scanFolderList = [];
     selectedFolderKeys.clear();
     saveFolderSelections();
+    updateFolderBadge();
 
     const folderHeader = $("#folderDropdownHeader");
     const folderLabel = $("#folderSelectLabel");
@@ -848,9 +1314,9 @@
     $("#folderModal").style.display = "none";
 
     $("#progressArea").style.display = "none";
-    $("#statsBar").style.display = "none";
-    $("#viewTabs").style.display = "none";
+    $("#viewTabsWrap").style.display = "none";
     $("#exportBar").style.display = "none";
+    $("#floatingSelectionBar").style.display = "none";
     $("#landingState").style.display = "flex";
 
     document.querySelectorAll(".view-panel").forEach((p) => (p.style.display = "none"));
@@ -858,12 +1324,12 @@
     document.querySelector('.tab[data-view="sunburst"]')?.classList.add("active");
 
     $("#statTotal").textContent = "0";
-    $("#statSenders").textContent = "0";
-    $("#statUnread").textContent = "0";
-    $("#statSelected").textContent = "0";
+    $("#statSize").textContent = "0";
+    $("#floatingSelectionCount").textContent = "0";
+    lastSelectedStatCount = null;
 
-    clearElement($("#sunburstSvg"));
-    clearElement($("#sunburstBreadcrumb"));
+    clearElement($("#sunburstChart"));
+    clearElement($("#sunburstCenterStat"));
     clearElement($("#legendPanel"));
     clearElement($("#sunburstDetail"));
     clearElement($("#senderTable"));
@@ -878,6 +1344,11 @@
     if (senderSearch) senderSearch.value = "";
     if (domainSearch) domainSearch.value = "";
 
+    browseState.query = "";
+    browseState.sort = "date-desc";
+    const browseTable = $("#browseTable");
+    if (browseTable) { browseTable.onscroll = null; clearElement(browseTable); }
+
     scanBtn.disabled = false;
     scanBtn.querySelector(".btn-text").style.display = "inline";
     scanBtn.querySelector(".btn-loader").style.display = "none";
@@ -888,7 +1359,10 @@
   //  SCAN
   // ══════════════════════════════════════════
   async function startScan() {
-    if (folderListLoaded && !isViewFilterMode()) {
+    // Only trust the dropdown's checkbox DOM if it was actually painted — folderListLoaded
+    // can be true from a background fetch (e.g. right after switching accounts) with no
+    // checkboxes ever rendered, which would otherwise wipe the just-computed defaults to empty.
+    if (folderDropdownRendered && !isViewFilterMode()) {
       syncSelectedFoldersFromDom();
     }
 
@@ -915,15 +1389,19 @@
     $("#landingState").style.display = "none";
     $("#progressArea").style.display = "block";
     $("#progressFill").style.width = "20%";
-    $("#progressText").textContent = `Scanning ${folderSelections.length.toLocaleString()} folder${folderSelections.length === 1 ? "" : "s"}…`;
+    const rangeSuffix = scanDateRange ? ` (${$("#dateRangeLabel").textContent})` : "";
+    $("#progressText").textContent = `Scanning ${folderSelections.length.toLocaleString()} folder${folderSelections.length === 1 ? "" : "s"}${rangeSuffix}…`;
 
     try {
       const acctVal = accountSelect.value;
+      const dateBounds = getDateRangeBounds();
       const result = await browser.runtime.sendMessage({
         action: "fetchAllMail",
         options: {
           accountId: acctVal === "all" ? null : acctVal,
           folderSelections,
+          dateFrom: dateBounds ? dateBounds.from : null,
+          dateTo: dateBounds ? dateBounds.to : null,
         },
       });
 
@@ -937,12 +1415,16 @@
 
       setTimeout(() => {
         $("#progressArea").style.display = "none";
-        $("#statsBar").style.display = "grid";
-        $("#viewTabs").style.display = "flex";
+        $("#viewTabsWrap").style.display = "block";
         $("#exportBar").style.display = "flex";
         updateStats();
         renderViewFilterDropdown();
         switchView("sunburst");
+        updateTabsScrollState();
+        if (localStorage.getItem("mail-audit-app-tour-completed") !== "true") {
+          setTimeout(startTour, 500);
+        }
+        scheduleSupportPopover();
       }, 600);
     } catch (e) {
       $("#progressText").textContent = `Error: ${e.message}`;
@@ -954,13 +1436,29 @@
     }
   }
 
+  let lastSelectedStatCount = null;
+
   function updateStats() {
     const msgs = getFilteredMessages();
     $("#statTotal").textContent = msgs.length.toLocaleString();
-    $("#statSenders").textContent = new Set(msgs.map((m) => m.senderEmail)).size.toLocaleString();
-    $("#statUnread").textContent = msgs.filter((m) => !m.read).length.toLocaleString();
-    $("#statSelected").textContent = selectedIds.size.toLocaleString();
+    $("#statSize").textContent = formatBytes(msgs.reduce((sum, m) => sum + messageSize(m), 0));
+    updateFloatingSelectionBar();
     updateBulkButtons();
+  }
+
+  /** Floating selection bar — fixed to the viewport (not the scrolling body), so it's always visible regardless of scroll position. Bumps briefly whenever the count changes. */
+  function updateFloatingSelectionBar() {
+    const bar = $("#floatingSelectionBar");
+    if (!bar) return;
+    const count = selectedIds.size;
+    $("#floatingSelectionCount").textContent = count.toLocaleString();
+    bar.style.display = count > 0 ? "flex" : "none";
+    if (count > 0 && lastSelectedStatCount !== null && count !== lastSelectedStatCount) {
+      bar.classList.remove("bump");
+      void bar.offsetWidth; // restart the animation even if it's still running
+      bar.classList.add("bump");
+    }
+    lastSelectedStatCount = count;
   }
 
   function updateBulkButtons() {
@@ -968,10 +1466,12 @@
     const domainBar = $("#domainBulkButtons");
     const sizeBar = $("#sizeBulkButtons");
     const timelineBar = $("#timelineBulkButtons");
+    const categoriesBar = $("#categoriesBulkButtons");
     if (senderBar) senderBar.style.display = selectedIds.size > 0 && currentView === "sender" ? "flex" : "none";
     if (domainBar) domainBar.style.display = selectedIds.size > 0 && currentView === "domain" ? "flex" : "none";
     if (sizeBar) sizeBar.style.display = selectedIds.size > 0 && currentView === "size" ? "flex" : "none";
     if (timelineBar) timelineBar.style.display = selectedIds.size > 0 && currentView === "timeline" ? "flex" : "none";
+    if (categoriesBar) categoriesBar.style.display = selectedIds.size > 0 && currentView === "categories" ? "flex" : "none";
     document.querySelectorAll(".bulk-delete-count").forEach((el) => {
       el.textContent = String(selectedIds.size);
     });
@@ -980,7 +1480,10 @@
   function switchView(view) {
     currentView = view;
     document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
-    document.querySelector(`.tab[data-view="${view}"]`).classList.add("active");
+    const activeTab = document.querySelector(`.tab[data-view="${view}"]`);
+    activeTab.classList.add("active");
+    activeTab.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+    updateTabsScrollState();
     document.querySelectorAll(".view-panel").forEach((p) => (p.style.display = "none"));
     const panel = $(`#${view}View`);
     if (panel) {
@@ -990,45 +1493,214 @@
       else if (view === "domain") renderDomainTable();
       else if (view === "size") renderSizeDashboard();
       else if (view === "timeline") renderTimeline();
+      else if (view === "subscriptions") renderSubscriptionsView();
+      else if (view === "categories") renderCategoriesView();
+      else if (view === "contacts") renderContactsView();
+      else if (view === "browse") renderBrowseView();
+      else if (view === "settings") renderSettingsView();
     }
     updateBulkButtons();
   }
 
   // ══════════════════════════════════════════
-  //  SUNBURST CHART (theme-aware)
+  //  ECHARTS UTILITIES & BAR CHART RENDERING
   // ══════════════════════════════════════════
-  function renderSunburst(filterFn = null, breadcrumbPath = []) {
-    const svg = $("#sunburstSvg");
-    clearElement(svg);
+
+  function initViewChart(hostId, option, legendData = null) {
+    if (!window.echarts) return;
+    const el = document.getElementById(hostId);
+    if (!el) return;
+
+    // Clear container and set up split layout if legend is provided
+    let chartHost = el.querySelector('.chart-host');
+    if (!chartHost) {
+      clearElement(el);
+      chartHost = document.createElement('div');
+      chartHost.className = 'chart-host';
+      el.appendChild(chartHost);
+      if (legendData) {
+        el.classList.add('with-legend');
+        const legendContainer = document.createElement('div');
+        legendContainer.className = 'chart-legend';
+        setSafeHtml(legendContainer, legendData.map((item, i) => `
+          <div class="chart-legend-item" data-index="${i}">
+            <div class="chart-legend-dot" style="background-color: ${item.color}"></div>
+            <div class="chart-legend-label" title="${escHtml(item.name)}">${escHtml(item.name)}</div>
+            <div class="chart-legend-value">${item.value.toLocaleString()}</div>
+          </div>
+        `).join(''));
+        el.appendChild(legendContainer);
+      }
+    }
+
+    if (!chartHost._echartsInstance) {
+      chartHost._echartsInstance = echarts.init(chartHost, getChartTheme());
+      new ResizeObserver(() => {
+        if (chartHost._echartsInstance) chartHost._echartsInstance.resize();
+      }).observe(chartHost);
+    }
+    chartHost._echartsInstance.setOption(option, true);
+    requestAnimationFrame(() => {
+      if (chartHost._echartsInstance) chartHost._echartsInstance.resize();
+    });
+  }
+
+  function getChartTheme() {
+    const theme = document.documentElement.getAttribute("data-theme") || "dark";
+    return theme === "light" ? "light" : "dark";
+  }
+
+  /** Pie chart for the "Size Buckets" card — built from the same buildSizeBuckets() rows the card lists, so slices and rows always agree. */
+  function buildSizeBucketsChartOption(buckets) {
+    const bucketColors = ["#ef4444", "#f97316", "#eab308", "#3b82f6", "#22c55e"];
+    const titleByValue = {};
+    buckets.forEach(b => { titleByValue[b.value] = b.title; });
+
+    const data = buckets.map((b, i) => ({
+      name: b.value,
+      value: b.count,
+      itemStyle: { color: bucketColors[i % bucketColors.length] }
+    }));
+
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    const textColor = isLight ? "#1a1d24" : "#eaedf2";
+
+    return {
+      backgroundColor: "transparent",
+      tooltip: { trigger: "item", formatter: (p) => `${titleByValue[p.name] || p.name}: ${formatBytes(p.value)} (${p.percent}%)`, textStyle: { color: textColor } },
+      legend: { show: false },
+      series: [{
+        type: "pie",
+        radius: ["38%", "68%"],
+        center: ["50%", "50%"],
+        data: data,
+        label: { formatter: (p) => `${titleByValue[p.name] || p.name}\n${p.percent}%`, fontSize: 11, color: textColor },
+        emphasis: { itemStyle: { shadowBlur: 8, shadowColor: isLight ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.4)" } }
+      }]
+    };
+  }
+
+  function buildDomainBarChartOption(limit = 12) {
+    const domains = {};
+    allMessages.forEach(m => {
+      if (!m.domain) return;
+      domains[m.domain] = (domains[m.domain] || 0) + 1;
+    });
+
+    const sorted = Object.entries(domains)
+      .sort((a, b) => b[1] - a[1]);
+
+    const sliced = limit === "all" ? sorted : sorted.slice(0, parseInt(limit) || 12);
+
+    const data = sliced.map(([domain, count], i) => ({
+      name: domain,
+      value: count,
+      itemStyle: { color: colorFor(i) }
+    }));
+
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    const textColor = isLight ? "#1a1d24" : "#eaedf2";
+
+    return {
+      backgroundColor: "transparent",
+      tooltip: { trigger: "item", formatter: (p) => `${displayDomain(p.name)}: ${p.value.toLocaleString()} emails (${p.percent}%)`, textStyle: { color: textColor } },
+      legend: { show: false },
+      series: [{
+        type: "pie",
+        radius: ["38%", "68%"],
+        center: ["50%", "50%"],
+        data: data,
+        label: { formatter: (p) => `${displayDomain(p.name)}\n${p.percent}%`, fontSize: 11, color: textColor },
+        emphasis: { itemStyle: { shadowBlur: 8, shadowColor: isLight ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.4)" } }
+      }]
+    };
+  }
+
+  function buildSenderBarChartOption(limit = 12) {
+    const senders = {};
+    allMessages.forEach(m => {
+      const key = m.senderEmail || m.author || "Unknown";
+      senders[key] = (senders[key] || 0) + 1;
+    });
+
+    const sorted = Object.entries(senders)
+      .sort((a, b) => b[1] - a[1]);
+
+    const sliced = limit === "all" ? sorted : sorted.slice(0, parseInt(limit) || 12);
+
+    const data = sliced.map(([sender, count], i) => ({
+      name: sender,
+      value: count,
+      itemStyle: { color: colorFor(i) }
+    }));
+
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    const textColor = isLight ? "#1a1d24" : "#eaedf2";
+
+    return {
+      backgroundColor: "transparent",
+      tooltip: { trigger: "item", formatter: (p) => `${displayEmail(p.name)}: ${p.value.toLocaleString()} emails (${p.percent}%)`, textStyle: { color: textColor } },
+      legend: { show: false },
+      series: [{
+        type: "pie",
+        radius: ["38%", "68%"],
+        center: ["50%", "50%"],
+        data: data,
+        label: { formatter: (p) => `${displayEmail(p.name)}\n${p.percent}%`, fontSize: 11, color: textColor },
+        emphasis: { itemStyle: { shadowBlur: 8, shadowColor: isLight ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.4)" } }
+      }]
+    };
+  }
+
+  function buildTopSendersChartOption(senders, limit = 12) {
+    const sliced = limit === "all" ? senders : senders.slice(0, parseInt(limit) || 12);
+    const data = sliced.map((s, i) => ({
+      name: s.title,
+      value: s.count,
+      itemStyle: { color: colorFor(i) }
+    }));
+
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    const textColor = isLight ? "#1a1d24" : "#eaedf2";
+
+    return {
+      backgroundColor: "transparent",
+      tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${formatBytes(p.value)} (${p.percent}%)`, textStyle: { color: textColor } },
+      legend: { show: false },
+      series: [{
+        type: "pie",
+        radius: ["38%", "68%"],
+        center: ["50%", "50%"],
+        data: data,
+        label: { formatter: "{b}\n{d}%", fontSize: 11, color: textColor },
+        emphasis: { itemStyle: { shadowBlur: 8, shadowColor: isLight ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.4)" } }
+      }]
+    };
+  }
+
+  // ══════════════════════════════════════════
+  //  SUNBURST CHART (ECharts, theme-aware)
+  // ══════════════════════════════════════════
+  function renderSunburst() {
+    const chartHost = $("#sunburstChart");
+    const centerStat = $("#sunburstCenterStat");
+    const legend = $("#legendPanel");
     clearElement($("#sunburstDetail"));
     sunburstDetailState = null;
-    const tooltip = $("#sunburstTooltip");
-    const breadcrumb = $("#sunburstBreadcrumb");
-    const legend = $("#legendPanel");
+    if (!chartHost) return;
 
-    const accentColor = cssVar("--accent");
-    const textMuted = cssVar("--text-muted");
-    const textLabel = cssVar("--text-label");
-    const gapStroke = cssVar("--svg-gap-stroke");
-
-    const baseMessages = getFilteredMessages();
-    const msgs = filterFn ? baseMessages.filter(filterFn) : baseMessages;
+    const msgs = getFilteredMessages();
     const total = msgs.length;
     if (total === 0) {
-      clearElement(svg);
-      addSvgText(svg, 400, 400, "No messages", { fill: textMuted, fontSize: "14" });
+      setSafeHtml(chartHost, '<div class="insight-empty">No messages</div>');
+      if (centerStat) clearElement(centerStat);
       clearElement(legend);
       return;
     }
 
-    const cx = 400, cy = 400;
-    const rings = [
-      { key: "year", label: "Year", innerR: 80, outerR: 160 },
-      { key: "monthName", label: "Month", innerR: 165, outerR: 250 },
-      { key: "domain", label: "Domain", innerR: 255, outerR: 340 },
-    ];
+    const MONTH_ORDER = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
-    // Build tree
+    // Build tree: year -> month -> domain -> messages
     const tree = {};
     msgs.forEach((m) => {
       const y = String(m.year), mo = m.monthName, d = m.domain;
@@ -1038,124 +1710,124 @@
       tree[y][mo][d].push(m);
     });
 
-    // Center text
-    addSvgText(svg, cx, cy - 8, total.toLocaleString(), { fill: accentColor, fontSize: "28", fontWeight: "700", fontFamily: "monospace" });
-    addSvgText(svg, cx, cy + 16, "EMAILS", { fill: textMuted, fontSize: "11", letterSpacing: "1.5" });
-
-    // Ring labels
-    rings.forEach((ring) => {
-      const r = (ring.innerR + ring.outerR) / 2;
-      addSvgText(svg, cx, cy - r - 6, ring.label.toUpperCase(), { fill: textLabel, fontSize: "10", fontWeight: "600", letterSpacing: "1.5" });
-    });
-
-    // Legend data collectors
     const legendYears = [];
-    const legendMonths = [];
     const legendDomains = {};
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    const otherColor = cssVar("--text-muted");
 
-    // Ring 0: Year
     const years = Object.keys(tree).sort();
-    let angle0 = 0;
-
-    years.forEach((year, yi) => {
+    const sunburstData = years.map((year, yi) => {
+      const yearColor = colorFor(yi);
       const yearMsgs = msgs.filter((m) => String(m.year) === year);
-      const yearAngle = (yearMsgs.length / total) * 360;
-      const color = colorFor(yi);
-      legendYears.push({ label: year, color, count: yearMsgs.length });
+      legendYears.push({ label: year, color: yearColor, count: yearMsgs.length });
 
-      drawArc(svg, cx, cy, rings[0].innerR, rings[0].outerR, angle0, angle0 + yearAngle, color, 0.9, gapStroke,
-        () => renderSunburst((m) => String(m.year) === year && (!filterFn || filterFn(m)), [...breadcrumbPath, { label: year }]),
-        (e) => showTooltip(tooltip, e, year, yearMsgs.length, total)
-      );
-
-      // Add arc label for years with enough space
-      if (yearAngle > 15) {
-        const midAngle = angle0 + yearAngle / 2;
-        const labelR = (rings[0].innerR + rings[0].outerR) / 2;
-        const pt = polarToCartesian(cx, cy, labelR, midAngle);
-        addSvgText(svg, pt.x, pt.y + 4, year, { fill: "#fff", fontSize: "11", fontWeight: "600" });
-      }
-
-      // Ring 1: Month
-      const months = Object.keys(tree[year]).sort((a, b) => {
-        const mo = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-        return mo.indexOf(a) - mo.indexOf(b);
-      });
-      let angle1 = angle0;
-
-      months.forEach((month, mi) => {
-        const moMsgs = yearMsgs.filter((m) => m.monthName === month);
-        const moAngle = (moMsgs.length / total) * 360;
+      const months = Object.keys(tree[year]).sort((a, b) => MONTH_ORDER.indexOf(a) - MONTH_ORDER.indexOf(b));
+      const monthChildren = months.map((month, mi) => {
         const moColor = colorFor(yi * 4 + mi);
-        const moKey = `${month} ${year}`;
-        legendMonths.push({ label: moKey, color: moColor, count: moMsgs.length });
-
-        drawArc(svg, cx, cy, rings[1].innerR, rings[1].outerR, angle1, angle1 + moAngle, moColor, 0.75, gapStroke,
-          () => renderSunburst((m) => String(m.year) === year && m.monthName === month && (!filterFn || filterFn(m)), [...breadcrumbPath, { label: year }, { label: month }]),
-          (e) => showTooltip(tooltip, e, moKey, moMsgs.length, total)
-        );
-        addArcLabel(svg, cx, cy, rings[1], angle1, angle1 + moAngle, month, {
-          minAngle: 18,
-          maxChars: 6,
-          fill: "rgba(255,255,255,0.88)",
-          fontSize: "10",
-          fontWeight: "600",
-        });
-
-        // Ring 2: Domain
         const domains = Object.keys(tree[year][month]).sort((a, b) => tree[year][month][b].length - tree[year][month][a].length);
-        let angle2 = angle1;
         const topDomains = domains.slice(0, 15);
-        const otherCount = domains.slice(15).reduce((s, d) => s + tree[year][month][d].length, 0);
+        const otherDomains = domains.slice(15);
 
-        topDomains.forEach((domain, di) => {
+        const domainChildren = topDomains.map((domain, di) => {
           const dMsgs = tree[year][month][domain];
-          const dAngle = (dMsgs.length / total) * 360;
           const dColor = colorFor(di + 3);
           if (!legendDomains[domain]) legendDomains[domain] = { color: dColor, count: 0 };
           legendDomains[domain].count += dMsgs.length;
-
-          drawArc(svg, cx, cy, rings[2].innerR, rings[2].outerR, angle2, angle2 + dAngle, dColor, 0.6, gapStroke,
-            () => showDomainDetail(domain, dMsgs),
-            (e) => showTooltip(tooltip, e, displayDomain(domain), dMsgs.length, total)
-          );
-          addArcLabel(svg, cx, cy, rings[2], angle2, angle2 + dAngle, displayDomain(domain), {
-            minAngle: 24,
-            maxChars: 12,
-            fill: "rgba(255,255,255,0.82)",
-            fontSize: "9",
-            fontWeight: "600",
-          });
-          angle2 += dAngle;
+          return {
+            id: `d::${year}::${month}::${domain}`,
+            name: displayDomain(domain),
+            value: dMsgs.length,
+            itemStyle: { color: dColor },
+            __rawDomain: domain,
+            __messages: dMsgs,
+          };
         });
 
-        if (otherCount > 0) {
-          const oAngle = (otherCount / total) * 360;
-          drawArc(svg, cx, cy, rings[2].innerR, rings[2].outerR, angle2, angle2 + oAngle, textMuted, 0.3, gapStroke,
-            null, (e) => showTooltip(tooltip, e, "Other domains", otherCount, total));
+        if (otherDomains.length) {
+          const otherMsgs = otherDomains.flatMap((d) => tree[year][month][d]);
+          domainChildren.push({
+            id: `other::${year}::${month}`,
+            name: "Other",
+            value: otherMsgs.length,
+            itemStyle: { color: otherColor, opacity: 0.5 },
+          });
         }
 
-        angle1 += moAngle;
+        return {
+          id: `m::${year}::${month}`,
+          name: month,
+          itemStyle: { color: moColor },
+          children: domainChildren,
+        };
       });
 
-      angle0 += yearAngle;
+      return {
+        id: `y::${year}`,
+        name: year,
+        itemStyle: { color: yearColor },
+        children: monthChildren,
+      };
     });
 
-    svg.addEventListener("mouseleave", () => (tooltip.style.display = "none"));
+    if (centerStat) {
+      setSafeHtml(centerStat, `<span class="scs-count">${total.toLocaleString()}</span><span class="scs-label">EMAILS</span>`);
+    }
 
-    // Breadcrumb
-    renderBreadcrumb(breadcrumb, breadcrumbPath, filterFn);
+    initViewChart("sunburstChart", {
+      backgroundColor: "transparent",
+      tooltip: {
+        formatter: (info) => {
+          const value = info.value || 0;
+          const pct = total ? ((value / total) * 100).toFixed(1) : "0";
+          return `<strong>${escHtml(info.name)}</strong><br/>${value.toLocaleString()} emails (${pct}% of total)`;
+        },
+      },
+      series: [{
+        type: "sunburst",
+        radius: ["8%", "74%"],
+        center: ["50%", "50%"],
+        data: sunburstData,
+        nodeClick: "rootToNode",
+        emphasis: { focus: "ancestor" },
+        itemStyle: { borderWidth: 1.5, borderColor: isLight ? "#fff" : "#0c0f14" },
+        label: { show: true, color: "#fff", minAngle: 8 },
+        levels: [
+          {},
+          { r0: "8%", r: "32%", label: { rotate: "tangential", fontSize: 13, fontWeight: 700 } },
+          { r0: "32%", r: "53%", label: { rotate: "tangential", fontSize: 10, fontWeight: 600 } },
+          { r0: "53%", r: "74%", label: { rotate: "radial", fontSize: 9 } },
+        ],
+      }],
+    });
+
+    const chart = chartHost.querySelector(".chart-host")._echartsInstance;
+    if (chart) {
+      chart.on("click", (params) => {
+        if (params.data && params.data.__rawDomain) {
+          showDomainDetail(params.data.__rawDomain, params.data.__messages);
+        }
+      });
+    }
 
     // Legend
-    renderLegend(legend, legendYears, legendMonths, legendDomains);
+    renderLegend(legend, legendYears, legendDomains);
   }
 
-  function renderLegend(panel, years, months, domains) {
+  function legendItemMessages(filterType, filterValue) {
+    if (filterType === 'year') {
+      return allMessages.filter((m) => m.year.toString() === filterValue);
+    } else if (filterType === 'domain') {
+      return allMessages.filter((m) => m.domain === filterValue);
+    }
+    return [];
+  }
+
+  function renderLegend(panel, years, domains) {
     let html = '<div class="legend-title">Chart Legend</div>';
 
     html += '<div class="legend-section"><div class="legend-section-title">Years (inner ring)</div>';
     years.forEach((y) => {
-      html += `<div class="legend-item"><div class="legend-swatch" style="background:${escAttr(y.color)}"></div><span class="legend-label">${escHtml(y.label)}</span><span class="legend-count">${y.count.toLocaleString()}</span></div>`;
+      html += renderLegendItem('year', y.label, y.color, y.label, y.count);
     });
     html += '</div>';
 
@@ -1163,30 +1835,49 @@
     const topDomains = Object.entries(domains).sort((a, b) => b[1].count - a[1].count).slice(0, 15);
     html += '<div class="legend-section"><div class="legend-section-title">Top Domains (outer ring)</div>';
     topDomains.forEach(([name, d]) => {
-      html += `<div class="legend-item"><div class="legend-swatch" style="background:${escAttr(d.color)}"></div><span class="legend-label">${escHtml(displayDomain(name))}</span><span class="legend-count">${d.count.toLocaleString()}</span></div>`;
+      html += renderLegendItem('domain', name, d.color, displayDomain(name), d.count);
     });
     html += '</div>';
 
     setSafeHtml(panel, html);
+    attachLegendClickHandlers();
   }
 
-  function renderBreadcrumb(breadcrumb, path, filterFn) {
-    clearElement(breadcrumb);
-    const allSpan = document.createElement("span");
-    allSpan.textContent = "All Mail";
-    allSpan.classList.toggle("bc-active", path.length === 0);
-    allSpan.addEventListener("click", () => renderSunburst(null, []));
-    breadcrumb.appendChild(allSpan);
+  function renderLegendItem(filterType, filterValue, color, displayLabel, count) {
+    const itemMessages = legendItemMessages(filterType, filterValue);
+    const selectedCount = itemMessages.filter((m) => selectedIds.has(m.id)).length;
+    const isFullySelected = selectedCount > 0 && selectedCount === itemMessages.length;
+    const isPartiallySelected = selectedCount > 0 && !isFullySelected;
+    const selectedClass = isFullySelected ? 'legend-fully-selected' : isPartiallySelected ? 'legend-partially-selected' : '';
+    const marker = isFullySelected ? `<span class="legend-check">✓</span>` : isPartiallySelected ? `<span class="legend-check legend-check-partial">–</span>` : '';
+    const title = isFullySelected
+      ? `Click to unselect all emails from ${escAttr(displayLabel)}`
+      : `Click to select all emails from ${escAttr(displayLabel)}`;
+    return `<div class="legend-item legend-clickable ${selectedClass}" data-filter-type="${filterType}" data-filter-value="${escAttr(filterValue)}" title="${title}">${marker}<div class="legend-swatch" style="background:${escAttr(color)}"></div><span class="legend-label">${escHtml(displayLabel)}</span><span class="legend-count">${count.toLocaleString()}</span></div>`;
+  }
 
-    path.forEach((crumb, i) => {
-      const sep = document.createElement("span");
-      sep.className = "bc-sep";
-      sep.textContent = "›";
-      breadcrumb.appendChild(sep);
-      const s = document.createElement("span");
-      s.textContent = crumb.label;
-      s.classList.toggle("bc-active", i === path.length - 1);
-      breadcrumb.appendChild(s);
+  function attachLegendClickHandlers() {
+    const legendItems = document.querySelectorAll('.legend-clickable');
+    legendItems.forEach((item) => {
+      item.style.cursor = 'pointer';
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const filterType = item.dataset.filterType;
+        const filterValue = item.dataset.filterValue;
+
+        const matchingMessages = legendItemMessages(filterType, filterValue);
+        const allSelected = matchingMessages.length > 0 && matchingMessages.every((m) => selectedIds.has(m.id));
+
+        if (allSelected) {
+          matchingMessages.forEach((m) => selectedIds.delete(m.id));
+        } else {
+          matchingMessages.forEach((m) => selectedIds.add(m.id));
+        }
+
+        updateStats();
+        // Re-render sunburst to show updated selection markers in legend
+        renderSunburst();
+      });
     });
   }
 
@@ -1239,99 +1930,6 @@
   }
 
   // ══════════════════════════════════════════
-  //  SVG HELPERS
-  // ══════════════════════════════════════════
-  function drawArc(svg, cx, cy, r1, r2, startAngle, endAngle, color, opacity, gapStroke, onClick, onHover) {
-    if (endAngle - startAngle < 0.3) return;
-    const gap = 0.5;
-    const sa = startAngle + gap / 2, ea = endAngle - gap / 2;
-    if (ea <= sa) return;
-
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", describeArc(cx, cy, r1, r2, sa, ea));
-    path.setAttribute("fill", color);
-    path.setAttribute("opacity", opacity);
-    path.setAttribute("stroke", gapStroke);
-    path.setAttribute("stroke-width", "1.5");
-    path.style.cursor = onClick ? "pointer" : "default";
-    path.style.transition = "opacity 0.15s";
-
-    path.addEventListener("mouseenter", (e) => { path.setAttribute("opacity", Math.min(1, opacity + 0.25)); if (onHover) onHover(e); });
-    path.addEventListener("mousemove", (e) => { if (onHover) onHover(e); });
-    path.addEventListener("mouseleave", () => { path.setAttribute("opacity", opacity); });
-    if (onClick) path.addEventListener("click", onClick);
-
-    svg.appendChild(path);
-  }
-
-  function describeArc(cx, cy, r1, r2, startAngle, endAngle) {
-    const s1 = polarToCartesian(cx, cy, r2, endAngle);
-    const s2 = polarToCartesian(cx, cy, r2, startAngle);
-    const s3 = polarToCartesian(cx, cy, r1, startAngle);
-    const s4 = polarToCartesian(cx, cy, r1, endAngle);
-    const large = endAngle - startAngle > 180 ? 1 : 0;
-    return `M ${s2.x} ${s2.y} A ${r2} ${r2} 0 ${large} 1 ${s1.x} ${s1.y} L ${s4.x} ${s4.y} A ${r1} ${r1} 0 ${large} 0 ${s3.x} ${s3.y} Z`;
-  }
-
-  function polarToCartesian(cx, cy, r, angleDeg) {
-    const rad = ((angleDeg - 90) * Math.PI) / 180;
-    return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
-  }
-
-  function addSvgText(svg, x, y, text, opts = {}) {
-    const el = document.createElementNS("http://www.w3.org/2000/svg", "text");
-    el.setAttribute("x", x);
-    el.setAttribute("y", y);
-    el.setAttribute("text-anchor", "middle");
-    el.setAttribute("fill", opts.fill || "#fff");
-    el.setAttribute("font-size", opts.fontSize || "12");
-    if (opts.fontWeight) el.setAttribute("font-weight", opts.fontWeight);
-    if (opts.fontFamily) el.setAttribute("font-family", opts.fontFamily);
-    if (opts.letterSpacing) el.setAttribute("letter-spacing", opts.letterSpacing);
-    el.textContent = text;
-    svg.appendChild(el);
-    return el;
-  }
-
-  function addArcLabel(svg, cx, cy, ring, startAngle, endAngle, label, opts = {}) {
-    const angle = endAngle - startAngle;
-    if (angle < (opts.minAngle || 20)) return;
-
-    const midAngle = startAngle + angle / 2;
-    const labelR = (ring.innerR + ring.outerR) / 2;
-    const pt = polarToCartesian(cx, cy, labelR, midAngle);
-    const text = truncateLabel(label, opts.maxChars || 10);
-    const el = addSvgText(svg, pt.x, pt.y + 3, text, {
-      fill: opts.fill || "rgba(255,255,255,0.85)",
-      fontSize: opts.fontSize || "10",
-      fontWeight: opts.fontWeight || "600",
-    });
-
-    if (angle > 36 && ring.outerR > 200) {
-      const rotation = midAngle > 90 && midAngle < 270 ? midAngle + 90 : midAngle - 90;
-      el.setAttribute("transform", `rotate(${rotation} ${pt.x} ${pt.y})`);
-    }
-  }
-
-  function truncateLabel(label, maxChars) {
-    const s = String(label || "");
-    if (s.length <= maxChars) return s;
-    return `${s.slice(0, Math.max(1, maxChars - 1))}…`;
-  }
-
-  function showTooltip(tooltip, event, label, count, total) {
-    const pct = ((count / total) * 100).toFixed(1);
-    setSafeHtml(tooltip, `
-      <div class="tt-label">${escHtml(displayPrivateLabel(label))}</div>
-      <div class="tt-count">${count.toLocaleString()} emails</div>
-      <div class="tt-pct">${pct}% of total</div>
-    `);
-    tooltip.style.display = "block";
-    tooltip.style.left = event.clientX + 14 + "px";
-    tooltip.style.top = event.clientY - 10 + "px";
-  }
-
-  // ══════════════════════════════════════════
   //  SENDER TABLE
   // ══════════════════════════════════════════
   function renderSenderTable() {
@@ -1343,8 +1941,12 @@
     let entries = Object.entries(bySender);
     const maxCount = Math.max(1, ...entries.map(([, v]) => v.length));
 
-    const q = (searchInput.value || "").toLowerCase();
-    if (q) entries = entries.filter(([email, msgs]) => email.includes(q) || msgs[0].senderName.toLowerCase().includes(q));
+    if (senderChartFilterValue) {
+      entries = entries.filter(([email]) => email === senderChartFilterValue);
+    } else {
+      const q = (searchInput.value || "").toLowerCase();
+      if (q) entries = entries.filter(([email, msgs]) => email.includes(q) || msgs[0].senderName.toLowerCase().includes(q));
+    }
 
     const sort = sortSelect.value;
     if (sort === "count-desc") entries.sort((a, b) => b[1].length - a[1].length);
@@ -1514,8 +2116,59 @@
       });
     });
 
-    searchInput.oninput = () => renderSenderTable();
+    searchInput.oninput = () => { senderChartFilterValue = null; renderSenderTable(); };
     sortSelect.onchange = () => renderSenderTable();
+
+    // Render chart with Top X dropdown
+    const senderChartContainer = document.getElementById("chart-sender-container");
+    if (senderChartContainer) {
+      setSafeHtml(senderChartContainer, `
+        <div style="display: flex; gap: 12px; margin-bottom: 12px; align-items: center;">
+          <h3 style="margin: 0; font-size: 14px;">Top Senders</h3>
+          <select class="sender-topx-dropdown" style="padding: 4px 8px; font-size: 11px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
+            <option value="5">Top 5</option>
+            <option value="10" selected>Top 10</option>
+            <option value="20">Top 20</option>
+            <option value="all">All</option>
+          </select>
+        </div>
+        <div id="chart-sender-host" class="chart-container" style="margin: 0;"></div>
+      `);
+      // Move chart rendering into the new host
+      initViewChart("chart-sender-host", buildSenderBarChartOption());
+      const chart = document.getElementById("chart-sender-host").querySelector('.chart-host')._echartsInstance;
+      if (chart) {
+        chart.on("click", (params) => {
+          if (params.value && params.value > 0) {
+            toggleSelectMessages(allMessages.filter((m) => (m.senderEmail || m.author || "Unknown") === params.name));
+            renderSenderTable();
+          }
+        });
+      }
+      // Wire up Top X dropdown for sender
+      const senderDropdown = document.querySelector('.sender-topx-dropdown');
+      if (senderDropdown) {
+        senderDropdown.addEventListener('change', function() {
+          const newOption = buildSenderBarChartOption(this.value);
+          const hostEl = document.getElementById("chart-sender-host");
+          if (hostEl && hostEl.querySelector('.chart-host')._echartsInstance) {
+            hostEl.querySelector('.chart-host')._echartsInstance.setOption(newOption, true);
+          }
+        });
+      }
+    } else {
+      initViewChart("chart-sender-container", buildSenderBarChartOption());
+      const chart = document.getElementById("chart-sender-container").querySelector('.chart-host')._echartsInstance;
+      if (chart) {
+        chart.on("click", (params) => {
+          if (params.value && params.value > 0) {
+            toggleSelectMessages(allMessages.filter((m) => (m.senderEmail || m.author || "Unknown") === params.name));
+            renderSenderTable();
+          }
+        });
+      }
+    }
+
     updateBulkButtons();
   }
 
@@ -1528,8 +2181,12 @@
     const byDomain = groupBy("domain");
     let entries = Object.entries(byDomain);
     const maxCount = Math.max(1, ...entries.map(([, v]) => v.length));
-    const q = (searchInput.value || "").toLowerCase();
-    if (q) entries = entries.filter(([domain]) => domain.toLowerCase().includes(q));
+    if (domainChartFilterValue) {
+      entries = entries.filter(([domain]) => domain === domainChartFilterValue);
+    } else {
+      const q = (searchInput.value || "").toLowerCase();
+      if (q) entries = entries.filter(([domain]) => domain.toLowerCase().includes(q));
+    }
     entries.sort((a, b) => b[1].length - a[1].length);
 
     setSafeHtml(container, entries.map(([domain, msgs], i) => {
@@ -1585,7 +2242,7 @@
         </div>`;
     }).join(""));
 
-    searchInput.oninput = () => renderDomainTable();
+    searchInput.oninput = () => { domainChartFilterValue = null; renderDomainTable(); };
 
     container.querySelectorAll(".domain-group").forEach((group) => {
       const domain = group.dataset.domain;
@@ -1632,6 +2289,56 @@
       });
     });
 
+    // Render chart with Top X dropdown
+    const domainChartContainer = document.getElementById("chart-domain-container");
+    if (domainChartContainer) {
+      setSafeHtml(domainChartContainer, `
+        <div style="display: flex; gap: 12px; margin-bottom: 12px; align-items: center;">
+          <h3 style="margin: 0; font-size: 14px;">Top Domains</h3>
+          <select class="domain-topx-dropdown" style="padding: 4px 8px; font-size: 11px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
+            <option value="5">Top 5</option>
+            <option value="10" selected>Top 10</option>
+            <option value="20">Top 20</option>
+            <option value="all">All</option>
+          </select>
+        </div>
+        <div id="chart-domain-host" class="chart-container" style="margin: 0;"></div>
+      `);
+      // Move chart rendering into the new host
+      initViewChart("chart-domain-host", buildDomainBarChartOption());
+      const chart = document.getElementById("chart-domain-host").querySelector('.chart-host')._echartsInstance;
+      if (chart) {
+        chart.on("click", (params) => {
+          if (params.value && params.value > 0) {
+            toggleSelectMessages(allMessages.filter((m) => m.domain === params.name));
+            renderDomainTable();
+          }
+        });
+      }
+      // Wire up Top X dropdown for domain
+      const domainDropdown = document.querySelector('.domain-topx-dropdown');
+      if (domainDropdown) {
+        domainDropdown.addEventListener('change', function() {
+          const newOption = buildDomainBarChartOption(this.value);
+          const hostEl = document.getElementById("chart-domain-host");
+          if (hostEl && hostEl.querySelector('.chart-host')._echartsInstance) {
+            hostEl.querySelector('.chart-host')._echartsInstance.setOption(newOption, true);
+          }
+        });
+      }
+    } else {
+      initViewChart("chart-domain-container", buildDomainBarChartOption());
+      const chart = document.getElementById("chart-domain-container").querySelector('.chart-host')._echartsInstance;
+      if (chart) {
+        chart.on("click", (params) => {
+          if (params.value && params.value > 0) {
+            toggleSelectMessages(allMessages.filter((m) => m.domain === params.name));
+            renderDomainTable();
+          }
+        });
+      }
+    }
+
     updateBulkButtons();
   }
 
@@ -1648,13 +2355,6 @@
     const totalBytes = knownMessages.reduce((sum, m) => sum + messageSize(m), 0);
     const unknownCount = filteredMsgs.length - knownMessages.length;
     const largest = knownMessages.slice().sort((a, b) => messageSize(b) - messageSize(a));
-    const topLargest = largest.slice(0, 12).map((m) => ({
-      title: m.subject || "(No Subject)",
-      subtitle: `${m.senderName || displayEmail(m.senderEmail)} · ${displayFolderName("", m.folder) || "Unknown folder"} · ${formatDate(m.date)}`,
-      count: messageSize(m),
-      value: String(m.id),
-      messages: [m],
-    }));
 
     const buckets = buildSizeBuckets(knownMessages);
     const heavySenders = groupBySize(knownMessages, (m) => m.senderEmail, (m) => ({
@@ -1686,37 +2386,96 @@
     }
 
     setSafeHtml(container, `
-      <div class="timeline-kpis">
-        <div class="timeline-kpi"><span>${formatBytes(totalBytes)}</span><label>Known mailbox size</label></div>
-        <div class="timeline-kpi"><span>${knownMessages.length.toLocaleString()}</span><label>Messages with size</label></div>
-        <div class="timeline-kpi"><span>${formatBytes(largest[0] ? messageSize(largest[0]) : 0)}</span><label>Largest message</label></div>
-        <div class="timeline-kpi"><span>${unknownCount.toLocaleString()}</span><label>Unknown size</label></div>
-      </div>
-      <div class="size-note">Size data depends on what Thunderbird exposes per account. Unknown-size messages are kept out of storage rankings.</div>
       <div class="insight-grid size-grid">
-        ${renderSizeCard("Size Buckets", "Select a size band to recover storage quickly.", buckets, "bucket")}
-        ${renderSizeCard("Top Space-Heavy Senders", "Senders consuming the most total mailbox space.", heavySenders, "sender")}
-        ${renderSizeCard("Top Space-Heavy Domains", "Domains consuming storage across many senders.", heavyDomains, "domain")}
-        ${renderSizeCard("Large Old Messages", "Large messages older than one year.", largeOld, "message")}
+        ${renderSizeCard("Size Buckets", "Select a size band to recover storage quickly.", buckets, "bucket", buckets.length ? `<div id="chart-size-buckets" class="chart-container insight-chart-host"></div>` : "")}
+        ${renderSizeCard("Top Space-Heavy Senders", "Senders consuming the most total mailbox space.", heavySenders, "sender", heavySenders.length ? `
+          <div style="display: flex; gap: 12px; padding: 10px 14px 0; align-items: center; justify-content: flex-end;">
+            <select class="size-senders-topx-dropdown" style="padding: 4px 8px; font-size: 11px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-secondary); color: var(--text-primary);">
+              <option value="5">Top 5</option>
+              <option value="10" selected>Top 10</option>
+              <option value="20">Top 20</option>
+              <option value="all">All</option>
+            </select>
+          </div>
+          <div id="chart-size-senders" class="chart-container insight-chart-host"></div>
+        ` : "")}
+        ${renderSizeCard("Top Space-Heavy Domains", "Domains consuming storage across many senders.", heavyDomains, "domain", heavyDomains.length ? `<div id="chart-size-domains" class="chart-container insight-chart-host"></div>` : "")}
+        ${renderSizeCard("Large Old Messages", "Large messages older than one year.", largeOld, "message", largeOld.length ? `<div id="chart-size-large-old" class="chart-container insight-chart-host"></div>` : "")}
       </div>
-      <section class="insight-card size-wide-card">
-        <div class="insight-card-head">
-          <h3>Largest Individual Messages</h3>
-          <p>Fastest path to reclaiming space. Select rows and use Move to Trash or Move to Folder.</p>
-        </div>
-        <div class="insight-rows">
-          ${topLargest.length ? topLargest.map((row) => renderSizeRow(row, "message")).join("") : `<div class="insight-empty">No message sizes available.</div>`}
-        </div>
-      </section>
     `);
 
     container.querySelectorAll("[data-size-kind]").forEach((btn) => {
       btn.addEventListener("click", () => selectSizeInsight(btn, knownMessages));
     });
+
+    // Size Buckets chart — lives inside the "Size Buckets" card, built from the same rows as its rows list
+    if (buckets.length && document.getElementById("chart-size-buckets")) {
+      initViewChart("chart-size-buckets", buildSizeBucketsChartOption(buckets));
+      const bucketChart = document.getElementById("chart-size-buckets").querySelector('.chart-host')._echartsInstance;
+      if (bucketChart) {
+        bucketChart.on("click", (params) => {
+          const btn = document.querySelector(`[data-size-kind="bucket"][data-value="${escAttr(params.name)}"]`);
+          if (btn) selectSizeInsight(btn, knownMessages);
+        });
+      }
+    }
+
+    // Top Senders by Space chart — lives inside the "Top Space-Heavy Senders" card
+    if (heavySenders.length && document.getElementById("chart-size-senders")) {
+      initViewChart("chart-size-senders", buildTopSendersChartOption(heavySenders));
+      const sendersChart = document.getElementById("chart-size-senders").querySelector('.chart-host')._echartsInstance;
+      if (sendersChart) {
+        sendersChart.on("click", (params) => {
+          const sender = heavySenders.find(s => s.title === params.name);
+          if (sender) {
+            const btn = document.querySelector(`[data-size-kind="sender"][data-value="${escAttr(sender.value || "")}"]`);
+            if (btn) selectSizeInsight(btn, knownMessages);
+          }
+        });
+      }
+      document.querySelector('.size-senders-topx-dropdown')?.addEventListener('change', function() {
+        const newOption = buildTopSendersChartOption(heavySenders, this.value);
+        const hostEl = document.getElementById("chart-size-senders");
+        if (hostEl && hostEl.querySelector('.chart-host')._echartsInstance) {
+          hostEl.querySelector('.chart-host')._echartsInstance.setOption(newOption, true);
+        }
+      });
+    }
+
+    // Top Space-Heavy Domains chart — lives inside its card; heavyDomains titles are already displayDomain()-masked
+    if (heavyDomains.length && document.getElementById("chart-size-domains")) {
+      initViewChart("chart-size-domains", buildTopSendersChartOption(heavyDomains));
+      const domainsChart = document.getElementById("chart-size-domains").querySelector('.chart-host')._echartsInstance;
+      if (domainsChart) {
+        domainsChart.on("click", (params) => {
+          const domainEntry = heavyDomains.find(d => d.title === params.name);
+          if (domainEntry) {
+            const btn = document.querySelector(`[data-size-kind="domain"][data-value="${escAttr(domainEntry.value || "")}"]`);
+            if (btn) selectSizeInsight(btn, knownMessages);
+          }
+        });
+      }
+    }
+
+    // Large Old Messages chart — lives inside its card; one slice per message, sized by bytes
+    if (largeOld.length && document.getElementById("chart-size-large-old")) {
+      initViewChart("chart-size-large-old", buildTopSendersChartOption(largeOld));
+      const largeOldChart = document.getElementById("chart-size-large-old").querySelector('.chart-host')._echartsInstance;
+      if (largeOldChart) {
+        largeOldChart.on("click", (params) => {
+          const msgEntry = largeOld.find(m => m.title === params.name);
+          if (msgEntry) {
+            const btn = document.querySelector(`[data-size-kind="message"][data-value="${escAttr(msgEntry.value || "")}"]`);
+            if (btn) selectSizeInsight(btn, knownMessages);
+          }
+        });
+      }
+    }
+
     updateBulkButtons();
   }
 
-  function renderSizeCard(title, subtitle, rows, kind) {
+  function renderSizeCard(title, subtitle, rows, kind, chartHtml) {
     const body = rows.length
       ? rows.map((row) => renderSizeRow(row, kind)).join("")
       : `<div class="insight-empty">No matching messages.</div>`;
@@ -1726,6 +2485,7 @@
           <h3>${escHtml(title)}</h3>
           <p>${escHtml(subtitle)}</p>
         </div>
+        ${chartHtml || ""}
         <div class="insight-rows">${body}</div>
       </section>`;
   }
@@ -1803,6 +2563,15 @@
     const controls = $("#timelineControls");
     const insights = $("#timelineInsights");
     const label = $("#timelineRangeLabel");
+    const scanRangeNote = $("#timelineScanRangeNote");
+    if (scanRangeNote) {
+      if (scanDateRange) {
+        scanRangeNote.style.display = "block";
+        scanRangeNote.textContent = `Data limited to ${$("#dateRangeLabel").textContent} by the Scan Range filter — this applies to every view, not just Timeline. Clear it (top bar) and rescan to see full history.`;
+      } else {
+        scanRangeNote.style.display = "none";
+      }
+    }
     const textMuted = cssVar("--text-muted");
     const border = cssVar("--border");
     const accent = cssVar("--accent");
@@ -2034,6 +2803,11 @@
       </div>
       ${selectedMonthKey ? `<div class="timeline-note">Showing insights for ${escHtml(selectedMonthKey)}. Click the month again to return to the visible range.</div>` : ""}
     `);
+
+    renderInsightChart("sender", topUnreadSenders, messages);
+    renderInsightChart("age", ageBuckets, messages);
+    renderInsightChart("domain", noisyDomains, messages);
+    renderInsightChart("folder", folderHotspots, messages);
   }
 
   function renderInsightCard(title, subtitle, rows, kind) {
@@ -2046,8 +2820,48 @@
           <h3>${escHtml(title)}</h3>
           <p>${escHtml(subtitle)}</p>
         </div>
+        ${rows.length ? `<div id="chart-insight-${kind}" class="chart-container insight-chart-host"></div>` : ""}
         <div class="insight-rows">${body}</div>
       </section>`;
+  }
+
+  /** Pie chart mirroring an insight card's rows; clicking a slice selects the same messages as its row's Select button. */
+  function renderInsightChart(kind, rows, rangeMessages) {
+    const hostId = `chart-insight-${kind}`;
+    const chartContainer = document.getElementById(hostId);
+    if (!chartContainer || !rows.length) return;
+
+    const data = rows.map((row, i) => ({
+      name: row.title,
+      value: row.count,
+      itemStyle: { color: colorFor(i) }
+    }));
+
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    const textColor = isLight ? "#1a1d24" : "#eaedf2";
+
+    initViewChart(hostId, {
+      backgroundColor: "transparent",
+      tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${p.value.toLocaleString()} (${p.percent}%)`, textStyle: { color: textColor } },
+      legend: { show: false },
+      series: [{
+        type: "pie",
+        radius: ["38%", "68%"],
+        center: ["50%", "50%"],
+        data: data,
+        label: { formatter: "{b}\n{d}%", fontSize: 10, color: textColor },
+        emphasis: { itemStyle: { shadowBlur: 8, shadowColor: isLight ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.4)" } }
+      }]
+    });
+
+    const chart = chartContainer.querySelector('.chart-host')._echartsInstance;
+    if (chart) {
+      chart.on("click", (params) => {
+        const row = rows.find(r => r.title === params.name);
+        if (!row) return;
+        selectTimelineInsightByKind(kind, row.value, row.bucket, row.accountId, rangeMessages);
+      });
+    }
   }
 
   function renderInsightRow(row, kind) {
@@ -2102,10 +2916,16 @@
   }
 
   function selectTimelineInsight(btn, rangeMessages) {
-    const kind = btn.dataset.selectKind;
-    const value = btn.dataset.value;
-    const bucket = btn.dataset.bucket;
-    const accountId = btn.dataset.accountId;
+    selectTimelineInsightByKind(
+      btn.dataset.selectKind,
+      btn.dataset.value,
+      btn.dataset.bucket,
+      btn.dataset.accountId,
+      rangeMessages
+    );
+  }
+
+  function selectTimelineInsightByKind(kind, value, bucket, accountId, rangeMessages) {
     let matches = [];
 
     if (kind === "sender") {
@@ -2145,6 +2965,14 @@
     });
   }
 
+  /** Clears the entire selection — shared by the review modal's Clear Selection button and the floating bar's reset button. */
+  function clearSelection() {
+    selectedIds.clear();
+    reviewCheckedIds.clear();
+    updateStats();
+    switchView(currentView);
+  }
+
   // ══════════════════════════════════════════
   //  SELECTION REVIEW
   // ══════════════════════════════════════════
@@ -2152,34 +2980,88 @@
     if (selectedIds.size === 0) return;
     const modal = $("#selectionReviewModal");
     modal.style.display = "flex";
+    // Default: everything currently selected starts out checked in the review table.
+    reviewCheckedIds = new Set(Array.from(selectedIds, String));
     renderSelectionReview();
 
     $("#selectionReviewClose").onclick = () => { modal.style.display = "none"; };
+    $("#selectionReviewHelpBtn").onclick = () => { startReviewTour(); };
     $("#selectionReviewClear").onclick = () => {
-      selectedIds.clear();
       modal.style.display = "none";
-      updateStats();
-      switchView(currentView);
+      clearSelection();
     };
     $("#selectionReviewTrash").onclick = () => {
+      const checkedIds = getCheckedSelectedOriginalIds();
+      if (checkedIds.length === 0) return;
       modal.style.display = "none";
-      showDeleteModal();
+      showDeleteModal(checkedIds);
     };
     $("#selectionReviewFolder").onclick = () => {
+      const checkedIds = getCheckedSelectedOriginalIds();
+      if (checkedIds.length === 0) return;
       modal.style.display = "none";
-      showMoveFolderModal();
+      showMoveFolderModal(checkedIds);
     };
     $("#selectionReviewExport").onclick = () => {
       exportSelectedCSV();
     };
+    const excludeCheckedBtn = $("#selectionReviewExcludeMatches");
+    if (excludeCheckedBtn) {
+      excludeCheckedBtn.onclick = () => {
+        const checked = getCheckedReviewMessages();
+        checked.forEach((m) => {
+          removeSelectedId(String(m.id));
+          reviewCheckedIds.delete(String(m.id));
+        });
+        updateStats();
+        if (selectedIds.size === 0) {
+          $("#selectionReviewModal").style.display = "none";
+          switchView(currentView);
+        } else {
+          renderSelectionReview();
+          switchView(currentView);
+          $("#selectionReviewModal").style.display = "flex";
+        }
+      };
+    }
+    const keepOnlyCheckedBtn = $("#selectionReviewKeepOnlyMatches");
+    if (keepOnlyCheckedBtn) {
+      keepOnlyCheckedBtn.onclick = () => {
+        const checked = getCheckedReviewMessages();
+        const checkedIdSet = new Set(checked.map((m) => String(m.id)));
+        Array.from(selectedIds).forEach((id) => {
+          if (!checkedIdSet.has(String(id))) removeSelectedId(String(id));
+        });
+        reviewCheckedIds = new Set(Array.from(selectedIds, String));
+        updateStats();
+        if (selectedIds.size === 0) {
+          $("#selectionReviewModal").style.display = "none";
+          switchView(currentView);
+        } else {
+          renderSelectionReview();
+          switchView(currentView);
+          $("#selectionReviewModal").style.display = "flex";
+        }
+      };
+    }
+  }
+
+  /** Messages matching the current search/sort AND checked via the row checkboxes (not just the rendered slice). */
+  function getCheckedReviewMessages() {
+    return getReviewedSelectedMessages().filter((m) => reviewCheckedIds.has(String(m.id)));
+  }
+
+  /** Original-typed message IDs for the checked+matched working set — the exact target for Trash/Folder/Exclude/Keep-only. */
+  function getCheckedSelectedOriginalIds() {
+    return getCheckedReviewMessages().map((m) => m.id);
   }
 
   function renderSelectionReview() {
-    const selected = getReviewedSelectedMessages();
+    const matched = getReviewedSelectedMessages();
     const table = $("#selectionReviewTable");
-    const totalBytes = selected.reduce((sum, m) => sum + messageSize(m), 0);
-    const unread = selected.filter((m) => !m.read).length;
-    const accounts = new Set(selected.map((m) => m.account || m.accountId));
+    const totalBytes = matched.reduce((sum, m) => sum + messageSize(m), 0);
+    const unread = matched.filter((m) => !m.read).length;
+    const accounts = new Set(matched.map((m) => m.account || m.accountId));
 
     $("#selectionReviewSummary").textContent =
       `${selectedIds.size.toLocaleString()} selected · ${unread.toLocaleString()} unread · ${formatBytes(totalBytes)} known size · ${accounts.size} account${accounts.size === 1 ? "" : "s"}`;
@@ -2197,45 +3079,56 @@
       renderSelectionReview();
     };
 
-    $("#selectionReviewUnselectMatches").disabled = selected.length === 0;
-    $("#selectionReviewUnselectMatches").textContent = `Unselect Matches (${selected.length.toLocaleString()})`;
-    $("#selectionReviewUnselectMatches").onclick = () => {
-      selected.forEach((m) => removeSelectedId(String(m.id)));
-      updateStats();
-      if (selectedIds.size === 0) {
-        $("#selectionReviewModal").style.display = "none";
-        switchView(currentView);
-      } else {
-        renderSelectionReview();
-        switchView(currentView);
-        $("#selectionReviewModal").style.display = "flex";
-      }
-    };
-
     if (selectedIds.size === 0) {
+      table.onscroll = null;
       setSafeHtml(table, `<div class="selection-empty">No messages selected.</div>`);
       $("#selectionReviewTrash").disabled = true;
       $("#selectionReviewFolder").disabled = true;
+      updateReviewBulkCounts();
       return;
     }
 
     $("#selectionReviewTrash").disabled = false;
     $("#selectionReviewFolder").disabled = false;
 
-    if (selected.length === 0) {
+    if (matched.length === 0) {
+      table.onscroll = null;
       setSafeHtml(table, `<div class="selection-empty">No selected messages match your search.</div>`);
+      updateReviewBulkCounts();
       return;
     }
 
-    const visible = selected.slice(0, 500);
+    // Virtual scroll: only the rows currently in view are ever rendered, but
+    // select-all / checkbox-sync operate on the full filtered+sorted list so
+    // "select all" genuinely covers everything, not just what's on screen.
+    const allIds = matched.map((m) => String(m.id));
+    const allChecked = allIds.length > 0 && allIds.every((id) => reviewCheckedIds.has(id));
+    const someChecked = allIds.some((id) => reviewCheckedIds.has(id));
+    const totalHeight = matched.length * SR_ROW_HEIGHT;
+
     setSafeHtml(table, `
       <div class="selection-review-table-head">
-        <span>Subject</span><span>Sender</span><span>Date</span><span>Size</span><span></span>
+        <span class="selection-checkbox-cell"><input type="checkbox" id="selectionReviewSelectAllVisible" ${allChecked ? "checked" : ""} aria-label="Select all"></span>
+        <span>Subject</span><span>Sender</span><span>Date</span><span>Size</span>
       </div>
-      ${visible.map((m) => `
-        <div class="selection-review-row" data-id="${escAttr(String(m.id))}">
+      <div class="sr-virtual-spacer" id="srVirtualSpacer" style="height:${totalHeight}px;"></div>
+    `);
+
+    const selectAllCb = table.querySelector("#selectionReviewSelectAllVisible");
+    if (selectAllCb && someChecked && !allChecked) selectAllCb.indeterminate = true;
+    const spacer = table.querySelector("#srVirtualSpacer");
+    const headEl = table.querySelector(".selection-review-table-head");
+
+    function rowHtml(m, idx) {
+      const mid = String(m.id);
+      const checked = reviewCheckedIds.has(mid);
+      return `
+        <div class="selection-review-row${checked ? " sr-row-checked" : ""}" data-id="${escAttr(mid)}" style="top:${idx * SR_ROW_HEIGHT}px;">
+          <div class="selection-checkbox-cell">
+            <input type="checkbox" class="selection-row-checkbox" data-id="${escAttr(mid)}" ${checked ? "checked" : ""} aria-label="Select message">
+          </div>
           <div class="selection-subject">
-            <button type="button" class="selection-open-link" data-open-message="${escAttr(String(m.id))}" title="Open in Thunderbird">${escHtml(m.subject || "(No Subject)")}</button>
+            <button type="button" class="selection-open-link" data-open-message="${escAttr(mid)}" title="Open in Thunderbird">${escHtml(m.subject || "(No Subject)")}</button>
             <span>${escHtml(displayFolderName("", m.folder) || "Unknown folder")} · ${escHtml(displayAccount(m.account || ""))}</span>
           </div>
           <div class="selection-sender">
@@ -2244,33 +3137,106 @@
           </div>
           <div class="selection-date">${escHtml(formatDate(m.date))}</div>
           <div class="selection-size">${formatBytes(messageSize(m))}</div>
-          <button type="button" class="btn btn-secondary selection-unselect-btn" data-review-remove="${escAttr(String(m.id))}">
-            <span aria-hidden="true">×</span> Unselect
-          </button>
-        </div>`).join("")}
-      ${selected.length > visible.length ? `<div class="selection-review-more">Showing first ${visible.length.toLocaleString()} of ${selected.length.toLocaleString()} matches. Narrow with search to inspect more.</div>` : ""}
-    `);
+        </div>`;
+    }
 
-    table.querySelectorAll("[data-review-remove]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        removeSelectedId(btn.dataset.reviewRemove);
-        updateStats();
-        if (selectedIds.size === 0) {
-          $("#selectionReviewModal").style.display = "none";
-          switchView(currentView);
-        } else {
-          renderSelectionReview();
-          switchView(currentView);
-          $("#selectionReviewModal").style.display = "flex";
-        }
+    let rafPending = false;
+    function renderVirtualRows() {
+      rafPending = false;
+      const headH = headEl ? headEl.offsetHeight : 0;
+      const relTop = Math.max(0, table.scrollTop - headH);
+      const startIndex = Math.max(0, Math.floor(relTop / SR_ROW_HEIGHT) - SR_VIRTUAL_BUFFER);
+      const visibleCount = Math.ceil(table.clientHeight / SR_ROW_HEIGHT) + SR_VIRTUAL_BUFFER * 2;
+      const endIndex = Math.min(matched.length, startIndex + visibleCount);
+      let html = "";
+      for (let i = startIndex; i < endIndex; i++) html += rowHtml(matched[i], i);
+      setSafeHtml(spacer, html);
+    }
+    function scheduleRenderVirtualRows() {
+      if (rafPending) return;
+      rafPending = true;
+      requestAnimationFrame(renderVirtualRows);
+    }
+    table.onscroll = scheduleRenderVirtualRows;
+    renderVirtualRows();
+
+    // Select-all: operates on the full filtered/sorted list, not just the rendered window.
+    if (selectAllCb) {
+      selectAllCb.addEventListener("change", () => {
+        allIds.forEach((id) => {
+          if (selectAllCb.checked) reviewCheckedIds.add(id); else reviewCheckedIds.delete(id);
+        });
+        selectAllCb.indeterminate = false;
+        updateReviewBulkCounts();
+        renderVirtualRows();
       });
+    }
+
+    // Per-row checkbox — delegated on the spacer since rows are recreated as the user scrolls.
+    spacer.addEventListener("change", (e) => {
+      const cb = e.target.closest(".selection-row-checkbox");
+      if (!cb) return;
+      const id = cb.dataset.id;
+      if (cb.checked) reviewCheckedIds.add(id); else reviewCheckedIds.delete(id);
+      const row = cb.closest(".selection-review-row");
+      if (row) row.classList.toggle("sr-row-checked", cb.checked);
+      const allNow = allIds.every((vid) => reviewCheckedIds.has(vid));
+      const someNow = allIds.some((vid) => reviewCheckedIds.has(vid));
+      if (selectAllCb) { selectAllCb.checked = allNow; selectAllCb.indeterminate = someNow && !allNow; }
+      updateReviewBulkCounts();
     });
+
+    updateReviewBulkCounts();
+  }
+
+  /** Refresh Exclude/Keep-only/Trash/Folder button counts — they all target the same checked+matched working set, so their counts must always agree. */
+  function updateReviewBulkCounts() {
+    const checkedCount = getCheckedReviewMessages().length;
+
+    const excludeBtn = $("#selectionReviewExcludeMatches");
+    if (excludeBtn) {
+      excludeBtn.disabled = checkedCount === 0;
+      const span = excludeBtn.querySelector("span");
+      if (span) span.textContent = checkedCount.toLocaleString();
+    }
+
+    const keepOnlyBtn = $("#selectionReviewKeepOnlyMatches");
+    if (keepOnlyBtn) {
+      keepOnlyBtn.disabled = checkedCount === 0 || checkedCount === selectedIds.size;
+      const span = keepOnlyBtn.querySelector("span");
+      if (span) span.textContent = checkedCount.toLocaleString();
+    }
+
+    const trashBtn = $("#selectionReviewTrash");
+    if (trashBtn) {
+      trashBtn.disabled = checkedCount === 0;
+      const span = trashBtn.querySelector("span");
+      if (span) span.textContent = checkedCount.toLocaleString();
+    }
+
+    const folderBtn = $("#selectionReviewFolder");
+    if (folderBtn) {
+      folderBtn.disabled = checkedCount === 0;
+      const span = folderBtn.querySelector("span");
+      if (span) span.textContent = checkedCount.toLocaleString();
+    }
   }
 
   function removeSelectedId(rawId) {
     selectedIds.delete(rawId);
     const numericId = Number(rawId);
     if (!Number.isNaN(numericId)) selectedIds.delete(numericId);
+  }
+
+  /** Toggle a whole group of messages in/out of the selection — same all-or-nothing pattern used by Categories pie clicks. */
+  function toggleSelectMessages(msgs) {
+    if (!msgs || !msgs.length) return;
+    const allSelected = msgs.every((m) => selectedIds.has(m.id));
+    msgs.forEach((m) => {
+      if (allSelected) selectedIds.delete(m.id);
+      else selectedIds.add(m.id);
+    });
+    updateStats();
   }
 
   async function openMessageInThunderbird(messageId) {
@@ -2316,12 +3282,175 @@
   }
 
   // ══════════════════════════════════════════
+  //  BROWSE — flat, searchable, virtual-scrolled table of every scanned
+  //  email. Checkboxes write straight into the shared `selectedIds`, so
+  //  checking a row here is identical to clicking a slice in By Sender/Domain:
+  //  it shows up in the floating selection bar and Review Selected immediately.
+  // ══════════════════════════════════════════
+  function getBrowseMessages() {
+    const q = browseState.query.trim().toLowerCase();
+    let msgs = getFilteredMessages();
+    if (q) msgs = msgs.filter((m) => matchesReviewQuery(m, q));
+
+    const sort = browseState.sort;
+    msgs = msgs.slice().sort((a, b) => {
+      if (sort === "date-asc") return new Date(a.date) - new Date(b.date);
+      if (sort === "size-desc") return messageSize(b) - messageSize(a);
+      if (sort === "sender-asc") return (a.senderEmail || "").localeCompare(b.senderEmail || "");
+      if (sort === "subject-asc") return (a.subject || "").localeCompare(b.subject || "");
+      return new Date(b.date) - new Date(a.date);
+    });
+    return msgs;
+  }
+
+  function renderBrowseView() {
+    const table = $("#browseTable");
+    const search = $("#browseSearch");
+    const sort = $("#browseSort");
+    if (!table || !search || !sort) return;
+
+    search.value = browseState.query;
+    sort.value = browseState.sort;
+    search.oninput = () => { browseState.query = search.value; renderBrowseView(); };
+    sort.onchange = () => { browseState.sort = sort.value; renderBrowseView(); };
+
+    const msgs = getBrowseMessages();
+    const totalAll = getFilteredMessages().length;
+
+    function updateBrowseSummary() {
+      const summaryEl = $("#browseSummary");
+      if (!summaryEl) return;
+      const selCount = selectedIds.size;
+      summaryEl.textContent = browseState.query.trim()
+        ? `${msgs.length.toLocaleString()} of ${totalAll.toLocaleString()} matched · ${selCount.toLocaleString()} selected`
+        : `${totalAll.toLocaleString()} emails · ${selCount.toLocaleString()} selected`;
+    }
+    updateBrowseSummary();
+
+    if (msgs.length === 0) {
+      table.onscroll = null;
+      setSafeHtml(table, `<div class="selection-empty">${totalAll === 0 ? "No emails scanned yet." : "No emails match your search."}</div>`);
+      return;
+    }
+
+    // Virtual scroll — same technique as the Review Selected modal: a spacer
+    // holds the full scrollable height, only the visible window (+ buffer) is
+    // ever in the DOM, and select-all operates on the full list, not just what's rendered.
+    const idToMsg = new Map(msgs.map((m) => [String(m.id), m]));
+    const allIds = Array.from(idToMsg.keys());
+    const allChecked = allIds.length > 0 && allIds.every((id) => selectedIds.has(idToMsg.get(id).id));
+    const someChecked = allIds.some((id) => selectedIds.has(idToMsg.get(id).id));
+    const totalHeight = msgs.length * SR_ROW_HEIGHT;
+
+    setSafeHtml(table, `
+      <div class="selection-review-table-head">
+        <span class="selection-checkbox-cell"><input type="checkbox" id="browseSelectAll" ${allChecked ? "checked" : ""} aria-label="Select all"></span>
+        <span>Subject</span><span>Sender</span><span>Date</span><span>Size</span>
+      </div>
+      <div class="sr-virtual-spacer" id="browseVirtualSpacer" style="height:${totalHeight}px;"></div>
+    `);
+
+    const selectAllCb = table.querySelector("#browseSelectAll");
+    if (selectAllCb && someChecked && !allChecked) selectAllCb.indeterminate = true;
+    const spacer = table.querySelector("#browseVirtualSpacer");
+    const headEl = table.querySelector(".selection-review-table-head");
+
+    function rowHtml(m, idx) {
+      const mid = String(m.id);
+      const checked = selectedIds.has(m.id);
+      return `
+        <div class="selection-review-row${checked ? " sr-row-checked" : ""}" data-id="${escAttr(mid)}" style="top:${idx * SR_ROW_HEIGHT}px;">
+          <div class="selection-checkbox-cell">
+            <input type="checkbox" class="selection-row-checkbox" data-id="${escAttr(mid)}" ${checked ? "checked" : ""} aria-label="Select message">
+          </div>
+          <div class="selection-subject">
+            <button type="button" class="selection-open-link" data-open-message="${escAttr(mid)}" title="Open in Thunderbird">${escHtml(m.subject || "(No Subject)")}</button>
+            <span>${escHtml(displayFolderName("", m.folder) || "Unknown folder")} · ${escHtml(displayAccount(m.account || ""))}</span>
+          </div>
+          <div class="selection-sender">
+            <strong>${escHtml(m.senderName || displayEmail(m.senderEmail))}</strong>
+            <span>${escHtml(displayEmail(m.senderEmail) || "")}</span>
+          </div>
+          <div class="selection-date">${escHtml(formatDate(m.date))}</div>
+          <div class="selection-size">${formatBytes(messageSize(m))}</div>
+        </div>`;
+    }
+
+    let rafPending = false;
+    function renderVirtualRows() {
+      rafPending = false;
+      const headH = headEl ? headEl.offsetHeight : 0;
+      const relTop = Math.max(0, table.scrollTop - headH);
+      const startIndex = Math.max(0, Math.floor(relTop / SR_ROW_HEIGHT) - SR_VIRTUAL_BUFFER);
+      const visibleCount = Math.ceil(table.clientHeight / SR_ROW_HEIGHT) + SR_VIRTUAL_BUFFER * 2;
+      const endIndex = Math.min(msgs.length, startIndex + visibleCount);
+      let html = "";
+      for (let i = startIndex; i < endIndex; i++) html += rowHtml(msgs[i], i);
+      setSafeHtml(spacer, html);
+    }
+    function scheduleRenderVirtualRows() {
+      if (rafPending) return;
+      rafPending = true;
+      requestAnimationFrame(renderVirtualRows);
+    }
+    table.onscroll = scheduleRenderVirtualRows;
+    renderVirtualRows();
+
+    if (selectAllCb) {
+      selectAllCb.addEventListener("change", () => {
+        allIds.forEach((id) => {
+          const msg = idToMsg.get(id);
+          if (selectAllCb.checked) selectedIds.add(msg.id); else removeSelectedId(id);
+        });
+        selectAllCb.indeterminate = false;
+        updateStats();
+        updateBrowseSummary();
+        renderVirtualRows();
+      });
+    }
+
+    // Per-row checkbox — delegated on the spacer since rows are recreated as the user scrolls.
+    spacer.addEventListener("change", (e) => {
+      const cb = e.target.closest(".selection-row-checkbox");
+      if (!cb) return;
+      const id = cb.dataset.id;
+      const msg = idToMsg.get(id);
+      if (!msg) return;
+      if (cb.checked) selectedIds.add(msg.id); else removeSelectedId(id);
+      const row = cb.closest(".selection-review-row");
+      if (row) row.classList.toggle("sr-row-checked", cb.checked);
+      const allNow = allIds.every((vid) => selectedIds.has(idToMsg.get(vid).id));
+      const someNow = allIds.some((vid) => selectedIds.has(idToMsg.get(vid).id));
+      if (selectAllCb) { selectAllCb.checked = allNow; selectAllCb.indeterminate = someNow && !allNow; }
+      updateStats();
+      updateBrowseSummary();
+    });
+  }
+
+  // ══════════════════════════════════════════
   //  DELETE (modal-based)
   // ══════════════════════════════════════════
-  function showDeleteModal() {
-    const count = selectedIds.size;
+  /** Drives the in-modal pie progress ring (Move to Trash / Move to Folder) — pct = 0..100 conic-gradient fill + centered label. */
+  function setModalProgress(prefix, moved, total, statusText, isError = false) {
+    const pct = total > 0 ? Math.min(100, Math.round((moved / total) * 100)) : 0;
+    const ring = $(`#${prefix}Ring`);
+    const pctEl = $(`#${prefix}Pct`);
+    const statusEl = $(`#${prefix}Status`);
+    if (ring) ring.style.setProperty("--pct", pct);
+    if (pctEl) pctEl.textContent = `${pct}%`;
+    if (statusEl) {
+      statusEl.textContent = statusText;
+      statusEl.classList.toggle("modal-progress-error", isError);
+    }
+  }
+
+  function showDeleteModal(targetIds = null) {
+    const idsToAct = targetIds || Array.from(selectedIds);
+    const idsToActSet = new Set(idsToAct);
+    const count = idsToAct.length;
+    if (count === 0) return;
     const senders = new Set();
-    allMessages.forEach((m) => { if (selectedIds.has(m.id)) senders.add(m.senderEmail); });
+    allMessages.forEach((m) => { if (idsToActSet.has(m.id)) senders.add(m.senderEmail); });
 
     setSafeHtml($("#deleteModalText"), `
       You're about to move <strong>${count.toLocaleString()} email(s)</strong> from
@@ -2329,44 +3458,56 @@
     `);
 
     const modal = $("#deleteModal");
+    const confirmView = $("#deleteModalConfirmView");
+    const progressView = $("#deleteModalProgress");
+    confirmView.style.display = "";
+    progressView.style.display = "none";
+    setModalProgress("deleteModal", 0, count, "Preparing…");
     modal.style.display = "flex";
 
     $("#modalCancel").onclick = () => { modal.style.display = "none"; };
     $("#modalConfirm").onclick = async () => {
-      modal.style.display = "none";
-      $("#progressArea").style.display = "block";
-      $("#progressText").textContent = `Moving ${count} emails to Trash…`;
-      $("#progressFill").style.width = "30%";
+      confirmView.style.display = "none";
+      progressView.style.display = "flex";
+      setModalProgress("deleteModal", 0, count, `Moving 0 of ${count.toLocaleString()}…`);
+
+      const progressListener = (msg) => {
+        if (msg.action === "deleteProgress") {
+          setModalProgress("deleteModal", msg.moved, msg.total, `Moving ${msg.moved.toLocaleString()} of ${msg.total.toLocaleString()}…`);
+        }
+      };
+      browser.runtime.onMessage.addListener(progressListener);
 
       try {
         const result = await browser.runtime.sendMessage({
           action: "deleteMessages",
-          messageIds: Array.from(selectedIds),
+          messageIds: idsToAct,
         });
+        browser.runtime.onMessage.removeListener(progressListener);
 
         if (result && result.success) {
-          const movedIds = Array.isArray(result.movedIds) ? result.movedIds : Array.from(selectedIds);
+          const movedIds = Array.isArray(result.movedIds) ? result.movedIds : idsToAct;
           const movedSet = new Set(movedIds);
           allMessages = allMessages.filter((m) => !movedSet.has(m.id));
-          movedIds.forEach((id) => selectedIds.delete(id));
+          movedIds.forEach((id) => { selectedIds.delete(id); reviewCheckedIds.delete(String(id)); });
           updateStats();
-          $("#progressFill").style.width = "100%";
-          $("#progressText").textContent = result.count === result.total
-            ? `Done — moved ${result.count} of ${result.total} to Trash.`
-            : `Partial — moved ${result.count} of ${result.total} to Trash. Review remaining selections.`;
+          setModalProgress("deleteModal", result.count, result.total, result.count === result.total
+            ? `Done — moved ${result.count.toLocaleString()} to Trash.`
+            : `Partial — moved ${result.count.toLocaleString()} of ${result.total.toLocaleString()}. Review remaining selections.`);
           if (result.errors) {
             console.warn("Some batches had errors:", result.errors);
           }
           setTimeout(() => {
-            $("#progressArea").style.display = "none";
+            modal.style.display = "none";
             switchView(currentView);
-          }, 1500);
+          }, 1200);
         } else {
           const msg = result?.error || result?.errors?.[0] || "Could not move selected messages to Trash.";
-          $("#progressText").textContent = `Error: ${msg}`;
+          setModalProgress("deleteModal", 0, count, `Error: ${msg}`, true);
         }
       } catch (e) {
-        $("#progressText").textContent = `Error: ${e.message}`;
+        browser.runtime.onMessage.removeListener(progressListener);
+        setModalProgress("deleteModal", 0, count, `Error: ${e.message}`, true);
       }
     };
   }
@@ -2374,16 +3515,23 @@
   // ══════════════════════════════════════════
   //  MOVE TO FOLDER (modal + background)
   // ══════════════════════════════════════════
-  async function showMoveFolderModal() {
-    const totalSel = selectedIds.size;
+  async function showMoveFolderModal(targetIds = null) {
+    const idsToAct = targetIds || Array.from(selectedIds);
+    const idsToActSet = new Set(idsToAct);
+    const totalSel = idsToAct.length;
     if (totalSel === 0) return;
 
-    const selectedMsgs = allMessages.filter((m) => selectedIds.has(m.id));
+    const selectedMsgs = allMessages.filter((m) => idsToActSet.has(m.id));
     const accountIds = [...new Set(selectedMsgs.map((m) => m.accountId))];
 
     const modal = $("#folderModal");
     const select = $("#folderModalSelect");
     const confirmBtn = $("#folderModalConfirm");
+    const confirmView = $("#folderModalConfirmView");
+    const progressView = $("#folderModalProgress");
+    confirmView.style.display = "";
+    progressView.style.display = "none";
+    setModalProgress("folderModal", 0, totalSel, "Preparing…");
 
     setSafeHtml($("#folderModalText"),
       accountIds.length > 1
@@ -2456,19 +3604,25 @@
       const accountId = opt.dataset.accountId;
       const folderPath = opt.dataset.folderPath;
       const idsToMove = allMessages
-        .filter((m) => selectedIds.has(m.id) && m.accountId === accountId)
+        .filter((m) => idsToActSet.has(m.id) && m.accountId === accountId)
         .map((m) => m.id);
 
-      modal.style.display = "none";
-
       if (idsToMove.length === 0) {
+        modal.style.display = "none";
         alert("None of the selected messages belong to the account for that folder. Pick a folder under another account or adjust your selection.");
         return;
       }
 
-      $("#progressArea").style.display = "block";
-      $("#progressText").textContent = `Moving ${idsToMove.length} message(s)…`;
-      $("#progressFill").style.width = "30%";
+      confirmView.style.display = "none";
+      progressView.style.display = "flex";
+      setModalProgress("folderModal", 0, idsToMove.length, `Moving 0 of ${idsToMove.length.toLocaleString()}…`);
+
+      const progressListener = (msg) => {
+        if (msg.action === "moveProgress") {
+          setModalProgress("folderModal", msg.moved, msg.total, `Moving ${msg.moved.toLocaleString()} of ${msg.total.toLocaleString()}…`);
+        }
+      };
+      browser.runtime.onMessage.addListener(progressListener);
 
       try {
         const result = await browser.runtime.sendMessage({
@@ -2477,28 +3631,29 @@
           accountId,
           folderPath,
         });
+        browser.runtime.onMessage.removeListener(progressListener);
 
         if (result && result.success) {
           const movedIds = Array.isArray(result.movedIds) ? result.movedIds : idsToMove;
           const movedSet = new Set(movedIds);
           allMessages = allMessages.filter((m) => !movedSet.has(m.id));
-          movedIds.forEach((id) => selectedIds.delete(id));
+          movedIds.forEach((id) => { selectedIds.delete(id); reviewCheckedIds.delete(String(id)); });
           updateStats();
-          $("#progressFill").style.width = "100%";
-          $("#progressText").textContent = result.count === result.total
-            ? `Done — moved ${result.count} of ${result.total} message(s).`
-            : `Partial — moved ${result.count} of ${result.total} message(s). Review remaining selections.`;
+          setModalProgress("folderModal", result.count, result.total, result.count === result.total
+            ? `Done — moved ${result.count.toLocaleString()} message(s).`
+            : `Partial — moved ${result.count.toLocaleString()} of ${result.total.toLocaleString()} message(s). Review remaining selections.`);
           if (result.errors) console.warn("Some batches had errors:", result.errors);
           setTimeout(() => {
-            $("#progressArea").style.display = "none";
+            modal.style.display = "none";
             switchView(currentView);
-          }, 1500);
+          }, 1200);
         } else {
           const msg = result?.error || result?.errors?.[0] || "Move failed";
-          $("#progressText").textContent = `Error: ${msg}`;
+          setModalProgress("folderModal", 0, idsToMove.length, `Error: ${msg}`, true);
         }
       } catch (e) {
-        $("#progressText").textContent = `Error: ${e.message}`;
+        browser.runtime.onMessage.removeListener(progressListener);
+        setModalProgress("folderModal", 0, idsToMove.length, `Error: ${e.message}`, true);
       }
     };
   }
@@ -2632,6 +3787,635 @@
       .replace(/'/g, "&#39;");
   }
   function escAttr(s) { return (s || "").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
+
+  // ══════════════════════════════════════════
+  //  CATEGORIES (Phase 3)
+  // ══════════════════════════════════════════
+
+  const DEFAULT_BUILT_IN_CATEGORIES = [
+    { name: "Finance", icon: "💰", keywords: ["payment","invoice","bill","bank","credit","debit","statement","transaction","balance","money","fund","investment","loan","tax"] },
+    { name: "Shopping", icon: "🛍️", keywords: ["order","purchase","delivery","shipping","amazon","cart","shop","buy","receipt","product","item","refund","return","track"] },
+    { name: "Travel", icon: "✈️", keywords: ["flight","hotel","booking","ticket","reservation","travel","trip","journey","airline","airport","itinerary"] },
+    { name: "Work", icon: "💼", keywords: ["meeting","project","deadline","team","report","schedule","task","office","manager","sprint","standup","review","jira"] },
+    { name: "Newsletters", icon: "📰", keywords: ["newsletter","unsubscribe","weekly","digest","subscribe","edition","substack","mailchimp"] },
+    { name: "Social", icon: "👥", keywords: ["friend","follow","comment","like","mention","invite","connect","profile","network","notification"] },
+    { name: "Tech", icon: "⚙️", keywords: ["update","release","version","feature","bug","security","software","app","github","deploy","patch"] },
+    { name: "Healthcare", icon: "🏥", keywords: ["appointment","prescription","doctor","health","medical","clinic","hospital","insurance","lab","test"] },
+    { name: "Food", icon: "🍔", keywords: ["restaurant","food","delivery","menu","zomato","swiggy","meal","doordash","order","cuisine"] },
+    { name: "Utilities", icon: "⚡", keywords: ["electricity","water","gas","internet","phone","broadband","utility","provider","bill","recharge"] },
+    { name: "Real Estate", icon: "🏠", keywords: ["property","rent","lease","apartment","house","mortgage","tenant","landlord","flat","listing"] }
+  ];
+
+  let emailCategories = new Map(); // Map<mailId, categoryName>
+
+  async function loadCategoriesFromStorage() {
+    try {
+      const result = await browser.storage.local.get("categories");
+      return result.categories || [];
+    } catch (e) {
+      console.error("Failed to load categories:", e);
+      return [];
+    }
+  }
+
+  async function saveCategoryToStorage(name, keywords) {
+    try {
+      const cats = await loadCategoriesFromStorage();
+      const exists = cats.findIndex(c => c.name === name);
+      // Get icon from default categories if available
+      const defaultCat = DEFAULT_BUILT_IN_CATEGORIES.find(c => c.name === name);
+      const icon = defaultCat ? defaultCat.icon : "🏷️";
+
+      if (exists >= 0) {
+        cats[exists].keywords = keywords;
+        cats[exists].icon = icon;
+      } else {
+        cats.push({ name, icon, keywords, builtin: 0 });
+      }
+      await browser.storage.local.set({ categories: cats });
+      return true;
+    } catch (e) {
+      console.error("Failed to save category:", e);
+      return false;
+    }
+  }
+
+  async function deleteCategoryFromStorage(name) {
+    try {
+      const cats = await loadCategoriesFromStorage();
+      const filtered = cats.filter(c => c.name !== name);
+      await browser.storage.local.set({ categories: filtered });
+      return true;
+    } catch (e) {
+      console.error("Failed to delete category:", e);
+      return false;
+    }
+  }
+
+  function classifyEmail(email, categories) {
+    const text = (email.subject + " " + email.author + " " + (email.domain || "")).toLowerCase();
+    for (const cat of categories) {
+      for (const kw of (cat.keywords || [])) {
+        if (text.includes(kw.toLowerCase())) return cat.name;
+      }
+    }
+    return null;
+  }
+
+  async function renderSettingsView() {
+    const container = $("#settingsView");
+    if (!container) return;
+
+    // Seed default categories if not already done
+    const existing = await loadCategoriesFromStorage();
+    if (!existing || !existing.length) {
+      for (const cat of DEFAULT_BUILT_IN_CATEGORIES) {
+        await saveCategoryToStorage(cat.name, cat.keywords);
+      }
+    }
+
+    await renderCategoryList();
+    wireUpCategoryAdd();
+
+    // Also classify emails when Settings is opened
+    await reclassifyAllEmails();
+  }
+
+  async function renderCategoryList() {
+    const list = $("#aisCategoriesList");
+    if (!list) return;
+
+    const categories = await loadCategoriesFromStorage();
+    if (!categories.length) {
+      setSafeHtml(list, '<div class="ais-folders-empty">No categories. Add one below.</div>');
+      return;
+    }
+
+    const byName = {};
+    categories.forEach(c => { byName[c.name] = (c.keywords || []).slice(); });
+
+    setSafeHtml(list, categories.map(c => {
+      const chips = (c.keywords || []).map(k => {
+        return '<span class="ais-cat-chip" data-cat="' + escAttr(c.name) + '" data-kw="' + escAttr(k) + '">' +
+          escHtml(k) + '<button class="ais-cat-chip-x" title="Remove keyword">×</button></span>';
+      }).join('');
+      return '<div class="ais-cat-row">' +
+        '<div class="ais-cat-head">' +
+          '<span class="ais-cat-name">' + escHtml(c.icon || '🏷️') + ' ' + escHtml(c.name) + '</span>' +
+          '<button class="ais-cat-del" title="Delete category" data-cat="' + escAttr(c.name) + '">✕</button>' +
+        '</div>' +
+        '<div class="ais-cat-kws">' + chips +
+          '<input type="text" class="ais-cat-kwadd" data-cat="' + escAttr(c.name) + '" placeholder="+ keyword">' +
+        '</div>' +
+      '</div>';
+    }).join(''));
+
+    // Wire up keyword chip removal
+    list.querySelectorAll('.ais-cat-chip-x').forEach(btn => {
+      btn.addEventListener('click', async function () {
+        const chip = btn.closest('.ais-cat-chip');
+        const cat = chip.getAttribute('data-cat'), kw = chip.getAttribute('data-kw');
+        const updated = (byName[cat] || []).filter(k => k !== kw);
+        await saveCategoryToStorage(cat, updated);
+        await renderCategoryList();
+        reclassifyAllEmails();
+      });
+    });
+
+    // Wire up adding keywords
+    list.querySelectorAll('.ais-cat-kwadd').forEach(inp => {
+      inp.addEventListener('keydown', async function (e) {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        const cat = inp.getAttribute('data-cat'), val = inp.value.trim();
+        if (!val) return;
+        const adds = val.split(',').map(s => s.trim()).filter(Boolean);
+        let next = (byName[cat] || []).concat(adds);
+        next = next.filter((k, i) => next.indexOf(k) === i); // dedupe
+        inp.value = '';
+        await saveCategoryToStorage(cat, next);
+        await renderCategoryList();
+        reclassifyAllEmails();
+      });
+    });
+
+    // Wire up category deletion
+    list.querySelectorAll('.ais-cat-del').forEach(btn => {
+      btn.addEventListener('click', async function () {
+        const name = btn.getAttribute('data-cat');
+        if (!window.confirm('Delete category "' + name + '"?')) return;
+        await deleteCategoryFromStorage(name);
+        await renderCategoryList();
+        reclassifyAllEmails();
+      });
+    });
+  }
+
+  function wireUpCategoryAdd() {
+    const btn = $("#aisCatAdd");
+    const nameInput = $("#aisCatName");
+    const kwInput = $("#aisCatKeywords");
+    if (!btn || !nameInput || !kwInput) return;
+
+    async function add() {
+      const n = nameInput.value.trim();
+      if (!n) { nameInput.focus(); return; }
+      const keywords = kwInput.value.split(',').map(s => s.trim()).filter(Boolean);
+      btn.disabled = true;
+      await saveCategoryToStorage(n, keywords);
+      nameInput.value = '';
+      kwInput.value = '';
+      btn.disabled = false;
+      await renderCategoryList();
+      reclassifyAllEmails();
+    }
+
+    btn.addEventListener('click', add);
+    kwInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+  }
+
+  async function reclassifyAllEmails() {
+    const categories = await loadCategoriesFromStorage();
+    emailCategories.clear();
+    allMessages.forEach(msg => {
+      const cat = classifyEmail(msg, categories);
+      if (cat) emailCategories.set(msg.id, cat);
+    });
+  }
+
+  // ══════════════════════════════════════════
+  //  SUBSCRIPTIONS (Phase 4)
+  // ══════════════════════════════════════════
+
+  function computeSubscriptionStats(msgs) {
+    const byDomain = {};
+    msgs.forEach(m => {
+      if (!m.domain || !m.date) return;
+      const ts = Math.floor(new Date(m.date).getTime() / 1000);
+      if (!ts || isNaN(ts)) return;
+      if (!byDomain[m.domain]) byDomain[m.domain] = { dates: [], subjects: [], senders: {}, size: 0 };
+      const g = byDomain[m.domain];
+      g.dates.push(ts);
+      if (m.subject) g.subjects.push(m.subject.toLowerCase());
+      if (m.senderEmail) g.senders[m.senderEmail] = true;
+      g.size += m.size || 0;
+    });
+
+    const results = [];
+    Object.keys(byDomain).forEach(domain => {
+      const g = byDomain[domain];
+      if (g.dates.length < 3) return;
+      g.dates.sort((a, b) => a - b);
+
+      let totalGap = 0;
+      for (let i = 1; i < g.dates.length; i++) totalGap += (g.dates[i] - g.dates[i - 1]) / 86400;
+      const avgDays = totalGap / (g.dates.length - 1);
+
+      let frequency;
+      if (avgDays <= 1.5) frequency = "Daily";
+      else if (avgDays <= 4) frequency = "Every few days";
+      else if (avgDays <= 10) frequency = "Weekly";
+      else if (avgDays <= 25) frequency = "Bi-weekly";
+      else if (avgDays <= 55) frequency = "Monthly";
+      else if (avgDays <= 100) frequency = "Quarterly";
+      else frequency = "Occasional";
+
+      if (frequency === "Occasional") return;
+
+      const hasUnsubscribe = g.subjects.some(s => s.indexOf("unsubscribe") !== -1);
+
+      results.push({
+        domain: domain,
+        email_count: g.dates.length,
+        sender_count: Object.keys(g.senders).length,
+        avg_interval_days: Math.round(avgDays * 10) / 10,
+        frequency: frequency,
+        is_newsletter: hasUnsubscribe,
+        last_date_unix: g.dates[g.dates.length - 1],
+        size_bytes: g.size
+      });
+    });
+
+    return results.sort((a, b) => b.email_count - a.email_count);
+  }
+
+  async function renderSubscriptionsView() {
+    const stats = computeSubscriptionStats(allMessages);
+    if (!stats.length) {
+      const container = $("#subscriptionsCards");
+      if (container) setSafeHtml(container, '<div class="ais-folders-empty">No subscriptions detected.</div>');
+      return;
+    }
+
+    renderSubscriptionChart(stats);
+    renderSubscriptionFreqTabs(stats);
+  }
+
+  function renderSubscriptionChart(stats) {
+    const freqCounts = {};
+    stats.forEach(s => {
+      freqCounts[s.frequency] = (freqCounts[s.frequency] || 0) + 1;
+    });
+
+    const freqOrder = ["Daily", "Every few days", "Weekly", "Bi-weekly", "Monthly", "Quarterly"];
+    const data = freqOrder
+      .filter(f => freqCounts[f])
+      .map((f, i) => ({
+        name: f,
+        value: freqCounts[f],
+        itemStyle: { color: colorFor(i) }
+      }));
+
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    const textColor = isLight ? "#1a1d24" : "#eaedf2";
+
+    initViewChart("chart-subscriptions-container", {
+      backgroundColor: "transparent",
+      tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${p.value.toLocaleString()} subscriptions (${p.percent}%)`, textStyle: { color: textColor } },
+      legend: { show: false },
+      series: [{
+        type: "pie",
+        radius: ["38%", "68%"],
+        center: ["50%", "50%"],
+        data: data,
+        label: { formatter: "{b}\n{d}%", fontSize: 11, color: textColor },
+        emphasis: { itemStyle: { shadowBlur: 8, shadowColor: isLight ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.4)" } }
+      }]
+    });
+  }
+
+  function renderSubscriptionFreqTabs(stats) {
+    const tabs = $("#subscriptionsFreqTabs");
+    if (!tabs) return;
+
+    const freqs = ["All", "Newsletter", ...["Daily", "Every few days", "Weekly", "Bi-weekly", "Monthly", "Quarterly"]];
+    setSafeHtml(tabs, freqs.map(f => {
+      const count = f === "All" ? stats.length :
+                    f === "Newsletter" ? stats.filter(s => s.is_newsletter).length :
+                    stats.filter(s => s.frequency === f).length;
+      return `<button class="sub-freq-tab ${f === 'All' ? 'active' : ''}" data-freq="${f}">${f} (${count})</button>`;
+    }).join(''));
+
+    tabs.querySelectorAll('.sub-freq-tab').forEach(btn => {
+      btn.addEventListener('click', function () {
+        tabs.querySelectorAll('.sub-freq-tab').forEach(b => b.classList.remove('active'));
+        this.classList.add('active');
+        const freq = this.getAttribute('data-freq');
+        renderSubscriptionCards(stats, freq);
+      });
+    });
+
+    renderSubscriptionCards(stats, "All");
+  }
+
+  function renderSubscriptionCards(stats, filter) {
+    let filtered = stats;
+    if (filter === "Newsletter") filtered = stats.filter(s => s.is_newsletter);
+    else if (filter !== "All") filtered = stats.filter(s => s.frequency === filter);
+
+    const cards = $("#subscriptionsCards");
+    if (!cards) return;
+
+    if (!filtered.length) {
+      setSafeHtml(cards, '<div class="ais-folders-empty">No subscriptions in this category.</div>');
+      return;
+    }
+
+    setSafeHtml(cards, filtered.map((s, i) => {
+      const lastDate = new Date(s.last_date_unix * 1000);
+      const dateStr = lastDate.toLocaleDateString();
+      const domain = displayDomain(s.domain);
+      return `<div class="an-sub-card" style="border-left: 4px solid ${colorFor(i)}">
+        <div class="an-sub-domain">${escHtml(domain)}</div>
+        <div class="an-sub-badges">
+          ${s.is_newsletter ? '<span class="an-sub-badge an-sub-newsletter">Newsletter</span>' : ''}
+          <span class="an-sub-badge an-sub-freq">${escHtml(s.frequency)}</span>
+        </div>
+        <div class="an-sub-meta">
+          <div><strong>${s.email_count}</strong> emails</div>
+          <div><strong>${s.avg_interval_days}</strong> days avg</div>
+          <div>Last: ${dateStr}</div>
+        </div>
+      </div>`;
+    }).join(''));
+  }
+
+  // ══════════════════════════════════════════
+  //  BY CATEGORIES VIEW
+  // ══════════════════════════════════════════
+
+  async function renderCategoriesView() {
+    const container = $("#categoriesGrid");
+    if (!container) return;
+
+    // Seed default categories if not already done
+    let categories = await loadCategoriesFromStorage();
+    if (!categories || !categories.length) {
+      for (const cat of DEFAULT_BUILT_IN_CATEGORIES) {
+        await saveCategoryToStorage(cat.name, cat.keywords);
+      }
+      categories = await loadCategoriesFromStorage();
+    }
+
+    if (!categories || !categories.length) {
+      setSafeHtml(container, '<div class="ais-folders-empty">No categories defined.</div>');
+      return;
+    }
+
+    const entries = categories.map(cat => {
+      const msgs = allMessages.length > 0 ? allMessages.filter(m => classifyEmail(m, [cat])) : [];
+      const bySender = {};
+      msgs.forEach(m => {
+        const key = m.senderEmail || m.author || "Unknown";
+        if (!bySender[key]) bySender[key] = { email: key, name: m.senderName || key, count: 0, msgs: [] };
+        bySender[key].count++;
+        bySender[key].msgs.push(m);
+      });
+      const senders = Object.values(bySender).sort((a, b) => b.count - a.count);
+      return { ...cat, msgs, count: msgs.length, senders };
+    }).sort((a, b) => b.count - a.count);
+
+    setSafeHtml(container, entries.map((cat, i) => {
+      const selected = cat.count > 0 && cat.msgs.every(m => selectedIds.has(m.id));
+      const topSenders = cat.senders.slice(0, 5);
+
+      const miniRows = topSenders.length
+        ? topSenders.map(s => {
+            const sSelected = s.msgs.every(m => selectedIds.has(m.id));
+            return `
+              <div class="category-mini-row ${sSelected ? "selected" : ""}" data-email="${escAttr(s.email)}">
+                <div class="category-mini-info">
+                  <div class="category-mini-name">${escHtml(s.name)}</div>
+                  <div class="category-mini-email">${escHtml(displayEmail(s.email))}</div>
+                </div>
+                <div class="category-mini-count">${s.count.toLocaleString()}</div>
+              </div>`;
+          }).join("")
+        : `<div class="insight-empty">No emails in this category yet.</div>`;
+
+      return `
+      <div class="category-card" data-cat="${escAttr(cat.name)}">
+        <div class="category-card-head">
+          <div class="category-card-title"><span class="category-icon">${escHtml(cat.icon)}</span><strong>${escHtml(cat.name)}</strong></div>
+          <div class="category-card-count">${cat.count.toLocaleString()} emails</div>
+        </div>
+        <div class="category-keywords">${escHtml((cat.keywords || []).slice(0, 4).join(", "))}${cat.keywords && cat.keywords.length > 4 ? '…' : ''}</div>
+        ${cat.count > 0 ? `<div id="chart-cat-${i}" class="chart-container category-card-chart"></div>` : ""}
+        <div class="category-mini-list">${miniRows}</div>
+        <button type="button" class="btn btn-secondary btn-small category-select-btn ${selected ? "active" : ""}" data-cat="${escAttr(cat.name)}" ${cat.count === 0 ? "disabled" : ""}>
+          ${selected ? "✓ Selected" : `Select all ${cat.count.toLocaleString()} for Review`}
+        </button>
+      </div>`;
+    }).join(''));
+
+    const toggleSelectAll = (msgs) => {
+      if (!msgs.length) return;
+      const allSelected = msgs.every(m => selectedIds.has(m.id));
+      msgs.forEach(m => {
+        if (allSelected) selectedIds.delete(m.id);
+        else selectedIds.add(m.id);
+      });
+      updateStats();
+      renderCategoriesView();
+    };
+
+    // Per-card chart: top senders in that category
+    entries.forEach((cat, i) => {
+      if (!cat.count) return;
+      const hostId = `chart-cat-${i}`;
+      if (!document.getElementById(hostId)) return;
+
+      const chartSenders = cat.senders.slice(0, 8);
+      const data = chartSenders.map((s, si) => ({
+        name: s.email,
+        value: s.count,
+        itemStyle: { color: colorFor(si) }
+      }));
+
+      const isLight = document.documentElement.getAttribute("data-theme") === "light";
+      const textColor = isLight ? "#1a1d24" : "#eaedf2";
+
+      initViewChart(hostId, {
+        backgroundColor: "transparent",
+        tooltip: { trigger: "item", formatter: (p) => `${displayEmail(p.name)}: ${p.value.toLocaleString()} emails (${p.percent}%)`, textStyle: { color: textColor } },
+        legend: { show: false },
+        series: [{
+          type: "pie",
+          radius: ["45%", "72%"],
+          center: ["50%", "50%"],
+          data: data,
+          label: { formatter: (p) => `${displayEmail(p.name)}\n${p.percent}%`, fontSize: 10, color: textColor },
+          emphasis: { itemStyle: { shadowBlur: 8, shadowColor: isLight ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.4)" } }
+        }]
+      });
+
+      const chart = document.getElementById(hostId).querySelector('.chart-host')._echartsInstance;
+      if (chart) {
+        chart.on("click", (params) => {
+          const sender = chartSenders.find(s => s.email === params.name);
+          if (sender) toggleSelectAll(sender.msgs);
+        });
+      }
+    });
+
+    container.querySelectorAll('.category-card').forEach((card, idx) => {
+      const cat = entries[idx];
+
+      card.querySelectorAll('.category-mini-row').forEach((row) => {
+        row.addEventListener('click', () => {
+          const sender = cat.senders.find(s => s.email === row.dataset.email);
+          if (sender) toggleSelectAll(sender.msgs);
+        });
+      });
+
+      const selectBtn = card.querySelector('.category-select-btn');
+      if (selectBtn) {
+        selectBtn.addEventListener('click', () => toggleSelectAll(cat.msgs));
+      }
+    });
+  }
+
+  // ══════════════════════════════════════════
+  //  CONTACTS
+  // ══════════════════════════════════════════
+  const CONTACTS_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").concat(["#"]);
+
+  /** One row per unique sender email, aggregated from the current (filtered) scan. Always raw/unmasked — masking is applied only at render/export time. */
+  function getContactsData() {
+    const msgs = getFilteredMessages();
+    const byEmail = {};
+    msgs.forEach((m) => {
+      const email = (m.senderEmail || "").trim();
+      if (!email) return;
+      if (!byEmail[email]) {
+        byEmail[email] = {
+          email,
+          name: m.senderName || "",
+          domain: m.domain || "",
+          count: 0,
+          unread: 0,
+          firstDate: m.date,
+          lastDate: m.date,
+        };
+      }
+      const c = byEmail[email];
+      c.count++;
+      if (!m.read) c.unread++;
+      if (!c.name && m.senderName) c.name = m.senderName;
+      if (new Date(m.date) > new Date(c.lastDate)) c.lastDate = m.date;
+      if (new Date(m.date) < new Date(c.firstDate)) c.firstDate = m.date;
+    });
+    return Object.values(byEmail);
+  }
+
+  function contactLabel(c) {
+    return (c.name && c.name.trim()) ? c.name.trim() : c.email;
+  }
+
+  function contactLetter(c) {
+    const first = contactLabel(c).charAt(0).toUpperCase();
+    return /[A-Z]/.test(first) ? first : "#";
+  }
+
+  function renderContactsView() {
+    const listEl = $("#contactsList");
+    const azEl = $("#contactsAzIndex");
+    const searchInput = $("#contactsSearch");
+    if (!listEl || !azEl || !searchInput) return;
+
+    searchInput.oninput = () => renderContactsView();
+
+    const query = (searchInput.value || "").toLowerCase().trim();
+    let contacts = getContactsData();
+    if (query) {
+      contacts = contacts.filter((c) =>
+        (c.name || "").toLowerCase().includes(query) ||
+        c.email.toLowerCase().includes(query) ||
+        (c.domain || "").toLowerCase().includes(query)
+      );
+    }
+    contacts.sort((a, b) => contactLabel(a).localeCompare(contactLabel(b), undefined, { sensitivity: "base" }));
+
+    const totalMsgs = getFilteredMessages().length;
+    $("#contactsSummaryLabel").textContent =
+      `${contacts.length.toLocaleString()} unique contact${contacts.length === 1 ? "" : "s"} from ${totalMsgs.toLocaleString()} scanned email${totalMsgs === 1 ? "" : "s"}.`;
+
+    if (contacts.length === 0) {
+      setSafeHtml(listEl, `<div class="selection-empty">No contacts match your search.</div>`);
+      setSafeHtml(azEl, CONTACTS_ALPHABET.map((l) => `<button type="button" class="contacts-az-btn" disabled>${l}</button>`).join(""));
+      return;
+    }
+
+    const groups = {};
+    contacts.forEach((c) => {
+      const letter = contactLetter(c);
+      if (!groups[letter]) groups[letter] = [];
+      groups[letter].push(c);
+    });
+
+    const sectionId = (letter) => `contacts-letter-${letter === "#" ? "hash" : letter}`;
+
+    setSafeHtml(listEl, CONTACTS_ALPHABET.filter((l) => groups[l]).map((letter) => `
+      <div class="contacts-section" id="${sectionId(letter)}">
+        <div class="contacts-section-header">${letter}</div>
+        ${groups[letter].map((c) => {
+          const name = displaySenderName(c.name, c.email) || displayEmail(c.email);
+          const initial = (name || "?").trim().charAt(0).toUpperCase() || "?";
+          return `
+          <div class="contact-row">
+            <div class="contact-avatar" aria-hidden="true">${escHtml(initial)}</div>
+            <div class="contact-main">
+              <div class="contact-name">${escHtml(name)}</div>
+              <div class="contact-email">${escHtml(displayEmail(c.email))}</div>
+            </div>
+            <div class="contact-domain">${escHtml(displayDomain(c.domain) || "")}</div>
+            <div class="contact-count">${c.count.toLocaleString()} email${c.count === 1 ? "" : "s"}</div>
+            <div class="contact-last">${escHtml(formatDate(c.lastDate))}</div>
+          </div>`;
+        }).join("")}
+      </div>`).join(""));
+
+    setSafeHtml(azEl, CONTACTS_ALPHABET.map((letter) => {
+      const has = !!groups[letter];
+      return `<button type="button" class="contacts-az-btn" data-target="${sectionId(letter)}" ${has ? "" : "disabled"}>${letter}</button>`;
+    }).join(""));
+
+    azEl.querySelectorAll(".contacts-az-btn[data-target]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const section = document.getElementById(btn.dataset.target);
+        if (section) section.scrollIntoView({ block: "start", behavior: "smooth" });
+      });
+    });
+  }
+
+  function exportContactsCSV() {
+    const contacts = getContactsData().sort((a, b) => contactLabel(a).localeCompare(contactLabel(b), undefined, { sensitivity: "base" }));
+    const header = "Name,Email,Domain,Email Count,Unread Count,First Email,Last Email\n";
+    const rows = contacts.map((c) => [
+      `"${(c.name || "").replace(/"/g, '""')}"`,
+      c.email,
+      c.domain,
+      c.count,
+      c.unread,
+      c.firstDate,
+      c.lastDate,
+    ].join(",")).join("\n");
+    downloadFile(header + rows, "inboxpie-contacts.csv", "text/csv");
+  }
+
+  function exportContactsJSON() {
+    const contacts = getContactsData().sort((a, b) => contactLabel(a).localeCompare(contactLabel(b), undefined, { sensitivity: "base" }));
+    const report = contacts.map((c) => ({
+      name: c.name || null,
+      email: c.email,
+      domain: c.domain,
+      emailCount: c.count,
+      unreadCount: c.unread,
+      firstEmail: c.firstDate,
+      lastEmail: c.lastDate,
+    }));
+    downloadFile(JSON.stringify(report, null, 2), "inboxpie-contacts.json", "application/json");
+  }
 
   init();
 })();
