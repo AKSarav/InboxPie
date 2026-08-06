@@ -24,12 +24,23 @@
     query: "",
     sort: "date-desc",
   };
+  /** IDs (as strings) checked via the checkbox column in the Review Selected modal. Reset to "all checked" whenever the modal opens or a bulk action runs. */
+  let reviewCheckedIds = new Set();
+  /** Virtual scroll tuning for the selection review table — must match .selection-review-row height in CSS. */
+  const SR_ROW_HEIGHT = 54;
+  const SR_VIRTUAL_BUFFER = 8;
+  const browseState = {
+    query: "",
+    sort: "date-desc",
+  };
   let privacyMaskEnabled = false;
-  const DEFAULT_FOLDER_TYPES = ["inbox", "sent", "archives", "junk"];
+  const DEFAULT_FOLDER_TYPES = ["inbox"];
   /** Selected scan folders as `${accountId}::${path}` keys. */
   let selectedFolderKeys = new Set();
   let scanFolderList = [];
   let folderListLoaded = false;
+  /** True only once the folder checkboxes have actually been painted into #folderDropdownList — distinct from folderListLoaded, which can become true via a background fetch (e.g. right after switching accounts) with no checkboxes in the DOM at all. */
+  let folderDropdownRendered = false;
   /** Scan date-range filter: { fromYear, fromMonth, toYear, toMonth } (1-indexed months), or null for all time. */
   let scanDateRange = null;
   /** Last domain drill-down shown under PieView (for refresh on privacy toggle). */
@@ -60,6 +71,12 @@
   //  INIT
   // ══════════════════════════════════════════
   async function init() {
+    // Version badge reads straight from manifest.json so it can't silently drift out of sync on future releases.
+    const versionBadge = $(".version-badge");
+    if (versionBadge && browser?.runtime?.getManifest) {
+      versionBadge.textContent = `v${browser.runtime.getManifest().version}`;
+    }
+
     // Load saved theme
     const saved = localStorage.getItem("mail-audit-theme") || "dark";
     document.documentElement.setAttribute("data-theme", saved);
@@ -119,9 +136,17 @@
       selectSenderForReview(btn.getAttribute("data-select-email"), sunburstDetailState.msgs);
     });
 
-    // Clickable stat card for selected emails
-    $("#statCardSelected").addEventListener("click", () => {
+    // Floating selection bar — follows the user around the app and opens the review modal
+    $("#floatingSelectionBar").addEventListener("click", () => {
       if (selectedIds.size > 0) showSelectionReviewModal();
+    });
+    $("#floatingSelectionReviewBtn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (selectedIds.size > 0) showSelectionReviewModal();
+    });
+    $("#floatingSelectionResetBtn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (selectedIds.size > 0) clearSelection();
     });
 
     // Folder selection
@@ -150,6 +175,10 @@
     accountSelect.addEventListener("change", () => {
       updateAccountSelectActiveState();
       resetDashboard();
+      // Proactively load this account's folders and apply the default selection so the
+      // Folders button shows the real (active, correctly-counted) state immediately —
+      // not just once the user happens to open the dropdown or click Scan.
+      loadScanFolders().catch((e) => console.warn("Could not load folders for account:", e));
     });
     document.querySelectorAll(".tab").forEach((t) =>
       t.addEventListener("click", () => switchView(t.dataset.view))
@@ -158,8 +187,17 @@
     // Export buttons
     $("#exportCsvBtn").addEventListener("click", exportCSV);
     $("#exportJsonBtn").addEventListener("click", exportJSON);
+    $("#contactsExportCsvBtn").addEventListener("click", exportContactsCSV);
+    $("#contactsExportJsonBtn").addEventListener("click", exportContactsJSON);
 
     $("#selectionReviewTable").addEventListener("click", (e) => {
+      const link = e.target.closest("[data-open-message]");
+      if (!link) return;
+      e.preventDefault();
+      openMessageInThunderbird(link.getAttribute("data-open-message"));
+    });
+
+    $("#browseTable").addEventListener("click", (e) => {
       const link = e.target.closest("[data-open-message]");
       if (!link) return;
       e.preventDefault();
@@ -176,19 +214,42 @@
       }
     });
 
-    // Progress listener
+    // Per-page tip banners — dismissed state persists (per tip id) across sessions.
+    initTipBanners();
+    $("#app").addEventListener("click", (e) => {
+      const closeBtn = e.target.closest("[data-tip-close]");
+      if (!closeBtn) return;
+      const tipId = closeBtn.dataset.tipClose;
+      localStorage.setItem(`inboxpie-tip-dismissed-${tipId}`, "true");
+      const banner = closeBtn.closest(".tip-banner");
+      if (banner) banner.style.display = "none";
+    });
+
+    // Scan progress listener. deleteProgress/moveProgress are handled locally by
+    // showDeleteModal()/showMoveFolderModal() so their in-modal pie ring can update live.
     browser.runtime.onMessage.addListener((msg) => {
       if (msg.action === "progress") {
         $("#progressText").textContent = `Scanned ${msg.count.toLocaleString()} messages…`;
         $("#progressFill").style.width = "60%";
       }
-      if (msg.action === "deleteProgress") {
-        $("#progressText").textContent = `Moving ${msg.moved}/${msg.total} to Trash…`;
-      }
-      if (msg.action === "moveProgress") {
-        $("#progressText").textContent = `Moving ${msg.moved}/${msg.total} messages…`;
-      }
     });
+
+    // Tab bar horizontal scroll (small screens / lots of tabs) — fade-edge arrows
+    // only appear once the tab row actually overflows its container.
+    const tabsScrollEl = $("#viewTabs");
+    $("#tabsScrollLeft").addEventListener("click", () => {
+      tabsScrollEl.scrollBy({ left: -160, behavior: "smooth" });
+    });
+    $("#tabsScrollRight").addEventListener("click", () => {
+      tabsScrollEl.scrollBy({ left: 160, behavior: "smooth" });
+    });
+    let tabsScrollRafPending = false;
+    tabsScrollEl.addEventListener("scroll", () => {
+      if (tabsScrollRafPending) return;
+      tabsScrollRafPending = true;
+      requestAnimationFrame(() => { tabsScrollRafPending = false; updateTabsScrollState(); });
+    });
+    window.addEventListener("resize", updateTabsScrollState);
 
     // Sunburst zoom reset
     $("#sunburstResetBtn").addEventListener("click", () => {
@@ -208,6 +269,13 @@
     if (localStorage.getItem("mail-audit-tour-completed") !== "true") {
       setTimeout(startTour, 500);
     }
+
+    // Support popover — scheduled once the user has actually scanned and spent some time
+    // in the app (see scan-completion handler below), not on cold page load.
+    $("#supportPopoverClose").addEventListener("click", () => {
+      $("#supportPopover").style.display = "none";
+      sessionStorage.setItem("inboxpie-support-dismissed", "true");
+    });
   }
 
   // ══════════════════════════════════════════
@@ -280,9 +348,63 @@
       text: "Emails auto-sorted into smart categories like Finance, Shopping, and Travel, each with its own sender chart.",
     },
     {
+      target: '.tab[data-view="contacts"]',
+      title: "Contacts",
+      text: "Every unique sender as a searchable contact card, grouped A–Z. Export the list to CSV or JSON whenever you need it.",
+    },
+    {
       target: '.tab[data-view="settings"]',
       title: "Settings",
       text: "Manage your categories here — edit keywords, add your own categories, or remove ones you don't need.",
+    },
+  ];
+
+  // Review Selected modal: walks through search/sort, the checkbox selection engine, and every action button.
+  const REVIEW_TOUR_STEPS = [
+    {
+      target: "#selectionReviewSearch",
+      title: "Search within your selection",
+      text: "Narrow the list down to a subject, sender, or folder. Everything below — including the action buttons — reacts to what's currently matched.",
+    },
+    {
+      target: "#selectionReviewSort",
+      title: "Sort the list",
+      text: "Reorder by date, size, sender, or subject to make it easier to spot what you're looking for.",
+    },
+    {
+      target: "#selectionReviewSelectAllVisible",
+      title: "Select all",
+      text: "Ticks or unticks every matched row — including ones you'd have to scroll to see. Rows start checked by default — everything you selected is included unless you uncheck it.",
+    },
+    {
+      target: ".selection-row-checkbox",
+      title: "Per-row checkbox",
+      text: "Uncheck individual emails you want to spare from whatever bulk action you're about to run — without losing them from your overall selection permanently.",
+    },
+    {
+      target: "#selectionReviewExcludeMatches",
+      title: "Exclude checked",
+      text: "Removes every checked, currently-matched email from your selection. Nothing is deleted or moved — it just drops out of the review list.",
+    },
+    {
+      target: "#selectionReviewKeepOnlyMatches",
+      title: "Keep only checked",
+      text: "The opposite: keeps just the checked, matched emails in your selection and drops everything else. Handy after a search — narrow down, then prune the rest away.",
+    },
+    {
+      target: "#selectionReviewExport",
+      title: "Export CSV",
+      text: "Save the checked, matched emails to a CSV file for your records before taking any action.",
+    },
+    {
+      target: "#selectionReviewFolder",
+      title: "Move to Folder",
+      text: "Moves only the checked, matched emails to a folder you choose. The count on the button always reflects exactly what will move.",
+    },
+    {
+      target: "#selectionReviewTrash",
+      title: "Move to Trash",
+      text: "Moves the checked, matched emails to Trash — not permanently deleted. You can recover them from Trash afterward if needed.",
     },
   ];
 
@@ -290,10 +412,42 @@
   let activeTourFlag = "mail-audit-tour-completed";
   let tourStepIndex = 0;
 
+  /** Support popover: only offered once the user has scanned and spent ~30s actually using the app — not on cold load. One timer per tab session. */
+  let supportPopoverScheduled = false;
+  function scheduleSupportPopover() {
+    if (supportPopoverScheduled) return;
+    if (sessionStorage.getItem("inboxpie-support-dismissed") === "true") return;
+    supportPopoverScheduled = true;
+    setTimeout(() => {
+      if (sessionStorage.getItem("inboxpie-support-dismissed") === "true") return;
+      const popover = $("#supportPopover");
+      if (popover) popover.style.display = "block";
+    }, 30000);
+  }
+
+  /** Hide any per-page tip banners the user already dismissed in a previous session (localStorage — permanent, unlike the session-scoped support popover). */
+  function initTipBanners() {
+    document.querySelectorAll(".tip-banner[data-tip-id]").forEach((banner) => {
+      if (localStorage.getItem(`inboxpie-tip-dismissed-${banner.dataset.tipId}`) === "true") {
+        banner.style.display = "none";
+      }
+    });
+  }
+
   function startTour() {
     const isPostScan = allMessages.length > 0;
-    activeTourSteps = isPostScan ? APP_TOUR_STEPS : GETTING_STARTED_TOUR_STEPS;
-    activeTourFlag = isPostScan ? "mail-audit-app-tour-completed" : "mail-audit-tour-completed";
+    const steps = isPostScan ? APP_TOUR_STEPS : GETTING_STARTED_TOUR_STEPS;
+    const flag = isPostScan ? "mail-audit-app-tour-completed" : "mail-audit-tour-completed";
+    startCustomTour(steps, flag);
+  }
+
+  function startReviewTour() {
+    startCustomTour(REVIEW_TOUR_STEPS, "mail-audit-review-tour-completed");
+  }
+
+  function startCustomTour(steps, flag) {
+    activeTourSteps = steps;
+    activeTourFlag = flag;
     tourStepIndex = 0;
     $("#tourOverlay").style.display = "block";
     renderTourStep();
@@ -361,6 +515,16 @@
     const left = Math.min(Math.max(12, rect.left), window.innerWidth - popW - 12);
     popover.style.top = `${top}px`;
     popover.style.left = `${left}px`;
+  }
+
+  /** Toggles the fade-edge scroll arrows on the tab bar based on actual overflow/scroll position. */
+  function updateTabsScrollState() {
+    const wrap = $("#viewTabsWrap");
+    const tabs = $("#viewTabs");
+    if (!wrap || !tabs || wrap.style.display === "none") return;
+    const maxScroll = tabs.scrollWidth - tabs.clientWidth;
+    wrap.classList.toggle("can-scroll-left", tabs.scrollLeft > 2);
+    wrap.classList.toggle("can-scroll-right", tabs.scrollLeft < maxScroll - 2);
   }
 
   function updateThemeIcon(theme) {
@@ -534,12 +698,14 @@
       if (inbox) selectedFolderKeys.add(folderKey(inbox.accountId, inbox.path));
     }
     saveFolderSelections();
+    updateFolderBadge();
   }
 
   function syncFolderSelectionsToList() {
     const validKeys = new Set(scanFolderList.map((f) => folderKey(f.accountId, f.path)));
     selectedFolderKeys = new Set(Array.from(selectedFolderKeys).filter((key) => validKeys.has(key)));
     if (selectedFolderKeys.size === 0) applyDefaultFolderSelections();
+    updateFolderBadge();
   }
 
   async function loadScanFolders() {
@@ -659,6 +825,7 @@
       label.appendChild(span);
       list.appendChild(label);
     });
+    folderDropdownRendered = true;
     updateFolderBadge();
   }
 
@@ -1110,11 +1277,13 @@
     currentView = "sunburst";
     sunburstDetailState = null;
     folderListLoaded = false;
+    folderDropdownRendered = false;
     viewFilterFolderKeys.clear();
     scannedFolderList = [];
     scanFolderList = [];
     selectedFolderKeys.clear();
     saveFolderSelections();
+    updateFolderBadge();
 
     const folderHeader = $("#folderDropdownHeader");
     const folderLabel = $("#folderSelectLabel");
@@ -1145,9 +1314,9 @@
     $("#folderModal").style.display = "none";
 
     $("#progressArea").style.display = "none";
-    $("#statsBar").style.display = "none";
-    $("#viewTabs").style.display = "none";
+    $("#viewTabsWrap").style.display = "none";
     $("#exportBar").style.display = "none";
+    $("#floatingSelectionBar").style.display = "none";
     $("#landingState").style.display = "flex";
 
     document.querySelectorAll(".view-panel").forEach((p) => (p.style.display = "none"));
@@ -1155,9 +1324,9 @@
     document.querySelector('.tab[data-view="sunburst"]')?.classList.add("active");
 
     $("#statTotal").textContent = "0";
-    $("#statSenders").textContent = "0";
     $("#statSize").textContent = "0";
-    $("#statSelected").textContent = "0";
+    $("#floatingSelectionCount").textContent = "0";
+    lastSelectedStatCount = null;
 
     clearElement($("#sunburstChart"));
     clearElement($("#sunburstCenterStat"));
@@ -1175,6 +1344,11 @@
     if (senderSearch) senderSearch.value = "";
     if (domainSearch) domainSearch.value = "";
 
+    browseState.query = "";
+    browseState.sort = "date-desc";
+    const browseTable = $("#browseTable");
+    if (browseTable) { browseTable.onscroll = null; clearElement(browseTable); }
+
     scanBtn.disabled = false;
     scanBtn.querySelector(".btn-text").style.display = "inline";
     scanBtn.querySelector(".btn-loader").style.display = "none";
@@ -1185,7 +1359,10 @@
   //  SCAN
   // ══════════════════════════════════════════
   async function startScan() {
-    if (folderListLoaded && !isViewFilterMode()) {
+    // Only trust the dropdown's checkbox DOM if it was actually painted — folderListLoaded
+    // can be true from a background fetch (e.g. right after switching accounts) with no
+    // checkboxes ever rendered, which would otherwise wipe the just-computed defaults to empty.
+    if (folderDropdownRendered && !isViewFilterMode()) {
       syncSelectedFoldersFromDom();
     }
 
@@ -1238,15 +1415,16 @@
 
       setTimeout(() => {
         $("#progressArea").style.display = "none";
-        $("#statsBar").style.display = "grid";
-        $("#viewTabs").style.display = "flex";
+        $("#viewTabsWrap").style.display = "block";
         $("#exportBar").style.display = "flex";
         updateStats();
         renderViewFilterDropdown();
         switchView("sunburst");
+        updateTabsScrollState();
         if (localStorage.getItem("mail-audit-app-tour-completed") !== "true") {
           setTimeout(startTour, 500);
         }
+        scheduleSupportPopover();
       }, 600);
     } catch (e) {
       $("#progressText").textContent = `Error: ${e.message}`;
@@ -1258,13 +1436,29 @@
     }
   }
 
+  let lastSelectedStatCount = null;
+
   function updateStats() {
     const msgs = getFilteredMessages();
     $("#statTotal").textContent = msgs.length.toLocaleString();
-    $("#statSenders").textContent = new Set(msgs.map((m) => m.senderEmail)).size.toLocaleString();
     $("#statSize").textContent = formatBytes(msgs.reduce((sum, m) => sum + messageSize(m), 0));
-    $("#statSelected").textContent = selectedIds.size.toLocaleString();
+    updateFloatingSelectionBar();
     updateBulkButtons();
+  }
+
+  /** Floating selection bar — fixed to the viewport (not the scrolling body), so it's always visible regardless of scroll position. Bumps briefly whenever the count changes. */
+  function updateFloatingSelectionBar() {
+    const bar = $("#floatingSelectionBar");
+    if (!bar) return;
+    const count = selectedIds.size;
+    $("#floatingSelectionCount").textContent = count.toLocaleString();
+    bar.style.display = count > 0 ? "flex" : "none";
+    if (count > 0 && lastSelectedStatCount !== null && count !== lastSelectedStatCount) {
+      bar.classList.remove("bump");
+      void bar.offsetWidth; // restart the animation even if it's still running
+      bar.classList.add("bump");
+    }
+    lastSelectedStatCount = count;
   }
 
   function updateBulkButtons() {
@@ -1286,7 +1480,10 @@
   function switchView(view) {
     currentView = view;
     document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
-    document.querySelector(`.tab[data-view="${view}"]`).classList.add("active");
+    const activeTab = document.querySelector(`.tab[data-view="${view}"]`);
+    activeTab.classList.add("active");
+    activeTab.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+    updateTabsScrollState();
     document.querySelectorAll(".view-panel").forEach((p) => (p.style.display = "none"));
     const panel = $(`#${view}View`);
     if (panel) {
@@ -1298,6 +1495,8 @@
       else if (view === "timeline") renderTimeline();
       else if (view === "subscriptions") renderSubscriptionsView();
       else if (view === "categories") renderCategoriesView();
+      else if (view === "contacts") renderContactsView();
+      else if (view === "browse") renderBrowseView();
       else if (view === "settings") renderSettingsView();
     }
     updateBulkButtons();
@@ -1585,7 +1784,7 @@
       },
       series: [{
         type: "sunburst",
-        radius: ["10%", "92%"],
+        radius: ["8%", "74%"],
         center: ["50%", "50%"],
         data: sunburstData,
         nodeClick: "rootToNode",
@@ -1594,9 +1793,9 @@
         label: { show: true, color: "#fff", minAngle: 8 },
         levels: [
           {},
-          { r0: "10%", r: "40%", label: { rotate: "tangential", fontSize: 13, fontWeight: 700 } },
-          { r0: "40%", r: "66%", label: { rotate: "tangential", fontSize: 10, fontWeight: 600 } },
-          { r0: "66%", r: "92%", label: { rotate: "radial", fontSize: 9 } },
+          { r0: "8%", r: "32%", label: { rotate: "tangential", fontSize: 13, fontWeight: 700 } },
+          { r0: "32%", r: "53%", label: { rotate: "tangential", fontSize: 10, fontWeight: 600 } },
+          { r0: "53%", r: "74%", label: { rotate: "radial", fontSize: 9 } },
         ],
       }],
     });
@@ -1941,8 +2140,7 @@
       if (chart) {
         chart.on("click", (params) => {
           if (params.value && params.value > 0) {
-            senderChartFilterValue = params.name;
-            searchInput.value = displayEmail(params.name);
+            toggleSelectMessages(allMessages.filter((m) => (m.senderEmail || m.author || "Unknown") === params.name));
             renderSenderTable();
           }
         });
@@ -1964,8 +2162,7 @@
       if (chart) {
         chart.on("click", (params) => {
           if (params.value && params.value > 0) {
-            senderChartFilterValue = params.name;
-            searchInput.value = displayEmail(params.name);
+            toggleSelectMessages(allMessages.filter((m) => (m.senderEmail || m.author || "Unknown") === params.name));
             renderSenderTable();
           }
         });
@@ -2113,8 +2310,7 @@
       if (chart) {
         chart.on("click", (params) => {
           if (params.value && params.value > 0) {
-            domainChartFilterValue = params.name;
-            searchInput.value = displayDomain(params.name);
+            toggleSelectMessages(allMessages.filter((m) => m.domain === params.name));
             renderDomainTable();
           }
         });
@@ -2136,8 +2332,7 @@
       if (chart) {
         chart.on("click", (params) => {
           if (params.value && params.value > 0) {
-            domainChartFilterValue = params.name;
-            searchInput.value = displayDomain(params.name);
+            toggleSelectMessages(allMessages.filter((m) => m.domain === params.name));
             renderDomainTable();
           }
         });
@@ -2191,13 +2386,6 @@
     }
 
     setSafeHtml(container, `
-      <div class="timeline-kpis">
-        <div class="timeline-kpi"><span>${formatBytes(totalBytes)}</span><label>Known mailbox size</label></div>
-        <div class="timeline-kpi"><span>${knownMessages.length.toLocaleString()}</span><label>Messages with size</label></div>
-        <div class="timeline-kpi"><span>${formatBytes(largest[0] ? messageSize(largest[0]) : 0)}</span><label>Largest message</label></div>
-        <div class="timeline-kpi"><span>${unknownCount.toLocaleString()}</span><label>Unknown size</label></div>
-      </div>
-      <div class="size-note">Size data depends on what Thunderbird exposes per account. Unknown-size messages are kept out of storage rankings.</div>
       <div class="insight-grid size-grid">
         ${renderSizeCard("Size Buckets", "Select a size band to recover storage quickly.", buckets, "bucket", buckets.length ? `<div id="chart-size-buckets" class="chart-container insight-chart-host"></div>` : "")}
         ${renderSizeCard("Top Space-Heavy Senders", "Senders consuming the most total mailbox space.", heavySenders, "sender", heavySenders.length ? `
@@ -2777,6 +2965,14 @@
     });
   }
 
+  /** Clears the entire selection — shared by the review modal's Clear Selection button and the floating bar's reset button. */
+  function clearSelection() {
+    selectedIds.clear();
+    reviewCheckedIds.clear();
+    updateStats();
+    switchView(currentView);
+  }
+
   // ══════════════════════════════════════════
   //  SELECTION REVIEW
   // ══════════════════════════════════════════
@@ -2784,34 +2980,88 @@
     if (selectedIds.size === 0) return;
     const modal = $("#selectionReviewModal");
     modal.style.display = "flex";
+    // Default: everything currently selected starts out checked in the review table.
+    reviewCheckedIds = new Set(Array.from(selectedIds, String));
     renderSelectionReview();
 
     $("#selectionReviewClose").onclick = () => { modal.style.display = "none"; };
+    $("#selectionReviewHelpBtn").onclick = () => { startReviewTour(); };
     $("#selectionReviewClear").onclick = () => {
-      selectedIds.clear();
       modal.style.display = "none";
-      updateStats();
-      switchView(currentView);
+      clearSelection();
     };
     $("#selectionReviewTrash").onclick = () => {
+      const checkedIds = getCheckedSelectedOriginalIds();
+      if (checkedIds.length === 0) return;
       modal.style.display = "none";
-      showDeleteModal();
+      showDeleteModal(checkedIds);
     };
     $("#selectionReviewFolder").onclick = () => {
+      const checkedIds = getCheckedSelectedOriginalIds();
+      if (checkedIds.length === 0) return;
       modal.style.display = "none";
-      showMoveFolderModal();
+      showMoveFolderModal(checkedIds);
     };
     $("#selectionReviewExport").onclick = () => {
       exportSelectedCSV();
     };
+    const excludeCheckedBtn = $("#selectionReviewExcludeMatches");
+    if (excludeCheckedBtn) {
+      excludeCheckedBtn.onclick = () => {
+        const checked = getCheckedReviewMessages();
+        checked.forEach((m) => {
+          removeSelectedId(String(m.id));
+          reviewCheckedIds.delete(String(m.id));
+        });
+        updateStats();
+        if (selectedIds.size === 0) {
+          $("#selectionReviewModal").style.display = "none";
+          switchView(currentView);
+        } else {
+          renderSelectionReview();
+          switchView(currentView);
+          $("#selectionReviewModal").style.display = "flex";
+        }
+      };
+    }
+    const keepOnlyCheckedBtn = $("#selectionReviewKeepOnlyMatches");
+    if (keepOnlyCheckedBtn) {
+      keepOnlyCheckedBtn.onclick = () => {
+        const checked = getCheckedReviewMessages();
+        const checkedIdSet = new Set(checked.map((m) => String(m.id)));
+        Array.from(selectedIds).forEach((id) => {
+          if (!checkedIdSet.has(String(id))) removeSelectedId(String(id));
+        });
+        reviewCheckedIds = new Set(Array.from(selectedIds, String));
+        updateStats();
+        if (selectedIds.size === 0) {
+          $("#selectionReviewModal").style.display = "none";
+          switchView(currentView);
+        } else {
+          renderSelectionReview();
+          switchView(currentView);
+          $("#selectionReviewModal").style.display = "flex";
+        }
+      };
+    }
+  }
+
+  /** Messages matching the current search/sort AND checked via the row checkboxes (not just the rendered slice). */
+  function getCheckedReviewMessages() {
+    return getReviewedSelectedMessages().filter((m) => reviewCheckedIds.has(String(m.id)));
+  }
+
+  /** Original-typed message IDs for the checked+matched working set — the exact target for Trash/Folder/Exclude/Keep-only. */
+  function getCheckedSelectedOriginalIds() {
+    return getCheckedReviewMessages().map((m) => m.id);
   }
 
   function renderSelectionReview() {
-    const selected = getReviewedSelectedMessages();
+    const matched = getReviewedSelectedMessages();
     const table = $("#selectionReviewTable");
-    const totalBytes = selected.reduce((sum, m) => sum + messageSize(m), 0);
-    const unread = selected.filter((m) => !m.read).length;
-    const accounts = new Set(selected.map((m) => m.account || m.accountId));
+    const totalBytes = matched.reduce((sum, m) => sum + messageSize(m), 0);
+    const unread = matched.filter((m) => !m.read).length;
+    const accounts = new Set(matched.map((m) => m.account || m.accountId));
 
     $("#selectionReviewSummary").textContent =
       `${selectedIds.size.toLocaleString()} selected · ${unread.toLocaleString()} unread · ${formatBytes(totalBytes)} known size · ${accounts.size} account${accounts.size === 1 ? "" : "s"}`;
@@ -2829,45 +3079,56 @@
       renderSelectionReview();
     };
 
-    $("#selectionReviewUnselectMatches").disabled = selected.length === 0;
-    $("#selectionReviewUnselectMatches").textContent = `Unselect Matches (${selected.length.toLocaleString()})`;
-    $("#selectionReviewUnselectMatches").onclick = () => {
-      selected.forEach((m) => removeSelectedId(String(m.id)));
-      updateStats();
-      if (selectedIds.size === 0) {
-        $("#selectionReviewModal").style.display = "none";
-        switchView(currentView);
-      } else {
-        renderSelectionReview();
-        switchView(currentView);
-        $("#selectionReviewModal").style.display = "flex";
-      }
-    };
-
     if (selectedIds.size === 0) {
+      table.onscroll = null;
       setSafeHtml(table, `<div class="selection-empty">No messages selected.</div>`);
       $("#selectionReviewTrash").disabled = true;
       $("#selectionReviewFolder").disabled = true;
+      updateReviewBulkCounts();
       return;
     }
 
     $("#selectionReviewTrash").disabled = false;
     $("#selectionReviewFolder").disabled = false;
 
-    if (selected.length === 0) {
+    if (matched.length === 0) {
+      table.onscroll = null;
       setSafeHtml(table, `<div class="selection-empty">No selected messages match your search.</div>`);
+      updateReviewBulkCounts();
       return;
     }
 
-    const visible = selected.slice(0, 500);
+    // Virtual scroll: only the rows currently in view are ever rendered, but
+    // select-all / checkbox-sync operate on the full filtered+sorted list so
+    // "select all" genuinely covers everything, not just what's on screen.
+    const allIds = matched.map((m) => String(m.id));
+    const allChecked = allIds.length > 0 && allIds.every((id) => reviewCheckedIds.has(id));
+    const someChecked = allIds.some((id) => reviewCheckedIds.has(id));
+    const totalHeight = matched.length * SR_ROW_HEIGHT;
+
     setSafeHtml(table, `
       <div class="selection-review-table-head">
-        <span>Subject</span><span>Sender</span><span>Date</span><span>Size</span><span></span>
+        <span class="selection-checkbox-cell"><input type="checkbox" id="selectionReviewSelectAllVisible" ${allChecked ? "checked" : ""} aria-label="Select all"></span>
+        <span>Subject</span><span>Sender</span><span>Date</span><span>Size</span>
       </div>
-      ${visible.map((m) => `
-        <div class="selection-review-row" data-id="${escAttr(String(m.id))}">
+      <div class="sr-virtual-spacer" id="srVirtualSpacer" style="height:${totalHeight}px;"></div>
+    `);
+
+    const selectAllCb = table.querySelector("#selectionReviewSelectAllVisible");
+    if (selectAllCb && someChecked && !allChecked) selectAllCb.indeterminate = true;
+    const spacer = table.querySelector("#srVirtualSpacer");
+    const headEl = table.querySelector(".selection-review-table-head");
+
+    function rowHtml(m, idx) {
+      const mid = String(m.id);
+      const checked = reviewCheckedIds.has(mid);
+      return `
+        <div class="selection-review-row${checked ? " sr-row-checked" : ""}" data-id="${escAttr(mid)}" style="top:${idx * SR_ROW_HEIGHT}px;">
+          <div class="selection-checkbox-cell">
+            <input type="checkbox" class="selection-row-checkbox" data-id="${escAttr(mid)}" ${checked ? "checked" : ""} aria-label="Select message">
+          </div>
           <div class="selection-subject">
-            <button type="button" class="selection-open-link" data-open-message="${escAttr(String(m.id))}" title="Open in Thunderbird">${escHtml(m.subject || "(No Subject)")}</button>
+            <button type="button" class="selection-open-link" data-open-message="${escAttr(mid)}" title="Open in Thunderbird">${escHtml(m.subject || "(No Subject)")}</button>
             <span>${escHtml(displayFolderName("", m.folder) || "Unknown folder")} · ${escHtml(displayAccount(m.account || ""))}</span>
           </div>
           <div class="selection-sender">
@@ -2876,33 +3137,106 @@
           </div>
           <div class="selection-date">${escHtml(formatDate(m.date))}</div>
           <div class="selection-size">${formatBytes(messageSize(m))}</div>
-          <button type="button" class="btn btn-secondary selection-unselect-btn" data-review-remove="${escAttr(String(m.id))}">
-            <span aria-hidden="true">×</span> Unselect
-          </button>
-        </div>`).join("")}
-      ${selected.length > visible.length ? `<div class="selection-review-more">Showing first ${visible.length.toLocaleString()} of ${selected.length.toLocaleString()} matches. Narrow with search to inspect more.</div>` : ""}
-    `);
+        </div>`;
+    }
 
-    table.querySelectorAll("[data-review-remove]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        removeSelectedId(btn.dataset.reviewRemove);
-        updateStats();
-        if (selectedIds.size === 0) {
-          $("#selectionReviewModal").style.display = "none";
-          switchView(currentView);
-        } else {
-          renderSelectionReview();
-          switchView(currentView);
-          $("#selectionReviewModal").style.display = "flex";
-        }
+    let rafPending = false;
+    function renderVirtualRows() {
+      rafPending = false;
+      const headH = headEl ? headEl.offsetHeight : 0;
+      const relTop = Math.max(0, table.scrollTop - headH);
+      const startIndex = Math.max(0, Math.floor(relTop / SR_ROW_HEIGHT) - SR_VIRTUAL_BUFFER);
+      const visibleCount = Math.ceil(table.clientHeight / SR_ROW_HEIGHT) + SR_VIRTUAL_BUFFER * 2;
+      const endIndex = Math.min(matched.length, startIndex + visibleCount);
+      let html = "";
+      for (let i = startIndex; i < endIndex; i++) html += rowHtml(matched[i], i);
+      setSafeHtml(spacer, html);
+    }
+    function scheduleRenderVirtualRows() {
+      if (rafPending) return;
+      rafPending = true;
+      requestAnimationFrame(renderVirtualRows);
+    }
+    table.onscroll = scheduleRenderVirtualRows;
+    renderVirtualRows();
+
+    // Select-all: operates on the full filtered/sorted list, not just the rendered window.
+    if (selectAllCb) {
+      selectAllCb.addEventListener("change", () => {
+        allIds.forEach((id) => {
+          if (selectAllCb.checked) reviewCheckedIds.add(id); else reviewCheckedIds.delete(id);
+        });
+        selectAllCb.indeterminate = false;
+        updateReviewBulkCounts();
+        renderVirtualRows();
       });
+    }
+
+    // Per-row checkbox — delegated on the spacer since rows are recreated as the user scrolls.
+    spacer.addEventListener("change", (e) => {
+      const cb = e.target.closest(".selection-row-checkbox");
+      if (!cb) return;
+      const id = cb.dataset.id;
+      if (cb.checked) reviewCheckedIds.add(id); else reviewCheckedIds.delete(id);
+      const row = cb.closest(".selection-review-row");
+      if (row) row.classList.toggle("sr-row-checked", cb.checked);
+      const allNow = allIds.every((vid) => reviewCheckedIds.has(vid));
+      const someNow = allIds.some((vid) => reviewCheckedIds.has(vid));
+      if (selectAllCb) { selectAllCb.checked = allNow; selectAllCb.indeterminate = someNow && !allNow; }
+      updateReviewBulkCounts();
     });
+
+    updateReviewBulkCounts();
+  }
+
+  /** Refresh Exclude/Keep-only/Trash/Folder button counts — they all target the same checked+matched working set, so their counts must always agree. */
+  function updateReviewBulkCounts() {
+    const checkedCount = getCheckedReviewMessages().length;
+
+    const excludeBtn = $("#selectionReviewExcludeMatches");
+    if (excludeBtn) {
+      excludeBtn.disabled = checkedCount === 0;
+      const span = excludeBtn.querySelector("span");
+      if (span) span.textContent = checkedCount.toLocaleString();
+    }
+
+    const keepOnlyBtn = $("#selectionReviewKeepOnlyMatches");
+    if (keepOnlyBtn) {
+      keepOnlyBtn.disabled = checkedCount === 0 || checkedCount === selectedIds.size;
+      const span = keepOnlyBtn.querySelector("span");
+      if (span) span.textContent = checkedCount.toLocaleString();
+    }
+
+    const trashBtn = $("#selectionReviewTrash");
+    if (trashBtn) {
+      trashBtn.disabled = checkedCount === 0;
+      const span = trashBtn.querySelector("span");
+      if (span) span.textContent = checkedCount.toLocaleString();
+    }
+
+    const folderBtn = $("#selectionReviewFolder");
+    if (folderBtn) {
+      folderBtn.disabled = checkedCount === 0;
+      const span = folderBtn.querySelector("span");
+      if (span) span.textContent = checkedCount.toLocaleString();
+    }
   }
 
   function removeSelectedId(rawId) {
     selectedIds.delete(rawId);
     const numericId = Number(rawId);
     if (!Number.isNaN(numericId)) selectedIds.delete(numericId);
+  }
+
+  /** Toggle a whole group of messages in/out of the selection — same all-or-nothing pattern used by Categories pie clicks. */
+  function toggleSelectMessages(msgs) {
+    if (!msgs || !msgs.length) return;
+    const allSelected = msgs.every((m) => selectedIds.has(m.id));
+    msgs.forEach((m) => {
+      if (allSelected) selectedIds.delete(m.id);
+      else selectedIds.add(m.id);
+    });
+    updateStats();
   }
 
   async function openMessageInThunderbird(messageId) {
@@ -2948,12 +3282,175 @@
   }
 
   // ══════════════════════════════════════════
+  //  BROWSE — flat, searchable, virtual-scrolled table of every scanned
+  //  email. Checkboxes write straight into the shared `selectedIds`, so
+  //  checking a row here is identical to clicking a slice in By Sender/Domain:
+  //  it shows up in the floating selection bar and Review Selected immediately.
+  // ══════════════════════════════════════════
+  function getBrowseMessages() {
+    const q = browseState.query.trim().toLowerCase();
+    let msgs = getFilteredMessages();
+    if (q) msgs = msgs.filter((m) => matchesReviewQuery(m, q));
+
+    const sort = browseState.sort;
+    msgs = msgs.slice().sort((a, b) => {
+      if (sort === "date-asc") return new Date(a.date) - new Date(b.date);
+      if (sort === "size-desc") return messageSize(b) - messageSize(a);
+      if (sort === "sender-asc") return (a.senderEmail || "").localeCompare(b.senderEmail || "");
+      if (sort === "subject-asc") return (a.subject || "").localeCompare(b.subject || "");
+      return new Date(b.date) - new Date(a.date);
+    });
+    return msgs;
+  }
+
+  function renderBrowseView() {
+    const table = $("#browseTable");
+    const search = $("#browseSearch");
+    const sort = $("#browseSort");
+    if (!table || !search || !sort) return;
+
+    search.value = browseState.query;
+    sort.value = browseState.sort;
+    search.oninput = () => { browseState.query = search.value; renderBrowseView(); };
+    sort.onchange = () => { browseState.sort = sort.value; renderBrowseView(); };
+
+    const msgs = getBrowseMessages();
+    const totalAll = getFilteredMessages().length;
+
+    function updateBrowseSummary() {
+      const summaryEl = $("#browseSummary");
+      if (!summaryEl) return;
+      const selCount = selectedIds.size;
+      summaryEl.textContent = browseState.query.trim()
+        ? `${msgs.length.toLocaleString()} of ${totalAll.toLocaleString()} matched · ${selCount.toLocaleString()} selected`
+        : `${totalAll.toLocaleString()} emails · ${selCount.toLocaleString()} selected`;
+    }
+    updateBrowseSummary();
+
+    if (msgs.length === 0) {
+      table.onscroll = null;
+      setSafeHtml(table, `<div class="selection-empty">${totalAll === 0 ? "No emails scanned yet." : "No emails match your search."}</div>`);
+      return;
+    }
+
+    // Virtual scroll — same technique as the Review Selected modal: a spacer
+    // holds the full scrollable height, only the visible window (+ buffer) is
+    // ever in the DOM, and select-all operates on the full list, not just what's rendered.
+    const idToMsg = new Map(msgs.map((m) => [String(m.id), m]));
+    const allIds = Array.from(idToMsg.keys());
+    const allChecked = allIds.length > 0 && allIds.every((id) => selectedIds.has(idToMsg.get(id).id));
+    const someChecked = allIds.some((id) => selectedIds.has(idToMsg.get(id).id));
+    const totalHeight = msgs.length * SR_ROW_HEIGHT;
+
+    setSafeHtml(table, `
+      <div class="selection-review-table-head">
+        <span class="selection-checkbox-cell"><input type="checkbox" id="browseSelectAll" ${allChecked ? "checked" : ""} aria-label="Select all"></span>
+        <span>Subject</span><span>Sender</span><span>Date</span><span>Size</span>
+      </div>
+      <div class="sr-virtual-spacer" id="browseVirtualSpacer" style="height:${totalHeight}px;"></div>
+    `);
+
+    const selectAllCb = table.querySelector("#browseSelectAll");
+    if (selectAllCb && someChecked && !allChecked) selectAllCb.indeterminate = true;
+    const spacer = table.querySelector("#browseVirtualSpacer");
+    const headEl = table.querySelector(".selection-review-table-head");
+
+    function rowHtml(m, idx) {
+      const mid = String(m.id);
+      const checked = selectedIds.has(m.id);
+      return `
+        <div class="selection-review-row${checked ? " sr-row-checked" : ""}" data-id="${escAttr(mid)}" style="top:${idx * SR_ROW_HEIGHT}px;">
+          <div class="selection-checkbox-cell">
+            <input type="checkbox" class="selection-row-checkbox" data-id="${escAttr(mid)}" ${checked ? "checked" : ""} aria-label="Select message">
+          </div>
+          <div class="selection-subject">
+            <button type="button" class="selection-open-link" data-open-message="${escAttr(mid)}" title="Open in Thunderbird">${escHtml(m.subject || "(No Subject)")}</button>
+            <span>${escHtml(displayFolderName("", m.folder) || "Unknown folder")} · ${escHtml(displayAccount(m.account || ""))}</span>
+          </div>
+          <div class="selection-sender">
+            <strong>${escHtml(m.senderName || displayEmail(m.senderEmail))}</strong>
+            <span>${escHtml(displayEmail(m.senderEmail) || "")}</span>
+          </div>
+          <div class="selection-date">${escHtml(formatDate(m.date))}</div>
+          <div class="selection-size">${formatBytes(messageSize(m))}</div>
+        </div>`;
+    }
+
+    let rafPending = false;
+    function renderVirtualRows() {
+      rafPending = false;
+      const headH = headEl ? headEl.offsetHeight : 0;
+      const relTop = Math.max(0, table.scrollTop - headH);
+      const startIndex = Math.max(0, Math.floor(relTop / SR_ROW_HEIGHT) - SR_VIRTUAL_BUFFER);
+      const visibleCount = Math.ceil(table.clientHeight / SR_ROW_HEIGHT) + SR_VIRTUAL_BUFFER * 2;
+      const endIndex = Math.min(msgs.length, startIndex + visibleCount);
+      let html = "";
+      for (let i = startIndex; i < endIndex; i++) html += rowHtml(msgs[i], i);
+      setSafeHtml(spacer, html);
+    }
+    function scheduleRenderVirtualRows() {
+      if (rafPending) return;
+      rafPending = true;
+      requestAnimationFrame(renderVirtualRows);
+    }
+    table.onscroll = scheduleRenderVirtualRows;
+    renderVirtualRows();
+
+    if (selectAllCb) {
+      selectAllCb.addEventListener("change", () => {
+        allIds.forEach((id) => {
+          const msg = idToMsg.get(id);
+          if (selectAllCb.checked) selectedIds.add(msg.id); else removeSelectedId(id);
+        });
+        selectAllCb.indeterminate = false;
+        updateStats();
+        updateBrowseSummary();
+        renderVirtualRows();
+      });
+    }
+
+    // Per-row checkbox — delegated on the spacer since rows are recreated as the user scrolls.
+    spacer.addEventListener("change", (e) => {
+      const cb = e.target.closest(".selection-row-checkbox");
+      if (!cb) return;
+      const id = cb.dataset.id;
+      const msg = idToMsg.get(id);
+      if (!msg) return;
+      if (cb.checked) selectedIds.add(msg.id); else removeSelectedId(id);
+      const row = cb.closest(".selection-review-row");
+      if (row) row.classList.toggle("sr-row-checked", cb.checked);
+      const allNow = allIds.every((vid) => selectedIds.has(idToMsg.get(vid).id));
+      const someNow = allIds.some((vid) => selectedIds.has(idToMsg.get(vid).id));
+      if (selectAllCb) { selectAllCb.checked = allNow; selectAllCb.indeterminate = someNow && !allNow; }
+      updateStats();
+      updateBrowseSummary();
+    });
+  }
+
+  // ══════════════════════════════════════════
   //  DELETE (modal-based)
   // ══════════════════════════════════════════
-  function showDeleteModal() {
-    const count = selectedIds.size;
+  /** Drives the in-modal pie progress ring (Move to Trash / Move to Folder) — pct = 0..100 conic-gradient fill + centered label. */
+  function setModalProgress(prefix, moved, total, statusText, isError = false) {
+    const pct = total > 0 ? Math.min(100, Math.round((moved / total) * 100)) : 0;
+    const ring = $(`#${prefix}Ring`);
+    const pctEl = $(`#${prefix}Pct`);
+    const statusEl = $(`#${prefix}Status`);
+    if (ring) ring.style.setProperty("--pct", pct);
+    if (pctEl) pctEl.textContent = `${pct}%`;
+    if (statusEl) {
+      statusEl.textContent = statusText;
+      statusEl.classList.toggle("modal-progress-error", isError);
+    }
+  }
+
+  function showDeleteModal(targetIds = null) {
+    const idsToAct = targetIds || Array.from(selectedIds);
+    const idsToActSet = new Set(idsToAct);
+    const count = idsToAct.length;
+    if (count === 0) return;
     const senders = new Set();
-    allMessages.forEach((m) => { if (selectedIds.has(m.id)) senders.add(m.senderEmail); });
+    allMessages.forEach((m) => { if (idsToActSet.has(m.id)) senders.add(m.senderEmail); });
 
     setSafeHtml($("#deleteModalText"), `
       You're about to move <strong>${count.toLocaleString()} email(s)</strong> from
@@ -2961,44 +3458,56 @@
     `);
 
     const modal = $("#deleteModal");
+    const confirmView = $("#deleteModalConfirmView");
+    const progressView = $("#deleteModalProgress");
+    confirmView.style.display = "";
+    progressView.style.display = "none";
+    setModalProgress("deleteModal", 0, count, "Preparing…");
     modal.style.display = "flex";
 
     $("#modalCancel").onclick = () => { modal.style.display = "none"; };
     $("#modalConfirm").onclick = async () => {
-      modal.style.display = "none";
-      $("#progressArea").style.display = "block";
-      $("#progressText").textContent = `Moving ${count} emails to Trash…`;
-      $("#progressFill").style.width = "30%";
+      confirmView.style.display = "none";
+      progressView.style.display = "flex";
+      setModalProgress("deleteModal", 0, count, `Moving 0 of ${count.toLocaleString()}…`);
+
+      const progressListener = (msg) => {
+        if (msg.action === "deleteProgress") {
+          setModalProgress("deleteModal", msg.moved, msg.total, `Moving ${msg.moved.toLocaleString()} of ${msg.total.toLocaleString()}…`);
+        }
+      };
+      browser.runtime.onMessage.addListener(progressListener);
 
       try {
         const result = await browser.runtime.sendMessage({
           action: "deleteMessages",
-          messageIds: Array.from(selectedIds),
+          messageIds: idsToAct,
         });
+        browser.runtime.onMessage.removeListener(progressListener);
 
         if (result && result.success) {
-          const movedIds = Array.isArray(result.movedIds) ? result.movedIds : Array.from(selectedIds);
+          const movedIds = Array.isArray(result.movedIds) ? result.movedIds : idsToAct;
           const movedSet = new Set(movedIds);
           allMessages = allMessages.filter((m) => !movedSet.has(m.id));
-          movedIds.forEach((id) => selectedIds.delete(id));
+          movedIds.forEach((id) => { selectedIds.delete(id); reviewCheckedIds.delete(String(id)); });
           updateStats();
-          $("#progressFill").style.width = "100%";
-          $("#progressText").textContent = result.count === result.total
-            ? `Done — moved ${result.count} of ${result.total} to Trash.`
-            : `Partial — moved ${result.count} of ${result.total} to Trash. Review remaining selections.`;
+          setModalProgress("deleteModal", result.count, result.total, result.count === result.total
+            ? `Done — moved ${result.count.toLocaleString()} to Trash.`
+            : `Partial — moved ${result.count.toLocaleString()} of ${result.total.toLocaleString()}. Review remaining selections.`);
           if (result.errors) {
             console.warn("Some batches had errors:", result.errors);
           }
           setTimeout(() => {
-            $("#progressArea").style.display = "none";
+            modal.style.display = "none";
             switchView(currentView);
-          }, 1500);
+          }, 1200);
         } else {
           const msg = result?.error || result?.errors?.[0] || "Could not move selected messages to Trash.";
-          $("#progressText").textContent = `Error: ${msg}`;
+          setModalProgress("deleteModal", 0, count, `Error: ${msg}`, true);
         }
       } catch (e) {
-        $("#progressText").textContent = `Error: ${e.message}`;
+        browser.runtime.onMessage.removeListener(progressListener);
+        setModalProgress("deleteModal", 0, count, `Error: ${e.message}`, true);
       }
     };
   }
@@ -3006,16 +3515,23 @@
   // ══════════════════════════════════════════
   //  MOVE TO FOLDER (modal + background)
   // ══════════════════════════════════════════
-  async function showMoveFolderModal() {
-    const totalSel = selectedIds.size;
+  async function showMoveFolderModal(targetIds = null) {
+    const idsToAct = targetIds || Array.from(selectedIds);
+    const idsToActSet = new Set(idsToAct);
+    const totalSel = idsToAct.length;
     if (totalSel === 0) return;
 
-    const selectedMsgs = allMessages.filter((m) => selectedIds.has(m.id));
+    const selectedMsgs = allMessages.filter((m) => idsToActSet.has(m.id));
     const accountIds = [...new Set(selectedMsgs.map((m) => m.accountId))];
 
     const modal = $("#folderModal");
     const select = $("#folderModalSelect");
     const confirmBtn = $("#folderModalConfirm");
+    const confirmView = $("#folderModalConfirmView");
+    const progressView = $("#folderModalProgress");
+    confirmView.style.display = "";
+    progressView.style.display = "none";
+    setModalProgress("folderModal", 0, totalSel, "Preparing…");
 
     setSafeHtml($("#folderModalText"),
       accountIds.length > 1
@@ -3088,19 +3604,25 @@
       const accountId = opt.dataset.accountId;
       const folderPath = opt.dataset.folderPath;
       const idsToMove = allMessages
-        .filter((m) => selectedIds.has(m.id) && m.accountId === accountId)
+        .filter((m) => idsToActSet.has(m.id) && m.accountId === accountId)
         .map((m) => m.id);
 
-      modal.style.display = "none";
-
       if (idsToMove.length === 0) {
+        modal.style.display = "none";
         alert("None of the selected messages belong to the account for that folder. Pick a folder under another account or adjust your selection.");
         return;
       }
 
-      $("#progressArea").style.display = "block";
-      $("#progressText").textContent = `Moving ${idsToMove.length} message(s)…`;
-      $("#progressFill").style.width = "30%";
+      confirmView.style.display = "none";
+      progressView.style.display = "flex";
+      setModalProgress("folderModal", 0, idsToMove.length, `Moving 0 of ${idsToMove.length.toLocaleString()}…`);
+
+      const progressListener = (msg) => {
+        if (msg.action === "moveProgress") {
+          setModalProgress("folderModal", msg.moved, msg.total, `Moving ${msg.moved.toLocaleString()} of ${msg.total.toLocaleString()}…`);
+        }
+      };
+      browser.runtime.onMessage.addListener(progressListener);
 
       try {
         const result = await browser.runtime.sendMessage({
@@ -3109,28 +3631,29 @@
           accountId,
           folderPath,
         });
+        browser.runtime.onMessage.removeListener(progressListener);
 
         if (result && result.success) {
           const movedIds = Array.isArray(result.movedIds) ? result.movedIds : idsToMove;
           const movedSet = new Set(movedIds);
           allMessages = allMessages.filter((m) => !movedSet.has(m.id));
-          movedIds.forEach((id) => selectedIds.delete(id));
+          movedIds.forEach((id) => { selectedIds.delete(id); reviewCheckedIds.delete(String(id)); });
           updateStats();
-          $("#progressFill").style.width = "100%";
-          $("#progressText").textContent = result.count === result.total
-            ? `Done — moved ${result.count} of ${result.total} message(s).`
-            : `Partial — moved ${result.count} of ${result.total} message(s). Review remaining selections.`;
+          setModalProgress("folderModal", result.count, result.total, result.count === result.total
+            ? `Done — moved ${result.count.toLocaleString()} message(s).`
+            : `Partial — moved ${result.count.toLocaleString()} of ${result.total.toLocaleString()} message(s). Review remaining selections.`);
           if (result.errors) console.warn("Some batches had errors:", result.errors);
           setTimeout(() => {
-            $("#progressArea").style.display = "none";
+            modal.style.display = "none";
             switchView(currentView);
-          }, 1500);
+          }, 1200);
         } else {
           const msg = result?.error || result?.errors?.[0] || "Move failed";
-          $("#progressText").textContent = `Error: ${msg}`;
+          setModalProgress("folderModal", 0, idsToMove.length, `Error: ${msg}`, true);
         }
       } catch (e) {
-        $("#progressText").textContent = `Error: ${e.message}`;
+        browser.runtime.onMessage.removeListener(progressListener);
+        setModalProgress("folderModal", 0, idsToMove.length, `Error: ${e.message}`, true);
       }
     };
   }
@@ -3750,6 +4273,148 @@
         selectBtn.addEventListener('click', () => toggleSelectAll(cat.msgs));
       }
     });
+  }
+
+  // ══════════════════════════════════════════
+  //  CONTACTS
+  // ══════════════════════════════════════════
+  const CONTACTS_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").concat(["#"]);
+
+  /** One row per unique sender email, aggregated from the current (filtered) scan. Always raw/unmasked — masking is applied only at render/export time. */
+  function getContactsData() {
+    const msgs = getFilteredMessages();
+    const byEmail = {};
+    msgs.forEach((m) => {
+      const email = (m.senderEmail || "").trim();
+      if (!email) return;
+      if (!byEmail[email]) {
+        byEmail[email] = {
+          email,
+          name: m.senderName || "",
+          domain: m.domain || "",
+          count: 0,
+          unread: 0,
+          firstDate: m.date,
+          lastDate: m.date,
+        };
+      }
+      const c = byEmail[email];
+      c.count++;
+      if (!m.read) c.unread++;
+      if (!c.name && m.senderName) c.name = m.senderName;
+      if (new Date(m.date) > new Date(c.lastDate)) c.lastDate = m.date;
+      if (new Date(m.date) < new Date(c.firstDate)) c.firstDate = m.date;
+    });
+    return Object.values(byEmail);
+  }
+
+  function contactLabel(c) {
+    return (c.name && c.name.trim()) ? c.name.trim() : c.email;
+  }
+
+  function contactLetter(c) {
+    const first = contactLabel(c).charAt(0).toUpperCase();
+    return /[A-Z]/.test(first) ? first : "#";
+  }
+
+  function renderContactsView() {
+    const listEl = $("#contactsList");
+    const azEl = $("#contactsAzIndex");
+    const searchInput = $("#contactsSearch");
+    if (!listEl || !azEl || !searchInput) return;
+
+    searchInput.oninput = () => renderContactsView();
+
+    const query = (searchInput.value || "").toLowerCase().trim();
+    let contacts = getContactsData();
+    if (query) {
+      contacts = contacts.filter((c) =>
+        (c.name || "").toLowerCase().includes(query) ||
+        c.email.toLowerCase().includes(query) ||
+        (c.domain || "").toLowerCase().includes(query)
+      );
+    }
+    contacts.sort((a, b) => contactLabel(a).localeCompare(contactLabel(b), undefined, { sensitivity: "base" }));
+
+    const totalMsgs = getFilteredMessages().length;
+    $("#contactsSummaryLabel").textContent =
+      `${contacts.length.toLocaleString()} unique contact${contacts.length === 1 ? "" : "s"} from ${totalMsgs.toLocaleString()} scanned email${totalMsgs === 1 ? "" : "s"}.`;
+
+    if (contacts.length === 0) {
+      setSafeHtml(listEl, `<div class="selection-empty">No contacts match your search.</div>`);
+      setSafeHtml(azEl, CONTACTS_ALPHABET.map((l) => `<button type="button" class="contacts-az-btn" disabled>${l}</button>`).join(""));
+      return;
+    }
+
+    const groups = {};
+    contacts.forEach((c) => {
+      const letter = contactLetter(c);
+      if (!groups[letter]) groups[letter] = [];
+      groups[letter].push(c);
+    });
+
+    const sectionId = (letter) => `contacts-letter-${letter === "#" ? "hash" : letter}`;
+
+    setSafeHtml(listEl, CONTACTS_ALPHABET.filter((l) => groups[l]).map((letter) => `
+      <div class="contacts-section" id="${sectionId(letter)}">
+        <div class="contacts-section-header">${letter}</div>
+        ${groups[letter].map((c) => {
+          const name = displaySenderName(c.name, c.email) || displayEmail(c.email);
+          const initial = (name || "?").trim().charAt(0).toUpperCase() || "?";
+          return `
+          <div class="contact-row">
+            <div class="contact-avatar" aria-hidden="true">${escHtml(initial)}</div>
+            <div class="contact-main">
+              <div class="contact-name">${escHtml(name)}</div>
+              <div class="contact-email">${escHtml(displayEmail(c.email))}</div>
+            </div>
+            <div class="contact-domain">${escHtml(displayDomain(c.domain) || "")}</div>
+            <div class="contact-count">${c.count.toLocaleString()} email${c.count === 1 ? "" : "s"}</div>
+            <div class="contact-last">${escHtml(formatDate(c.lastDate))}</div>
+          </div>`;
+        }).join("")}
+      </div>`).join(""));
+
+    setSafeHtml(azEl, CONTACTS_ALPHABET.map((letter) => {
+      const has = !!groups[letter];
+      return `<button type="button" class="contacts-az-btn" data-target="${sectionId(letter)}" ${has ? "" : "disabled"}>${letter}</button>`;
+    }).join(""));
+
+    azEl.querySelectorAll(".contacts-az-btn[data-target]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const section = document.getElementById(btn.dataset.target);
+        if (section) section.scrollIntoView({ block: "start", behavior: "smooth" });
+      });
+    });
+  }
+
+  function exportContactsCSV() {
+    const contacts = getContactsData().sort((a, b) => contactLabel(a).localeCompare(contactLabel(b), undefined, { sensitivity: "base" }));
+    const header = "Name,Email,Domain,Email Count,Unread Count,First Email,Last Email\n";
+    const rows = contacts.map((c) => [
+      `"${(c.name || "").replace(/"/g, '""')}"`,
+      c.email,
+      c.domain,
+      c.count,
+      c.unread,
+      c.firstDate,
+      c.lastDate,
+    ].join(",")).join("\n");
+    downloadFile(header + rows, "inboxpie-contacts.csv", "text/csv");
+  }
+
+  function exportContactsJSON() {
+    const contacts = getContactsData().sort((a, b) => contactLabel(a).localeCompare(contactLabel(b), undefined, { sensitivity: "base" }));
+    const report = contacts.map((c) => ({
+      name: c.name || null,
+      email: c.email,
+      domain: c.domain,
+      emailCount: c.count,
+      unreadCount: c.unread,
+      firstEmail: c.firstDate,
+      lastEmail: c.lastDate,
+    }));
+    downloadFile(JSON.stringify(report, null, 2), "inboxpie-contacts.json", "application/json");
   }
 
   init();
