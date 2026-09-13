@@ -47,7 +47,22 @@ npm run build    # Compile TypeScript
 npm run pack     # Unpacked app
 npm run dist     # Signed/notarized DMG (requires Apple cert)
 npm run typecheck
+npm run test     # vitest — pure aggregation/agent logic (app/src/main/agent/deep-aggregate/tools.test.ts)
 ```
+
+**Optional: LLM tracing via self-hosted Langfuse.** The agent pipelines (deep-aggregate,
+ReAct search, graph extraction) log prompts/responses to the console by default
+(`dev-telemetry.ts`, dev builds only, zero setup). For a real trace tree instead, run
+Langfuse yourself (`docker compose up` — see the [Langfuse self-hosting
+guide](https://langfuse.com/self-hosting)) and set:
+```bash
+LANGFUSE_PUBLIC_KEY="pk-lf-..."
+LANGFUSE_SECRET_KEY="sk-lf-..."
+LANGFUSE_BASE_URL="http://localhost:3000"   # your own instance — never defaults to Langfuse Cloud
+```
+All three env vars must be set (and the app must be unpackaged) for tracing to turn on —
+see `app/src/main/agent/langfuse-telemetry.ts`. Nothing is sent anywhere unless you set
+these yourself.
 
 ---
 
