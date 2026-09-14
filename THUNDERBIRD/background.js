@@ -82,7 +82,7 @@ async function fetchAllMail(options) {
 
         while (page.id) {
           page = await browser.messages.continueList(page.id);
-          allMessages.push(...page.messages.map(m => extractMessageData(m, account, folder)));
+          allMessages.push(...page.messages.filter(inDateRange).map(m => extractMessageData(m, account, folder)));
           totalProcessed += page.messages.length;
 
           browser.runtime.sendMessage({
