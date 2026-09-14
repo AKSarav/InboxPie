@@ -4,13 +4,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**InboxPie** is a privacy-first email inbox analysis tool with three independent products:
+**InboxPie** is a privacy-first email inbox analysis tool with two independent products in
+this repository:
 
 1. **CLI** (Python) — Command-line scanner for Apple Mail metadata (Envelope Index + `.emlx` fallback), generates HTML/CSV/JSON/terminal reports
 2. **Thunderbird Extension** (JavaScript/WebExtension) — Interactive dashboard inside Thunderbird; shows PieView, sender/domain/size/timeline views, selection + bulk move/trash
-3. **Electron Desktop App** (TypeScript/Node.js) — Port of the Thunderbird dashboard UI to a native macOS app, backed by the CLI scan engine
 
-All three read **metadata only** (sender, subject, date, folder, read status, size) — never message bodies. No cloud, no telemetry, no data leaving the device.
+Both read **metadata only** (sender, subject, date, folder, read status, size) — never message bodies. No cloud, no telemetry, no data leaving the device.
+
+Note: an Electron desktop app (with an LLM-based email analysis agent) previously lived in
+this repo under `app/`. It has been spun out into a separate, paid project and is no longer
+part of this codebase — do not reference `app/` paths or Electron tooling for this repo.
 
 ---
 
@@ -37,32 +41,6 @@ pip install -e ".[dev]"
 ```
 
 **Package release:** `zip -r app@inboxpie.com.xpi manifest.json background.js dashboard/ icons/`
-
-### Electron Desktop App
-```bash
-cd app
-npm install
-npm run dev      # Watch mode with hot reload
-npm run build    # Compile TypeScript
-npm run pack     # Unpacked app
-npm run dist     # Signed/notarized DMG (requires Apple cert)
-npm run typecheck
-npm run test     # vitest — pure aggregation/agent logic (app/src/main/agent/deep-aggregate/tools.test.ts)
-```
-
-**Optional: LLM tracing via self-hosted Langfuse.** The agent pipelines (deep-aggregate,
-ReAct search, graph extraction) log prompts/responses to the console by default
-(`dev-telemetry.ts`, dev builds only, zero setup). For a real trace tree instead, run
-Langfuse yourself (`docker compose up` — see the [Langfuse self-hosting
-guide](https://langfuse.com/self-hosting)) and set:
-```bash
-LANGFUSE_PUBLIC_KEY="pk-lf-..."
-LANGFUSE_SECRET_KEY="sk-lf-..."
-LANGFUSE_BASE_URL="http://localhost:3000"   # your own instance — never defaults to Langfuse Cloud
-```
-All three env vars must be set (and the app must be unpackaged) for tracing to turn on —
-see `app/src/main/agent/langfuse-telemetry.ts`. Nothing is sent anywhere unless you set
-these yourself.
 
 ---
 
@@ -105,43 +83,12 @@ THUNDERBIRD/
 - `background.js:moveMessagesToFolder()`, `deleteMessages()` — Bulk actions
 - `dashboard.js` — Renders charts, handles drill-down, search, and exports
 
-### Electron App Structure
-```
-app/
-├── src/
-│   ├── main/
-│   │   ├── index.ts           # Electron main (window, IPC listeners)
-│   │   ├── mail/
-│   │   │   ├── provider.ts    # Abstract mail provider interface
-│   │   │   └── apple-mail.ts  # AppleMailProvider (spawns Python script)
-│   │   └── ipc/
-│   │       └── handlers.ts    # IPC handler functions
-│   ├── preload/
-│   │   └── index.ts           # browser.runtime shim for dashboard.js
-│   └── renderer/
-│       ├── index.html         # Window root
-│       ├── public/dashboard.js # Shared UI from Thunderbird
-│       └── styles.css
-├── scripts/
-│   └── scan-apple-mail.py    # Calls CLI inboxpie_cli.sources.scan
-└── shared/
-    └── types.ts              # MessageRecord TypeScript type
-```
-
-**Architecture:** Renderer (dashboard.js) → Preload (RPC shim) → Main (IPC handlers) → Mail provider (Apple Mail Python script)
-
 ---
 
 ## Key Design Patterns
 
-### Shared UI Between Thunderbird & Electron
-The dashboard UI (`dashboard.js`, `styles.css`) is **copied** into both `THUNDERBIRD/dashboard/` and `app/src/renderer/public/`. Changes must be synchronized in both places. The Preload layer in Electron emulates Thunderbird's `browser.runtime` API so the same dashboard code works unchanged.
-
-### Python Subprocess in Electron
-The Electron app calls `scripts/scan-apple-mail.py` (which wraps the CLI) to perform scans. Output is streamed back as progress events over IPC.
-
 ### Import Compatibility (Shared Analytics)
-The analytics module (`CLI/src/inboxpie_cli/analytics/aggregations.py`) is shared between CLI and Electron. The Electron build includes the `inboxpie_cli` package so Python scans use the same aggregation logic.
+The analytics module (`CLI/src/inboxpie_cli/analytics/aggregations.py`) is shared logic that the Thunderbird extension's `dashboard.js` duplicates in JavaScript (see Known Limitations).
 
 ---
 
@@ -149,11 +96,10 @@ The analytics module (`CLI/src/inboxpie_cli/analytics/aggregations.py`) is share
 
 | File | Purpose |
 |------|---------|
-| `CLI/src/inboxpie_cli/models.py` | `MessageRecord` dataclass — canonical message schema for all three products |
+| `CLI/src/inboxpie_cli/models.py` | `MessageRecord` dataclass — canonical message schema shared by both products |
 | `CLI/src/inboxpie_cli/analytics/aggregations.py` | Domain/sender/size/time pivots — duplicated in `dashboard.js` (should be deduplicated) |
-| `THUNDERBIRD/background.js` | Mail API handlers for Thunderbird; IPC surface replicated in Electron `app/src/main/ipc/handlers.ts` |
-| `THUNDERBIRD/dashboard/dashboard.js` | Interactive UI (d3.js, charts, search, export); shared with Electron |
-| `app/src/preload/index.ts` | Exposes `browser.runtime` API surface to renderer so dashboard.js runs unchanged |
+| `THUNDERBIRD/background.js` | Mail API handlers for Thunderbird |
+| `THUNDERBIRD/dashboard/dashboard.js` | Interactive UI (d3.js, charts, search, export) |
 
 ---
 
@@ -169,17 +115,9 @@ The analytics module (`CLI/src/inboxpie_cli/analytics/aggregations.py`) is share
 1. Create a provider in `CLI/src/inboxpie_cli/sources/my_provider.py`
 2. Return a list of `MessageRecord` objects
 3. Register in `CLI/src/inboxpie_cli/sources/scan.py:get_scan_source()`
-4. For Electron, add a provider in `app/src/main/mail/` that spawns the Python module via subprocess
-
-### Sync Dashboard UI Changes
-The `dashboard.js` and `styles.css` files are maintained in `THUNDERBIRD/dashboard/` and copied to `app/src/renderer/public/`. When modifying:
-1. Update the Thunderbird version first
-2. Test in Thunderbird via `about:debugging`
-3. Copy the updated files to `app/src/renderer/public/`
-4. Rebuild and test the Electron app
 
 ### Apple Mail Full Disk Access
-CLI scans require **Full Disk Access** for the host application (Terminal/Cursor/VSCode), not inboxpie. Run `inboxpie privacy-settings` to open System Preferences, then enable the detected app. For Electron, FDA must be granted to the Electron app executable.
+CLI scans require **Full Disk Access** for the host application (Terminal/Cursor/VSCode), not inboxpie. Run `inboxpie privacy-settings` to open System Preferences, then enable the detected app.
 
 ---
 
@@ -191,8 +129,8 @@ CLI scans require **Full Disk Access** for the host application (Terminal/Cursor
 - Run one file: `pytest tests/test_scan.py`
 - Run one test: `pytest tests/test_scan.py::test_envelope_index_parser`
 
-### Thunderbird & Electron
-- No automated tests; UI verified manually via `about:debugging` (Thunderbird) or `npm run dev` (Electron)
+### Thunderbird
+- No automated tests; UI verified manually via `about:debugging`
 - Test checklist in `THUNDERBIRD/RELEASE_CHECKLIST.md`
 
 ---
@@ -203,16 +141,13 @@ CLI scans require **Full Disk Access** for the host application (Terminal/Cursor
 |-----------|----------|----------|-------|
 | CLI | Python 3.10+ | `typer`, `rich`, `jinja2` | No external network calls |
 | Thunderbird | JavaScript | WebExtension API, `d3.js` (inline) | Requires Thunderbird 115+ |
-| Electron | TypeScript/Node 20+ | `electron`, `electron-vite`, `electron-builder` | Requires macOS, Python 3.10+ for CLI calls |
 
 ---
 
 ## Known Limitations & Future Work
 
 - **Analytics duplication:** `CLI/aggregations.py` logic is duplicated in `dashboard.js`. Should extract shared aggregation as a shared module.
-- **Move/delete actions in Electron:** Currently stubs for Apple Mail (Thunderbird has native support via MailExtension APIs).
-- **Provider abstraction:** Only Apple Mail is implemented. IMAP / O365 / Thunderbird providers are planned.
-- **Python bundling:** Electron currently requires a system Python + `inboxpie` CLI. Bundling a standalone runtime is future work.
+- **Provider abstraction:** Only Apple Mail is implemented. IMAP / O365 providers are planned.
 
 ---
 
@@ -228,10 +163,4 @@ cd CLI
 ```bash
 zip -r app@inboxpie.com.xpi manifest.json background.js dashboard/ icons/
 # Follow THUNDERBIRD/RELEASE_CHECKLIST.md
-```
-
-### Electron (macOS)
-```bash
-cd app
-npm run dist  # Requires Apple Developer certificate + signing identity
 ```
