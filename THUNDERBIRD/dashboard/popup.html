@@ -16,7 +16,7 @@
         <img src="../icons/icon-96.png" alt="InboxPie Logo" class="logo-icon" height="40" width="40">
         <div class="header-title">
           <h1 class="brand-gradient">InboxPie</h1>
-          <span class="version-badge">v1.0.4</span>
+          <span class="version-badge">v1.0.5</span>
         </div>
       </div>
       <div class="header-right">
@@ -108,6 +108,12 @@
         <span class="export-stat"><strong id="statTotal">0</strong> emails scanned</span>
         <span class="export-stat-sep">·</span>
         <span class="export-stat" title="Total size of messages with a known size (see By Size for messages with unknown size)"><strong id="statSize">0</strong> mailbox size</span>
+        <span class="export-stat-sep">·</span>
+        <label class="unread-switch" title="Show only unread emails across every view">
+          <input type="checkbox" id="unreadOnlyToggle">
+          <span class="unread-switch-track"><span class="unread-switch-thumb"></span></span>
+          <span class="unread-switch-label">Unread only (<span id="unreadOnlyCount">0</span>)</span>
+        </label>
       </div>
       <div class="export-bar-actions">
         <span class="export-emails">Export emails as </span>
@@ -531,6 +537,9 @@
           <div class="modal-progress-inner"><span class="modal-progress-pct" id="deleteModalPct">0%</span></div>
         </div>
         <p class="modal-progress-status" id="deleteModalStatus">Preparing…</p>
+        <div class="modal-actions" id="deleteModalCloseRow" style="display:none;">
+          <button type="button" id="deleteModalCloseBtn" class="btn btn-secondary">Close</button>
+        </div>
       </div>
     </div>
   </div>
@@ -552,6 +561,9 @@
           <div class="modal-progress-inner"><span class="modal-progress-pct" id="folderModalPct">0%</span></div>
         </div>
         <p class="modal-progress-status" id="folderModalStatus">Preparing…</p>
+        <div class="modal-actions" id="folderModalCloseRow" style="display:none;">
+          <button type="button" id="folderModalCloseBtn" class="btn btn-secondary">Close</button>
+        </div>
       </div>
     </div>
   </div>

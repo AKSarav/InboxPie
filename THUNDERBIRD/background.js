@@ -82,7 +82,13 @@ async function fetchAllMail(options) {
 
         while (page.id) {
           page = await browser.messages.continueList(page.id);
-          allMessages.push(...page.messages.filter(inDateRange).map(m => extractMessageData(m, account, folder)));
+          // Date filtering already happened server-side via messages.query() above when
+          // hasDateRange is true (continueList just pages through that same query's
+          // results) -- no client-side filter needed or correct to apply here. This used
+          // to call a since-removed inDateRange() helper, which threw a ReferenceError on
+          // the very first continueList() call and silently truncated every scan to one
+          // page (~100 messages), caught by the catch block below as a console warning.
+          allMessages.push(...page.messages.map(m => extractMessageData(m, account, folder)));
           totalProcessed += page.messages.length;
 
           browser.runtime.sendMessage({
@@ -121,9 +127,15 @@ function flattenFolders(folders, filterTypes) {
 
 function extractMessageData(msg, account, folder) {
   const date = new Date(msg.date);
-  const senderMatch = (msg.author || "").match(/(?:"?([^"<]*)"?\s*)?<?([^>]*)>?/);
+  // Requires <...> to capture a display-name/email split; a bare address with no angle
+  // brackets (msg.author === "john@example.com", no quoting) falls through to treating the
+  // whole trimmed string as the email. The old regex made both <...> and the email capture
+  // optional, so a bare address matched with an EMPTY email capture — the string landed in
+  // senderName instead, leaving senderEmail empty and domain stuck at "unknown".
+  const author = (msg.author || "").trim();
+  const senderMatch = author.match(/^\s*(?:"?([^"<]*)"?\s*)?<([^>]+)>\s*$/);
   const senderName = senderMatch ? (senderMatch[1] || "").trim() : "";
-  const senderEmail = senderMatch ? (senderMatch[2] || "").trim().toLowerCase() : (msg.author || "").toLowerCase();
+  const senderEmail = senderMatch ? senderMatch[2].trim().toLowerCase() : author.toLowerCase();
   const domain = senderEmail.includes("@") ? senderEmail.split("@")[1] : "unknown";
 
   return {
@@ -251,100 +263,172 @@ async function moveMessagesToFolder(messageIds, accountId, folderPath) {
     return { success: false, error: "Missing destination folder" };
   }
 
+  // Fetched fresh right here (not reused from whatever populated the folder dropdown when
+  // the modal opened), so this itself can't go stale — but the dropdown selection the user
+  // is acting on WAS read earlier, and the account/folder it names can genuinely have been
+  // removed or renamed in Thunderbird in the time the modal was open. Give an actionable
+  // message pointing at that, since "Folder not found" alone doesn't tell the user the
+  // selection itself (not their messages) is what's gone, or what to do about it —
+  // reopening Move to Folder re-fetches this same list fresh.
   const accounts = await browser.accounts.list();
   const account = accounts.find((a) => a.id === accountId);
   if (!account) {
-    return { success: false, error: "Account not found" };
+    return { success: false, error: "That account is no longer available. Close this and reopen Move to Folder to pick again." };
   }
 
   const destFolder = findFolderByPath(account.folders, folderPath);
   if (!destFolder) {
-    return { success: false, error: "Folder not found" };
+    return { success: false, error: "That destination folder no longer exists — it may have been renamed or deleted. Close this and reopen Move to Folder to pick again." };
   }
 
-  const BATCH_SIZE = 100;
+  // Same batch-size reasoning as deleteMessages() below — larger batches cut the number
+  // of sequential round-trips, which is the real overhead for a local/offline-synced
+  // account.
+  const BATCH_SIZE = 500;
   let moved = 0;
+  let skipped = 0;
   const movedIds = [];
   const errors = [];
+  const isNotFound = (err) => /not found/i.test(err?.message || "");
 
-  for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
-    const batch = messageIds.slice(i, i + BATCH_SIZE);
+  // browser.messages.move() is all-or-nothing for the whole batch it's given. If a message
+  // was moved or deleted outside InboxPie (another client, manually in Thunderbird) since
+  // the search that produced this ID list ran, that ONE stale ID fails the entire batch —
+  // with a 500-message batch that meant losing up to 500 messages' worth of progress over
+  // one already-gone message, with no way to continue short of re-scanning. On failure,
+  // bisect instead of giving up: split the batch and retry each half, recursing until the
+  // stale ID(s) are isolated to a batch of 1. A lone message that's genuinely gone is
+  // treated as already-handled (skipped), not an error — the end state the user wanted
+  // (it's not in this folder anymore) is already true.
+  async function processBatch(batch) {
     try {
       await browser.messages.move(batch, destFolder);
       moved += batch.length;
       movedIds.push(...batch);
       browser.runtime.sendMessage({
         action: "moveProgress",
-        moved,
+        moved: moved + skipped,
         total: messageIds.length,
       }).catch(() => {});
+      return;
     } catch (e) {
-      errors.push(`Batch ${Math.floor(i / BATCH_SIZE) + 1}: ${e.message}`);
+      if (batch.length > 1) {
+        const mid = Math.floor(batch.length / 2);
+        await processBatch(batch.slice(0, mid));
+        await processBatch(batch.slice(mid));
+        return;
+      }
+      if (isNotFound(e)) {
+        skipped++;
+        movedIds.push(batch[0]);
+        return;
+      }
+      errors.push(`Message ${batch[0]}: ${e.message}`);
     }
   }
 
+  for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
+    await processBatch(messageIds.slice(i, i + BATCH_SIZE));
+  }
+
   return {
-    success: moved > 0,
+    success: moved > 0 || skipped > 0,
     count: moved,
+    skipped,
     total: messageIds.length,
     movedIds,
-    error: moved > 0 ? undefined : (errors[0] || "No messages were moved"),
+    error: (moved === 0 && skipped === 0) ? (errors[0] || "No messages were moved") : undefined,
     errors: errors.length > 0 ? errors : undefined,
   };
 }
 
-// Safe batched delete — moves to trash in batches of 100
+// Safe batched delete — moves to trash in batches. No documented hard limit on
+// browser.messages.delete()'s batch size, and the bottleneck for a local/offline-synced
+// account (e.g. Gmail via Thunderbird's local cache) is the per-call round-trip overhead
+// across the WebExtension boundary, not JS compute — so fewer, larger batches is the
+// lever, not concurrency (no documented guarantee concurrent calls on the same folder are
+// safe, and it's a destructive op, so not worth the risk). 500 is a first experimental
+// bump from 100; raise further if batches keep succeeding cleanly (watch `errors`).
 async function deleteMessages(messageIds) {
   if (!messageIds || messageIds.length === 0) return { success: false, error: "No messages selected" };
 
-  const BATCH_SIZE = 100;
+  const BATCH_SIZE = 500;
   let moved = 0;
+  let skipped = 0;
   const movedIds = [];
-  let errors = [];
+  const errors = [];
+  const isNotFound = (err) => /not found/i.test(err?.message || "");
 
-  for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
-    const batch = messageIds.slice(i, i + BATCH_SIZE);
+  // Same all-or-nothing-batch problem as moveMessagesToFolder() above: one message moved
+  // or deleted outside InboxPie since the search ran fails messages.delete() for the WHOLE
+  // batch, and the old fallback retried messages.move() on that same full batch — so it
+  // failed identically, losing the whole batch's progress with no way to continue short of
+  // a full re-scan (the exact customer-reported bug). Bisect on failure instead: split and
+  // retry each half, recursing until the stale ID(s) are isolated to a batch of 1. A lone
+  // message that's genuinely gone is skipped (already-handled), not an error.
+  async function processBatch(batch) {
     try {
       // Primary: use messages.delete with skipTrash=false (moves to trash)
       await browser.messages.delete(batch, false);
       moved += batch.length;
       movedIds.push(...batch);
-
-      // Report progress
       browser.runtime.sendMessage({
         action: "deleteProgress",
-        moved: moved,
-        total: messageIds.length
+        moved: moved + skipped,
+        total: messageIds.length,
       }).catch(() => {});
+      return;
     } catch (e) {
-      // Fallback: try messages.move to trash folder
+      if (batch.length > 1) {
+        const mid = Math.floor(batch.length / 2);
+        await processBatch(batch.slice(0, mid));
+        await processBatch(batch.slice(mid));
+        return;
+      }
+      if (isNotFound(e)) {
+        skipped++;
+        movedIds.push(batch[0]);
+        browser.runtime.sendMessage({
+          action: "deleteProgress",
+          moved: moved + skipped,
+          total: messageIds.length,
+        }).catch(() => {});
+        return;
+      }
+      // Genuine single-message failure (not "already gone") — try the trash-folder
+      // fallback before giving up on just this one message.
       try {
-        // Get the first message to find its account
         const msg = await browser.messages.get(batch[0]);
-        if (msg) {
-          const trashFolder = await getTrashFolder(msg.folder.accountId);
-          if (trashFolder) {
-            await browser.messages.move(batch, trashFolder);
-            moved += batch.length;
-            movedIds.push(...batch);
-          } else {
-            errors.push(`Batch ${Math.floor(i/BATCH_SIZE)+1}: No trash folder found`);
-          }
-        } else {
-          errors.push(`Batch ${Math.floor(i/BATCH_SIZE)+1}: Could not read message for trash fallback after delete failed: ${e.message}`);
+        const trashFolder = msg ? await getTrashFolder(msg.folder.accountId) : null;
+        if (trashFolder) {
+          await browser.messages.move(batch, trashFolder);
+          moved++;
+          movedIds.push(batch[0]);
+          return;
         }
+        errors.push(`Message ${batch[0]}: ${msg ? "no trash folder found" : `could not read message after delete failed (${e.message})`}`);
       } catch (e2) {
-        errors.push(`Batch ${Math.floor(i/BATCH_SIZE)+1}: Delete failed (${e.message}); trash fallback failed (${e2.message})`);
+        if (isNotFound(e2)) {
+          skipped++;
+          movedIds.push(batch[0]);
+          return;
+        }
+        errors.push(`Message ${batch[0]}: delete failed (${e.message}); trash fallback failed (${e2.message})`);
       }
     }
   }
 
+  for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
+    await processBatch(messageIds.slice(i, i + BATCH_SIZE));
+  }
+
   return {
-    success: moved > 0,
+    success: moved > 0 || skipped > 0,
     count: moved,
+    skipped,
     total: messageIds.length,
     movedIds,
-    error: moved > 0 ? undefined : (errors[0] || "No messages were moved to Trash"),
-    errors: errors.length > 0 ? errors : undefined
+    error: (moved === 0 && skipped === 0) ? (errors[0] || "No messages were moved to Trash") : undefined,
+    errors: errors.length > 0 ? errors : undefined,
   };
 }

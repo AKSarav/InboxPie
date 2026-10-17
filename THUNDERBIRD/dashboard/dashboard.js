@@ -50,6 +50,10 @@
   let viewFilterFolderKeys = new Set();
   /** Folders present in current scan results (for filter dropdown). */
   let scannedFolderList = [];
+  /** When true, getFilteredMessages() also excludes read messages — every view, the stat
+   * bar, export, and selection (Browse checkboxes, chart-slice click-to-select) all read
+   * through that one function, so this scopes everything downstream for free. */
+  let unreadOnlyEnabled = false;
 
   const PALETTE = [
     "#3b82f6", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316",
@@ -85,6 +89,7 @@
     // Load saved privacy mask setting
     privacyMaskEnabled = localStorage.getItem("mail-audit-privacy-mask") === "true";
     updatePrivacyToggle();
+    updateUnreadOnlyToggle();
 
     // Theme toggle
     $("#themeToggle").addEventListener("click", () => {
@@ -127,6 +132,14 @@
       if (currentView === "sunburst" && detailSnapshot) {
         showDomainDetail(detailSnapshot.domain, detailSnapshot.msgs);
       }
+    });
+
+    // Unread-only toggle — session-only (not persisted), since it's a transient "focus on
+    // unread right now" view rather than a standing preference like privacy mode.
+    $("#unreadOnlyToggle").addEventListener("change", (e) => {
+      unreadOnlyEnabled = e.target.checked;
+      updateUnreadOnlyToggle();
+      if (allMessages.length > 0) switchView(currentView);
     });
 
     $("#sunburstDetail").addEventListener("click", (e) => {
@@ -540,6 +553,23 @@
     } else {
       btn.classList.remove("active");
       btn.title = "Privacy mode OFF — full emails shown. Click to mask emails.";
+    }
+  }
+
+  /** The displayed count always reflects the folder-filtered pool (not further narrowed by
+   * unreadOnlyEnabled itself), so it stays meaningful whether the toggle is on or off. */
+  function updateUnreadOnlyToggle() {
+    const input = $("#unreadOnlyToggle");
+    if (!input) return;
+    const unreadCount = getFolderFilteredMessages().filter((m) => !m.read).length;
+    const countEl = $("#unreadOnlyCount");
+    if (countEl) countEl.textContent = unreadCount.toLocaleString();
+    input.checked = unreadOnlyEnabled;
+    const label = input.closest(".unread-switch");
+    if (label) {
+      label.title = unreadOnlyEnabled
+        ? "Showing unread emails only. Switch off to show all."
+        : "Show only unread emails across every view.";
     }
   }
 
@@ -1279,6 +1309,7 @@
     folderListLoaded = false;
     folderDropdownRendered = false;
     viewFilterFolderKeys.clear();
+    unreadOnlyEnabled = false;
     scannedFolderList = [];
     scanFolderList = [];
     selectedFolderKeys.clear();
@@ -1442,6 +1473,7 @@
     const msgs = getFilteredMessages();
     $("#statTotal").textContent = msgs.length.toLocaleString();
     $("#statSize").textContent = formatBytes(msgs.reduce((sum, m) => sum + messageSize(m), 0));
+    updateUnreadOnlyToggle();
     updateFloatingSelectionBar();
     updateBulkButtons();
   }
@@ -1582,7 +1614,7 @@
 
   function buildDomainBarChartOption(limit = 12) {
     const domains = {};
-    allMessages.forEach(m => {
+    getFilteredMessages().forEach(m => {
       if (!m.domain) return;
       domains[m.domain] = (domains[m.domain] || 0) + 1;
     });
@@ -1618,7 +1650,7 @@
 
   function buildSenderBarChartOption(limit = 12) {
     const senders = {};
-    allMessages.forEach(m => {
+    getFilteredMessages().forEach(m => {
       const key = m.senderEmail || m.author || "Unknown";
       senders[key] = (senders[key] || 0) + 1;
     });
@@ -1814,10 +1846,11 @@
   }
 
   function legendItemMessages(filterType, filterValue) {
+    const msgs = getFilteredMessages();
     if (filterType === 'year') {
-      return allMessages.filter((m) => m.year.toString() === filterValue);
+      return msgs.filter((m) => m.year.toString() === filterValue);
     } else if (filterType === 'domain') {
-      return allMessages.filter((m) => m.domain === filterValue);
+      return msgs.filter((m) => m.domain === filterValue);
     }
     return [];
   }
@@ -2140,7 +2173,7 @@
       if (chart) {
         chart.on("click", (params) => {
           if (params.value && params.value > 0) {
-            toggleSelectMessages(allMessages.filter((m) => (m.senderEmail || m.author || "Unknown") === params.name));
+            toggleSelectMessages(getFilteredMessages().filter((m) => (m.senderEmail || m.author || "Unknown") === params.name));
             renderSenderTable();
           }
         });
@@ -2162,7 +2195,7 @@
       if (chart) {
         chart.on("click", (params) => {
           if (params.value && params.value > 0) {
-            toggleSelectMessages(allMessages.filter((m) => (m.senderEmail || m.author || "Unknown") === params.name));
+            toggleSelectMessages(getFilteredMessages().filter((m) => (m.senderEmail || m.author || "Unknown") === params.name));
             renderSenderTable();
           }
         });
@@ -2310,7 +2343,7 @@
       if (chart) {
         chart.on("click", (params) => {
           if (params.value && params.value > 0) {
-            toggleSelectMessages(allMessages.filter((m) => m.domain === params.name));
+            toggleSelectMessages(getFilteredMessages().filter((m) => m.domain === params.name));
             renderDomainTable();
           }
         });
@@ -2332,7 +2365,7 @@
       if (chart) {
         chart.on("click", (params) => {
           if (params.value && params.value > 0) {
-            toggleSelectMessages(allMessages.filter((m) => m.domain === params.name));
+            toggleSelectMessages(getFilteredMessages().filter((m) => m.domain === params.name));
             renderDomainTable();
           }
         });
@@ -3442,7 +3475,21 @@
       statusEl.textContent = statusText;
       statusEl.classList.toggle("modal-progress-error", isError);
     }
+    // On error there's nothing further the progress loop will do (the batch call already
+    // settled) and no auto-dismiss timer runs for this path, so without this the modal had
+    // no way to be dismissed at all short of reloading the whole dashboard -- losing the
+    // in-memory scan and forcing a full re-index just to get back to a usable UI.
+    const closeRow = $(`#${prefix}CloseRow`);
+    if (closeRow) closeRow.style.display = isError ? "flex" : "none";
   }
+
+  // Wired once (not per-modal-open): Close just dismisses the stuck error state and
+  // returns control to the existing in-memory session -- it does not re-run or undo
+  // anything, matching the fact that whatever the batch loop already completed (moved,
+  // skipped-as-already-gone) is real and was already reflected in allMessages before this
+  // error branch could even be reached.
+  $("#deleteModalCloseBtn")?.addEventListener("click", () => { $("#deleteModal").style.display = "none"; });
+  $("#folderModalCloseBtn")?.addEventListener("click", () => { $("#folderModal").style.display = "none"; });
 
   function showDeleteModal(targetIds = null) {
     const idsToAct = targetIds || Array.from(selectedIds);
@@ -3760,12 +3807,22 @@
    * Get messages filtered by viewFilterFolderKeys.
    * If viewFilterFolderKeys is empty, returns all messages.
    */
-  function getFilteredMessages() {
+  function getFolderFilteredMessages() {
     if (viewFilterFolderKeys.size === 0) return allMessages;
     return allMessages.filter((m) => {
       const key = folderKey(m.accountId, m.folder);
       return viewFilterFolderKeys.has(key);
     });
+  }
+
+  /**
+   * Folder-filtered messages, further narrowed to unread-only when that toggle is on.
+   * This is the one function nearly every view, the stat bar, export, and selection read
+   * through, so the unread-only toggle scopes all of them without touching that call site.
+   */
+  function getFilteredMessages() {
+    const base = getFolderFilteredMessages();
+    return unreadOnlyEnabled ? base.filter((m) => !m.read) : base;
   }
 
   function clearElement(el) {
@@ -4040,7 +4097,7 @@
   }
 
   async function renderSubscriptionsView() {
-    const stats = computeSubscriptionStats(allMessages);
+    const stats = computeSubscriptionStats(getFilteredMessages());
     if (!stats.length) {
       const container = $("#subscriptionsCards");
       if (container) setSafeHtml(container, '<div class="ais-folders-empty">No subscriptions detected.</div>');
@@ -4162,8 +4219,9 @@
       return;
     }
 
+    const filteredMsgs = getFilteredMessages();
     const entries = categories.map(cat => {
-      const msgs = allMessages.length > 0 ? allMessages.filter(m => classifyEmail(m, [cat])) : [];
+      const msgs = filteredMsgs.length > 0 ? filteredMsgs.filter(m => classifyEmail(m, [cat])) : [];
       const bySender = {};
       msgs.forEach(m => {
         const key = m.senderEmail || m.author || "Unknown";

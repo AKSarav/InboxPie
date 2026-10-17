@@ -91,6 +91,16 @@ Click the **Folders** button in the header to load your mailbox tree and choose 
 
 ## Changelog
 
+### 1.0.5
+
+**Bulk delete/move reliability**
+
+- Fixed: a single message that had been moved or deleted outside InboxPie (another client, or manually in Thunderbird) since the search ran used to fail the *entire* batch it was in — up to 500 messages lost over one already-gone message, with no way to continue short of re-scanning the whole mailbox. Batches now isolate and skip just the stale message(s); everything else in the batch still succeeds.
+- Fixed: the error popup for Move to Trash / Move to Folder had no way to dismiss it at all (no Close button, no click-outside) — now has a Close button, so an error no longer strands the session.
+- Clearer error message when a Move to Folder destination was renamed or deleted while the dialog was open.
+- Increased delete/move batch size (100 → 500) — fewer round-trips for large bulk operations.
+- Fixed: senders showing as "Unknown" when a message's From header had no `<name> <email>` angle-bracket wrapper (a bare email address) — sender name/email/domain now parse correctly for that format too.
+
 ### 1.0.4
 
 **New: Contacts and Browse pages**
