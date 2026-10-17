@@ -121,9 +121,10 @@ function flattenFolders(folders, filterTypes) {
 
 function extractMessageData(msg, account, folder) {
   const date = new Date(msg.date);
-  const senderMatch = (msg.author || "").match(/(?:"?([^"<]*)"?\s*)?<?([^>]*)>?/);
+  const author = (msg.author || "").trim();
+  const senderMatch = author.match(/^\s*(?:"?([^"<]*)"?\s*)?<([^>]+)>\s*$/);
   const senderName = senderMatch ? (senderMatch[1] || "").trim() : "";
-  const senderEmail = senderMatch ? (senderMatch[2] || "").trim().toLowerCase() : (msg.author || "").toLowerCase();
+  const senderEmail = senderMatch ? senderMatch[2].trim().toLowerCase() : author.toLowerCase();
   const domain = senderEmail.includes("@") ? senderEmail.split("@")[1] : "unknown";
 
   return {
