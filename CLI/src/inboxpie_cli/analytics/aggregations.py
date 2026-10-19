@@ -110,6 +110,7 @@ def build_analytics(records: list[MessageRecord]) -> Analytics:
             "unread": sum(1 for m in msgs if not m.read),
             "senders": len(set(m.senderEmail for m in msgs)),
             "size": sum(m.size for m in msgs),
+            "ids": [m.id for m in msgs],
         }
         for domain, msgs in sorted(by_domain.items(), key=lambda x: len(x[1]), reverse=True)
     ][:30]
