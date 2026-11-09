@@ -1,13 +1,14 @@
 {
   "manifest_version": 2,
   "name": "InboxPie",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Privacy-first email insights and cleanup. Explore patterns by year, month, domain, and sender — review locally, then act with confidence.",
   "author": "AKSarav",
   "browser_specific_settings": {
     "gecko": {
       "id": "app@inboxpie.com",
-      "strict_min_version": "115.0"
+      "strict_min_version": "115.0",
+      "data_collection_permissions": { "required": ["none"] }
     }
   },
   "permissions": [

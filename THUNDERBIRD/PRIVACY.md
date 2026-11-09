@@ -18,7 +18,7 @@ InboxPie does not read or display full email body content.
 
 ## Data Storage
 
-InboxPie does not maintain a remote database. Scanned mailbox metadata is held in memory in the extension dashboard while you use it. It is not written to disk by the extension.
+InboxPie does not maintain a remote database. Scanned mailbox metadata is held in memory in the extension dashboard while you use it. Full scan results are not written to disk by the extension.
 
 The extension stores only local UI preferences in `localStorage`:
 
@@ -29,6 +29,17 @@ The extension stores only local UI preferences in `localStorage`:
 | `mail-audit-folder-selections` | Which folders you chose to scan |
 
 No mailbox content or message metadata is persisted to `localStorage`.
+
+The extension also uses Thunderbird's local extension storage (`browser.storage.local`), which stays on your device, for:
+
+| Key | Purpose |
+|---|---|
+| `categories` | Custom categories you create |
+| `prioritySenders` | Addresses or `@domains` you marked as priority |
+| `knownSenders` | Sender email addresses InboxPie has already seen, with the date first seen, so DailyPie can show new senders |
+| `dayList` | Items on your DailyPie list: the text, and for emails you added, the message ID and sender address |
+
+This data is removed when you uninstall InboxPie. Message subjects and bodies are not stored, except a subject you choose to keep as a list item.
 
 ## Privacy Mode
 

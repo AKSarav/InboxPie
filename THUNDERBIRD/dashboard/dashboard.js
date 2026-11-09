@@ -100,6 +100,7 @@
       updateThemeIcon(next);
       // Re-render current view with new theme colors
       if (allMessages.length > 0) switchView(currentView);
+      else showHome();
     });
 
     $("#resetBtn").addEventListener("click", () => {
@@ -183,6 +184,12 @@
       console.warn("Could not fetch accounts:", e);
     }
     updateAccountSelectActiveState();
+
+    // DailyPie is the home screen: it loads on open, no Scan needed.
+    $("#dailypieView").addEventListener("click", onDailyPieClick);
+    $("#dailypieView").addEventListener("keydown", onDailyPieKeydown);
+    $("#dailypieView").addEventListener("change", onDailyPieChange);
+    showHome();
 
     scanBtn.addEventListener("click", startScan);
     accountSelect.addEventListener("change", () => {
@@ -289,6 +296,8 @@
       $("#supportPopover").style.display = "none";
       sessionStorage.setItem("inboxpie-support-dismissed", "true");
     });
+
+    initLiveSync();
   }
 
   // ══════════════════════════════════════════
@@ -1292,6 +1301,8 @@
   //  RESET (account change)
   // ══════════════════════════════════════════
   function resetDashboard() {
+    lastScan = null;
+    hideNewMailPopover();
     allMessages = [];
     selectedIds.clear();
     expandedDomains.clear();
@@ -1348,7 +1359,6 @@
     $("#viewTabsWrap").style.display = "none";
     $("#exportBar").style.display = "none";
     $("#floatingSelectionBar").style.display = "none";
-    $("#landingState").style.display = "flex";
 
     document.querySelectorAll(".view-panel").forEach((p) => (p.style.display = "none"));
     document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
@@ -1384,6 +1394,121 @@
     scanBtn.querySelector(".btn-text").style.display = "inline";
     scanBtn.querySelector(".btn-loader").style.display = "none";
     $("#progressFill").style.width = "0%";
+    showHome();
+  }
+
+  // ══════════════════════════════════════════
+  //  LIVE SYNC — keep scanned data in step with Thunderbird while this tab is open
+  // ══════════════════════════════════════════
+  // Deletes, moves and read/unread changes are applied in place. New mail waits in
+  // pendingNewMail until the user clicks Add, so the view doesn't shift under them.
+  let lastScan = null; // { folderKeys, dateTo } of the scan allMessages came from
+  let pendingNewMail = []; // [{ folder, messages }] as Thunderbird reported them
+  let liveRenderTimer = null;
+
+  async function messagesOf(list) {
+    const out = [...(list?.messages || [])];
+    for (let page = list; page?.id; ) {
+      page = await browser.messages.continueList(page.id);
+      out.push(...page.messages);
+    }
+    return out;
+  }
+
+  const isScannedFolder = (folder) => !!lastScan && !!folder && lastScan.folderKeys.has(folderKey(folder.accountId, folder.path));
+
+  /** Re-render once a burst of events settles; never under an open modal (it may be mid-action). */
+  function scheduleLiveRender() {
+    clearTimeout(liveRenderTimer);
+    liveRenderTimer = setTimeout(() => {
+      if ([...document.querySelectorAll(".modal-overlay")].some((m) => m.style.display !== "none")) return scheduleLiveRender();
+      updateStats();
+      switchView(currentView);
+    }, 800);
+  }
+
+  function dropMessages(ids) {
+    const gone = new Set(ids);
+    pendingNewMail = pendingNewMail.map((g) => ({ ...g, messages: g.messages.filter((m) => !gone.has(m.id)) })).filter((g) => g.messages.length);
+    if (!pendingNewMail.length) $("#newMailPopover").style.display = "none";
+    else showNewMailPopover();
+    const before = allMessages.length;
+    allMessages = allMessages.filter((m) => !gone.has(m.id));
+    ids.forEach((id) => { selectedIds.delete(id); reviewCheckedIds.delete(String(id)); });
+    return allMessages.length !== before;
+  }
+
+  function showNewMailPopover() {
+    const n = pendingNewMail.reduce((t, g) => t + g.messages.length, 0);
+    $("#newMailText").textContent = `${n.toLocaleString()} new email${n === 1 ? " has" : "s have"} arrived since your scan.`;
+    $("#supportPopover").style.display = "none";
+    $("#newMailPopover").style.display = "block";
+  }
+
+  function hideNewMailPopover() {
+    pendingNewMail = [];
+    $("#newMailPopover").style.display = "none";
+  }
+
+  async function addPendingNewMail() {
+    const groups = pendingNewMail;
+    hideNewMailPopover();
+    try {
+      const batches = await Promise.all(groups.map((g) => browser.runtime.sendMessage({ action: "recordsForNewMail", folder: g.folder, messages: g.messages })));
+      const have = new Set(allMessages.map((m) => m.id));
+      allMessages.push(...batches.flat().filter((m) => !have.has(m.id)));
+    } catch (e) {
+      alert(`Could not add the new emails: ${e.message}. Use Scan to reload.`);
+      return;
+    }
+    scheduleLiveRender();
+    renderDailyPie();
+  }
+
+  function initLiveSync() {
+    const ev = browser.messages || {};
+    $("#newMailClose").addEventListener("click", hideNewMailPopover);
+    $("#newMailAdd").addEventListener("click", addPendingNewMail);
+
+    ev.onNewMailReceived?.addListener(async (folder, list) => {
+      if (!isScannedFolder(folder) || (lastScan.dateTo != null && lastScan.dateTo < Date.now())) return;
+      const messages = await messagesOf(list);
+      if (!messages.length) return;
+      pendingNewMail.push({ folder, messages });
+      showNewMailPopover();
+    });
+
+    ev.onDeleted?.addListener(async (list) => {
+      if (!lastScan) return;
+      if (dropMessages((await messagesOf(list)).map((m) => m.id))) scheduleLiveRender();
+    });
+
+    // A move gives the message a new id; carry the scanned record over if it stays in a scanned folder.
+    ev.onMoved?.addListener(async (fromList, toList) => {
+      if (!lastScan) return;
+      const [from, to] = await Promise.all([messagesOf(fromList), messagesOf(toList)]);
+      const byId = new Map(allMessages.map((m) => [m.id, m]));
+      const pendingIds = new Set(pendingNewMail.flatMap((g) => g.messages.map((m) => m.id)));
+      const carried = [];
+      const stillPending = [];
+      from.forEach((orig, i) => {
+        if (pendingIds.has(orig.id) && to[i] && isScannedFolder(to[i].folder)) stillPending.push({ folder: to[i].folder, messages: [to[i]] });
+        const rec = byId.get(orig.id), dest = to[i];
+        if (rec && dest && isScannedFolder(dest.folder)) {
+          carried.push({ ...rec, id: dest.id, folder: dest.folder.path, folderType: dest.folder.type, accountId: dest.folder.accountId });
+        }
+      });
+      const changed = dropMessages(from.map((m) => m.id));
+      allMessages.push(...carried);
+      if (stillPending.length) { pendingNewMail.push(...stillPending); showNewMailPopover(); }
+      if (changed || carried.length) scheduleLiveRender();
+    });
+
+    ev.onUpdated?.addListener((message, changed) => {
+      if (!lastScan || changed.read === undefined) return;
+      const rec = allMessages.find((m) => m.id === message.id);
+      if (rec && rec.read !== changed.read) { rec.read = changed.read; scheduleLiveRender(); }
+    });
   }
 
   // ══════════════════════════════════════════
@@ -1413,11 +1538,12 @@
     }
 
     const folderSelections = Array.from(selectedFolderKeys).map(parseFolderKey);
+    hideNewMailPopover();
 
     scanBtn.querySelector(".btn-text").style.display = "none";
     scanBtn.querySelector(".btn-loader").style.display = "inline";
     scanBtn.disabled = true;
-    $("#landingState").style.display = "none";
+    document.querySelectorAll(".view-panel").forEach((p) => (p.style.display = "none"));
     $("#progressArea").style.display = "block";
     $("#progressFill").style.width = "20%";
     const rangeSuffix = scanDateRange ? ` (${$("#dateRangeLabel").textContent})` : "";
@@ -1437,6 +1563,7 @@
       });
 
       allMessages = result.messages;
+      lastScan = { folderKeys: new Set(selectedFolderKeys), dateTo: dateBounds ? dateBounds.to : null };
       $("#progressFill").style.width = "100%";
       $("#progressText").textContent = `Done — ${allMessages.length.toLocaleString()} messages loaded.`;
 
@@ -1450,7 +1577,10 @@
         $("#exportBar").style.display = "flex";
         updateStats();
         renderViewFilterDropdown();
+        $("#sunburstView").classList.remove("home-sample");
+        $("#homeOverlay").style.display = "none";
         switchView("sunburst");
+        renderDailyPie(); // loads in the background so the DailyPie tab can show its count
         updateTabsScrollState();
         if (localStorage.getItem("mail-audit-app-tour-completed") !== "true") {
           setTimeout(startTour, 500);
@@ -1499,11 +1629,13 @@
     const sizeBar = $("#sizeBulkButtons");
     const timelineBar = $("#timelineBulkButtons");
     const categoriesBar = $("#categoriesBulkButtons");
+    const subscriptionsBar = $("#subscriptionsBulkButtons");
     if (senderBar) senderBar.style.display = selectedIds.size > 0 && currentView === "sender" ? "flex" : "none";
     if (domainBar) domainBar.style.display = selectedIds.size > 0 && currentView === "domain" ? "flex" : "none";
     if (sizeBar) sizeBar.style.display = selectedIds.size > 0 && currentView === "size" ? "flex" : "none";
     if (timelineBar) timelineBar.style.display = selectedIds.size > 0 && currentView === "timeline" ? "flex" : "none";
     if (categoriesBar) categoriesBar.style.display = selectedIds.size > 0 && currentView === "categories" ? "flex" : "none";
+    if (subscriptionsBar) subscriptionsBar.style.display = selectedIds.size > 0 && currentView === "subscriptions" ? "flex" : "none";
     document.querySelectorAll(".bulk-delete-count").forEach((el) => {
       el.textContent = String(selectedIds.size);
     });
@@ -1530,6 +1662,7 @@
       else if (view === "contacts") renderContactsView();
       else if (view === "browse") renderBrowseView();
       else if (view === "settings") renderSettingsView();
+      else if (view === "dailypie") renderDailyPie();
     }
     updateBulkButtons();
   }
@@ -1635,7 +1768,7 @@
 
     return {
       backgroundColor: "transparent",
-      tooltip: { trigger: "item", formatter: (p) => `${displayDomain(p.name)}: ${p.value.toLocaleString()} emails (${p.percent}%)`, textStyle: { color: textColor } },
+      tooltip: { trigger: "item", formatter: (p) => `${escHtml(displayDomain(p.name))}: ${p.value.toLocaleString()} emails (${p.percent}%)`, textStyle: { color: textColor } },
       legend: { show: false },
       series: [{
         type: "pie",
@@ -1671,7 +1804,7 @@
 
     return {
       backgroundColor: "transparent",
-      tooltip: { trigger: "item", formatter: (p) => `${displayEmail(p.name)}: ${p.value.toLocaleString()} emails (${p.percent}%)`, textStyle: { color: textColor } },
+      tooltip: { trigger: "item", formatter: (p) => `${escHtml(displayEmail(p.name))}: ${p.value.toLocaleString()} emails (${p.percent}%)`, textStyle: { color: textColor } },
       legend: { show: false },
       series: [{
         type: "pie",
@@ -2875,7 +3008,7 @@
 
     initViewChart(hostId, {
       backgroundColor: "transparent",
-      tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${p.value.toLocaleString()} (${p.percent}%)`, textStyle: { color: textColor } },
+      tooltip: { trigger: "item", formatter: (p) => `${escHtml(p.name)}: ${p.value.toLocaleString()} (${p.percent}%)`, textStyle: { color: textColor } },
       legend: { show: false },
       series: [{
         type: "pie",
@@ -3272,6 +3405,513 @@
     updateStats();
   }
 
+  // ══════════════════════════════════════════
+  //  DAILYPIE (home screen) — logic in dailypie-core.js, shared with background.js
+  // ══════════════════════════════════════════
+  const DP_LIST_CAP = 8;
+  const DP_ICONS = {
+    bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
+    mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+    unread: '<rect x="3" y="6" width="15" height="13" rx="2"/><path d="m3 8 7.5 5L18 8"/><circle cx="19" cy="5" r="3" fill="currentColor"/>',
+    userPlus: '<circle cx="9" cy="8" r="4"/><path d="M2 20c.8-3.6 3.4-5.5 7-5.5s6.2 1.9 7 5.5M19 8v6M16 11h6"/>',
+    check: '<rect x="3" y="3" width="18" height="18" rx="3"/><path d="m8 12 3 3 5-6"/>',
+    wave: '<path d="M3 12c2-4 4-4 6 0s4 4 6 0 4-4 6 0"/>',
+  };
+  const DP_PREF_KEYS = ["prioritySenders", "knownSenders", "dayList"];
+  let dpMessages = [];
+  /** Day picked in the calendar (local midnight ms) and, if older than the 14-day window, its own fetch. */
+  let dpPickedDay = null;
+  let dpDateMessages = null;
+  let dpTileMessages = {};
+  let dpPrefs = {};
+  let dpPage = "today";
+  const dpExpanded = new Set();
+  /** Senders under All others whose individual emails are expanded. */
+  const dpOthersOpen = new Set();
+  const trendCache = new Map();
+
+  // Before a scan: a dimmed sample PieView under an overlay telling the user what to do.
+  const SAMPLE_DOMAINS = ["newsletter.example", "shop.example", "bank.example", "work.example", "travel.example", "social.example", "news.example", "friends.example"];
+  const SAMPLE_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function sampleMessages() {
+    const out = [];
+    for (let y = 2021; y <= 2026; y++) {
+      SAMPLE_MONTHS.forEach((monthName, mi) => SAMPLE_DOMAINS.forEach((domain, di) => {
+        const n = (y * 7 + mi * 3 + di * 5) % 6; // deterministic but uneven, so the rings look real
+        for (let k = 0; k < n; k++) {
+          out.push({ id: `sample-${out.length}`, year: y, month: mi + 1, monthName, domain, senderEmail: `hello@${domain}`, senderName: "", subject: "Sample", date: new Date(y, mi, 1), read: true, size: 0 });
+        }
+      }));
+    }
+    return out;
+  }
+
+  function showHome() {
+    document.querySelectorAll(".view-panel").forEach((p) => (p.style.display = "none"));
+    currentView = "sunburst";
+    const panel = $("#sunburstView");
+    panel.style.display = "block";
+    panel.classList.add("home-sample");
+    $("#homeOverlay").style.display = "";
+    $("#dailypieTabCount").style.display = "none";
+    const real = allMessages;
+    allMessages = sampleMessages();
+    renderSunburst();
+    allMessages = real;
+  }
+
+  function dpAccountId() {
+    const v = accountSelect.value;
+    return v && v !== "all" ? v : null;
+  }
+
+  async function fetchInbox(fromMs, toMs = null) {
+    const res = await browser.runtime.sendMessage({
+      action: "fetchAllMail",
+      options: { accountId: dpAccountId(), folderTypes: ["inbox"], dateFrom: fromMs, dateTo: toMs },
+    });
+    return res.messages;
+  }
+
+  async function savePrefs(patch) {
+    Object.assign(dpPrefs, patch);
+    await browser.storage.local.set(patch);
+  }
+
+  async function renderDailyPie() {
+    const now = new Date();
+    const hour = now.getHours();
+    $("#dpDate").textContent = now.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" });
+    $("#dpGreeting").textContent = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+    $("#dpSummary").textContent = "Loading your inbox…";
+    try {
+      const [messages, prefs] = await Promise.all([fetchInbox(dayStart(Date.now(), 13)), browser.storage.local.get(DP_PREF_KEYS)]);
+      dpMessages = messages;
+      dpPrefs = prefs;
+    } catch (e) {
+      $("#dpSummary").textContent = `Could not load your inbox: ${e.message}`;
+      return;
+    }
+    trendCache.clear();
+    if (dpPage === "date") return viewDay(dpPickedDay);
+    drawDailyPie();
+    if (dpPage === "trends") renderTrends();
+  }
+
+  // ── Rendering helpers ──
+  function dpAvatar(name, email) {
+    const label = (name || email || "?").replace(/[^A-Za-z0-9 ]/g, "").trim();
+    const parts = label.split(/\s+/);
+    const initials = ((parts[0] || "?")[0] + (parts[1] ? parts[1][0] : "")).toUpperCase();
+    let h = 0;
+    for (const c of email || "") h = (h * 31 + c.charCodeAt(0)) >>> 0;
+    return `<span class="dp-avatar" style="background:${colorFor(h)}">${escHtml(initials)}</span>`;
+  }
+
+  function dpTime(date) {
+    const d = new Date(date);
+    return d.getTime() >= dayStart(Date.now(), 0)
+      ? d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+      : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  }
+
+  function dpSenderLabel(m) {
+    return m.senderName && m.senderName !== m.senderEmail.split("@")[0] ? m.senderName : displayEmail(m.senderEmail);
+  }
+
+  function dpMessageRow(m) {
+    return `
+      <div class="dp-row ${m.read ? "" : "dp-unread"}" data-open-message="${escAttr(String(m.id))}" title="Open in Thunderbird">
+        ${dpAvatar(m.senderName, m.senderEmail)}
+        <div class="dp-row-main">
+          <div class="dp-row-top"><span class="dp-sender">${escHtml(dpSenderLabel(m))}</span><span class="dp-time">${escHtml(dpTime(m.date))}</span></div>
+          <div class="dp-subject">${escHtml(m.subject)}</div>
+        </div>
+        <div class="dp-row-actions">
+          <button type="button" class="dp-chip-btn" data-dp-add-list="${escAttr(String(m.id))}" title="Add to your list">+ List</button>
+        </div>
+      </div>`;
+  }
+
+  function dpCard(id, { icon, title, hint, count, body, action = "", top = "" }) {
+    const expanded = dpExpanded.has(id);
+    const shown = expanded ? body : body.slice(0, DP_LIST_CAP);
+    const more = body.length > DP_LIST_CAP
+      ? `<button type="button" class="dp-more" data-dp-expand="${id}">${expanded ? "Show less" : `Show all ${body.length.toLocaleString()}`}</button>`
+      : "";
+    setSafeHtml($(`#${id}`), `
+      <div class="dp-card-head">
+        <div class="dp-card-title"><span class="dp-card-icon">${icon}</span><h3>${title}</h3>${count != null ? `<span class="dp-count">${count.toLocaleString()}</span>` : ""}</div>
+        ${action}
+      </div>
+      ${hint ? `<p class="dp-hint">${hint}</p>` : ""}${top}
+      <div class="dp-rows">${shown.join("")}</div>${more}`);
+  }
+
+  function dpEmpty(text) {
+    return [`<div class="dp-empty">${text}</div>`];
+  }
+
+  function listItemRow(item) {
+    const age = Math.round((dayStart(Date.now(), 0) - dayStart(item.addedAt, 0)) / 86400000);
+    return `
+      <div class="dp-row dp-task ${item.done ? "dp-done" : ""}">
+        <input type="checkbox" class="dp-check" data-dp-done="${escAttr(item.id)}" ${item.done ? "checked" : ""} aria-label="Mark done">
+        <div class="dp-row-main" ${item.messageId != null ? `data-open-message="${escAttr(String(item.messageId))}" title="Open in Thunderbird"` : ""}>
+          <div class="dp-subject">${escHtml(item.text)}</div>
+          <div class="dp-meta">${item.sender ? escHtml(displayEmail(item.sender)) + " · " : ""}${age > 0 ? `added ${age} day${age === 1 ? "" : "s"} ago` : "added today"}</div>
+        </div>
+        <button type="button" class="dp-x" data-dp-remove="${escAttr(item.id)}" title="Remove" aria-label="Remove">×</button>
+      </div>`;
+  }
+
+  function drawDailyPie() {
+    const yesterday = dpPage === "yesterday";
+    const picked = dpPage === "date";
+    const daysAgo = picked ? Math.round((dayStart(Date.now(), 0) - dpPickedDay) / 86400000) : yesterday ? 1 : 0;
+    const shortDate = new Date(dayStart(Date.now(), daysAgo)).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+    const day = picked ? shortDate : yesterday ? "yesterday" : "today";
+    const onDay = picked ? `on ${shortDate}` : day;
+    const dp = computeDailyPie(picked && dpDateMessages ? dpDateMessages : dpMessages, dpPrefs, Date.now(), daysAgo);
+    const todayUnread = daysAgo === 0 ? dp.stats.unread : computeDailyPie(dpMessages, dpPrefs).stats.unread;
+    $("#dailypieTabCount").textContent = todayUnread;
+    $("#dailypieTabCount").style.display = todayUnread ? "" : "none";
+    $("#dpDate").textContent = new Date(dayStart(Date.now(), daysAgo)).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: picked ? "numeric" : undefined });
+    const today0 = dayStart(Date.now(), 0);
+    const list = dpPrefs.dayList || [];
+    // Undone items from earlier days stay on the list, oldest first.
+    const todayList = list.filter((i) => !i.done || i.doneAt >= today0).sort((a, b) => a.addedAt - b.addedAt);
+    const s = dp.stats;
+
+    $("#dpSummary").textContent = s.total
+      ? `${s.total.toLocaleString()} email${s.total === 1 ? "" : "s"} ${daysAgo ? onDay : "so far today"} — ${s.unread} unread.`
+      : daysAgo ? `No email ${onDay}.` : "No email yet today. Enjoy the quiet.";
+
+    const listMsgIds = new Set(todayList.filter((i) => !i.done && i.messageId != null).map((i) => i.messageId));
+    dpTileMessages = {
+      today: dp.today,
+      unread: dp.today.filter((m) => !m.read),
+      newSenders: dp.newSenders,
+      list: dpMessages.filter((m) => listMsgIds.has(m.id)),
+      others: dp.others,
+    };
+    const tile = (key, icon, value, label, cls = "") => `
+      <button type="button" class="dp-stat ${cls}" data-dp-select="${key}" title="Select these for Review">
+        <span class="dp-stat-icon"><svg viewBox="0 0 24 24" aria-hidden="true">${DP_ICONS[icon]}</svg></span>
+        <span class="dp-stat-text"><span class="dp-stat-value">${value.toLocaleString()}</span><span class="dp-stat-label">${label}</span></span>
+      </button>`;
+    setSafeHtml($("#dpStats"), [
+      tile("today", "mail", s.total, `Emails ${day}`, "dp-stat-accent"),
+      tile("unread", "unread", s.unread, "Unread"),
+      tile("newSenders", "userPlus", s.newSenders, "New senders"),
+      tile("list", "check", todayList.filter((i) => !i.done).length, "On your list"),
+      tile("others", "wave", s.others, "All others", "dp-stat-muted"),
+    ].join(""));
+
+    dpCard("dpNew", {
+      icon: "✦", title: "New senders", count: dp.newSenders.length,
+      hint: `Mail from ${day} sent by addresses you'd never received email from before.`,
+      body: dp.newSenders.length ? dp.newSenders.map((m) => dpMessageRow(m)) : dpEmpty(`No first-time senders ${onDay}.`),
+    });
+    const priority = dpPrefs.prioritySenders || [];
+    dpCard("dpPriority", {
+      icon: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"/><path d="M12 14v7"/></svg>', title: "Priority senders", count: dp.priority.length,
+      hint: priority.length ? `Unread, or received ${onDay}, from your priority list.` : "",
+      action: `<button type="button" class="dp-link" data-dp-settings="1">${priority.length ? "Manage" : "Add"}</button>`,
+      body: dp.priority.length
+        ? dp.priority.map((m) => dpMessageRow(m))
+        : dpEmpty(priority.length ? "Nothing from your priority senders right now." : "Add your manager, key customers or a whole @company.com to see them here first."),
+    });
+
+    dpCard("dpList", {
+      icon: "☐", title: "Your list", count: todayList.filter((i) => !i.done).length,
+      top: `<div class="dp-add"><input type="text" id="dpListInput" class="dp-input" placeholder="Add a task, then press Enter"><button type="button" class="btn btn-primary" data-dp-add-task="1">Add</button></div>`,
+      body: todayList.length ? todayList.map(listItemRow) : dpEmpty("Nothing on your list. Type a task above, or use <strong>+ List</strong> on any email."),
+    });
+    $("#dpDayPieTitle").textContent = `Pie of ${day}`;
+    drawDayPie(dp.today);
+
+    dpCard("dpOthers", {
+      icon: "∿", title: "All others", count: s.others,
+      hint: `Everything else that arrived ${onDay}, grouped by sender.`,
+      body: dp.otherGroups.length ? dp.otherGroups.map((g) => {
+        const many = g.messages.length > 1;
+        const open = many && dpOthersOpen.has(g.senderEmail);
+        return `
+        <div class="dp-row" ${many ? `data-dp-others-toggle="${escAttr(g.senderEmail)}" title="${open ? "Hide" : "Show"} these ${g.messages.length} emails"` : `data-open-message="${escAttr(String(g.messages[0].id))}" title="Open in Thunderbird"`}>
+          ${dpAvatar(g.senderName, g.senderEmail)}
+          <div class="dp-row-main">
+            <div class="dp-row-top"><span class="dp-sender">${escHtml(displayEmail(g.senderEmail))}</span><span class="dp-time">${many ? `${g.messages.length}× ${open ? "▴" : "▾"}` : escHtml(dpTime(g.messages[0].date))}</span></div>
+            <div class="dp-subject">${escHtml(g.messages[0].subject)}</div>
+          </div>
+          <div class="dp-row-actions dp-row-actions-always">
+            <button type="button" class="dp-chip-btn" data-dp-trash="${escAttr(g.messages.map((m) => m.id).join(","))}" title="Move these to Trash">Trash</button>
+          </div>
+        </div>${open ? `<div class="dp-subrows">${g.messages.map((m) => dpMessageRow(m)).join("")}</div>` : ""}`;
+      }) : dpEmpty(`No other mail ${onDay}.`),
+    });
+
+    renderPrioritySettings();
+  }
+
+  /** Compact PieView for one day: domain (inner) → sender (outer). */
+  function drawDayPie(msgs) {
+    const byDomain = {};
+    for (const m of msgs) ((byDomain[m.domain] ||= {})[m.senderEmail] ||= []).push(m);
+    const domains = Object.entries(byDomain)
+      .map(([domain, senders]) => ({ domain, senders, n: Object.values(senders).reduce((t, a) => t + a.length, 0) }))
+      .sort((a, b) => b.n - a.n);
+    const data = domains.slice(0, 10).map((d, i) => ({
+      name: displayDomain(d.domain), value: d.n, itemStyle: { color: colorFor(i) },
+      children: Object.entries(d.senders).map(([email, a]) => ({ name: displayEmail(email), value: a.length })),
+    }));
+    const rest = domains.slice(10).reduce((t, d) => t + d.n, 0);
+    if (rest) data.push({ name: "Other", value: rest, itemStyle: { color: cssVar("--text-muted"), opacity: 0.5 } });
+    setSafeHtml($("#dpDayPieLegend"), data.map((d) => `
+      <div class="chart-legend-item">
+        <div class="chart-legend-dot" style="background-color: ${d.itemStyle.color}"></div>
+        <div class="chart-legend-label" title="${escAttr(d.name)}">${escHtml(d.name)}</div>
+        <div class="chart-legend-value">${d.value.toLocaleString()}</div>
+      </div>`).join(""));
+    initViewChart("dpDayPieChart", {
+      backgroundColor: "transparent",
+      title: msgs.length ? undefined : { text: "No email", left: "center", top: "middle", textStyle: { color: cssVar("--text-muted"), fontSize: 13, fontWeight: "normal" } },
+      tooltip: { formatter: (p) => `${escHtml(p.name)}: ${p.value.toLocaleString()} email${p.value === 1 ? "" : "s"}` },
+      series: [{
+        type: "sunburst", data, radius: ["18%", "95%"], sort: null, nodeClick: false,
+        label: { show: false },
+        itemStyle: { borderColor: cssVar("--bg-card"), borderWidth: 1 },
+        levels: [{}, { r0: "18%", r: "60%" }, { r0: "60%", r: "95%", itemStyle: { opacity: 0.75 } }],
+      }],
+    });
+  }
+
+  function renderPrioritySettings() {
+    const list = dpPrefs.prioritySenders || [];
+    setSafeHtml($("#prioritySendersList"), list.length
+      ? list.map((p) => `<span class="dp-chip">${escHtml(p.startsWith("@") ? "@" + displayDomain(p.slice(1)) : displayEmail(p))}<button type="button" class="dp-x" data-remove-priority="${escAttr(p)}" title="Remove" aria-label="Remove">×</button></span>`).join("")
+      : '<span class="dp-hint">No priority senders yet.</span>');
+  }
+
+  // ── Actions ──
+  function addListItem(item) {
+    const today0 = dayStart(Date.now(), 0);
+    // Done items older than a week are pruned so the list doesn't grow forever.
+    const kept = (dpPrefs.dayList || []).filter((i) => !i.done || i.doneAt >= today0 - 7 * 86400000);
+    savePrefs({ dayList: [...kept, { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, addedAt: Date.now(), done: false, ...item }] });
+    drawDailyPie();
+  }
+
+  function updateListItem(id, change) {
+    savePrefs({ dayList: (dpPrefs.dayList || []).flatMap((i) => (i.id === id ? change(i) : [i])) });
+    drawDailyPie();
+  }
+
+  function addTaskFromInput() {
+    const input = $("#dpListInput");
+    const text = (input?.value || "").trim();
+    if (text) addListItem({ text });
+  }
+
+  function addPrioritySender() {
+    const input = $("#prioritySenderInput");
+    const raw = input.value.trim().toLowerCase();
+    if (!raw) return;
+    const entry = raw.includes("@") && !raw.startsWith("@") ? raw : "@" + raw.replace(/^@/, "");
+    if (!/^[^@\s]*@[^@\s]+\.[^@\s]+$/.test(entry)) {
+      alert("Enter an email like name@company.com, or a domain like @company.com.");
+      return;
+    }
+    input.value = "";
+    const list = dpPrefs.prioritySenders || [];
+    if (!list.includes(entry)) savePrefs({ prioritySenders: [...list, entry] });
+    drawDailyPie();
+  }
+
+  function trashMessages(ids) {
+    // The Trash modal works on allMessages; DailyPie mail may not be in a full scan (or there may be none yet).
+    const want = new Set(ids);
+    const have = new Set(allMessages.map((m) => m.id));
+    dpMessages.forEach((m) => { if (want.has(m.id) && !have.has(m.id)) allMessages.push(m); });
+    showDeleteModal(ids);
+  }
+
+  /** Adds these to the shared selection and opens the existing Review modal. */
+  function reviewDailyPieMessages(msgs) {
+    if (!msgs.length) return;
+    // Review works on allMessages; DailyPie mail can be outside what the full scan loaded.
+    const have = new Set(allMessages.map((m) => m.id));
+    msgs.forEach((m) => {
+      if (!have.has(m.id)) allMessages.push(m);
+      selectedIds.add(m.id);
+    });
+    updateStats();
+    showSelectionReviewModal();
+  }
+
+  /** Today/Yesterday picks switch tabs; any other day gets its own view (and fetch, past the 14-day window). */
+  async function viewDay(ms) {
+    const daysAgo = Math.round((dayStart(Date.now(), 0) - ms) / 86400000);
+    if (daysAgo <= 0) return setDpPage("today");
+    if (daysAgo === 1) return setDpPage("yesterday");
+    dpPickedDay = ms;
+    dpDateMessages = null;
+    if (daysAgo > 13) {
+      $("#dpSummary").textContent = "Loading that day…";
+      try {
+        dpDateMessages = await fetchInbox(dayStart(ms, 13), dayStart(ms, -1));
+      } catch (e) {
+        $("#dpSummary").textContent = `Could not load that day: ${e.message}`;
+        return;
+      }
+    }
+    setDpPage("date");
+  }
+
+  function setDpPage(page) {
+    dpPage = page;
+    document.querySelectorAll(".dp-seg").forEach((b) => b.classList.toggle("active", b.dataset.dpPage === page));
+    $("#dpDateBtn").classList.toggle("active", page === "date");
+    $("#dpTodayPage").style.display = page === "trends" ? "none" : "";
+    $("#dpTrendsPage").style.display = page === "trends" ? "" : "none";
+    if (page === "trends") renderTrends();
+    else drawDailyPie();
+  }
+
+  function onDailyPieClick(e) {
+    const t = e.target;
+    const btn = (sel) => t.closest(sel);
+    let el;
+    if ((el = btn("[data-dp-page]"))) return setDpPage(el.dataset.dpPage);
+    if (btn("#dpRefresh")) return renderDailyPie();
+    if (btn("#dpDateBtn")) {
+      const picker = $("#dpDatePicker");
+      const t = new Date();
+      picker.max = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+      try { picker.showPicker(); } catch { picker.focus(); }
+      return;
+    }
+    if (btn("#dpSettingsBtn") || btn("[data-dp-settings]")) {
+      const s = $("#dpSettings");
+      s.style.display = s.style.display === "none" ? "" : "none";
+      if (s.style.display === "") $("#prioritySenderInput").focus();
+      return;
+    }
+    if (btn("#prioritySenderAdd")) return addPrioritySender();
+    if ((el = btn("[data-remove-priority]"))) {
+      savePrefs({ prioritySenders: (dpPrefs.prioritySenders || []).filter((p) => p !== el.dataset.removePriority) });
+      return drawDailyPie();
+    }
+    if ((el = btn("[data-dp-select]"))) return reviewDailyPieMessages(dpTileMessages[el.dataset.dpSelect] || []);
+    if ((el = btn("[data-dp-expand]"))) {
+      const id = el.dataset.dpExpand;
+      dpExpanded.has(id) ? dpExpanded.delete(id) : dpExpanded.add(id);
+      return drawDailyPie();
+    }
+    if (btn("[data-dp-add-task]")) return addTaskFromInput();
+    if ((el = btn("[data-dp-add-list]"))) {
+      const m = dpMessages.find((x) => String(x.id) === el.dataset.dpAddList);
+      if (m) addListItem({ text: m.subject, messageId: m.id, sender: m.senderEmail });
+      return;
+    }
+    if ((el = btn("[data-dp-trash]"))) return trashMessages(el.dataset.dpTrash.split(",").map(Number));
+    if ((el = btn("[data-dp-remove]"))) return updateListItem(el.dataset.dpRemove, () => []);
+    if ((el = btn("[data-dp-others-toggle]"))) {
+      const email = el.dataset.dpOthersToggle;
+      dpOthersOpen.has(email) ? dpOthersOpen.delete(email) : dpOthersOpen.add(email);
+      return drawDailyPie();
+    }
+    if (btn("[data-dp-done]")) return; // handled on change
+    if ((el = btn("[data-open-message]"))) {
+      e.preventDefault();
+      openMessageInThunderbird(el.dataset.openMessage);
+    }
+  }
+
+  function onDailyPieKeydown(e) {
+    if (e.key !== "Enter") return;
+    if (e.target.id === "dpListInput") addTaskFromInput();
+    else if (e.target.id === "prioritySenderInput") addPrioritySender();
+  }
+
+  function onDailyPieChange(e) {
+    const t = e.target;
+    if (t.dataset.dpDone) {
+      const done = t.checked;
+      return updateListItem(t.dataset.dpDone, (i) => [{ ...i, done, doneAt: done ? Date.now() : undefined }]);
+    }
+    if (t.id === "trendDays" || t.id === "trendCompare") renderTrends();
+    if (t.id === "dpDatePicker" && t.value) {
+      const [y, mo, d] = t.value.split("-").map(Number);
+      viewDay(new Date(y, mo - 1, d).getTime());
+    }
+  }
+
+  // ── Trends ──
+  async function renderTrends() {
+    const days = Number($("#trendDays").value);
+    const compare = $("#trendCompare").value;
+    const { fetchFrom, cur, prev } = trendRanges(days, compare);
+    const key = `${dpAccountId()}|${fetchFrom}`;
+    setSafeHtml($("#trendStats"), '<div class="dp-empty">Loading…</div>');
+    let messages = trendCache.get(key);
+    if (!messages) {
+      try {
+        messages = await fetchInbox(fetchFrom);
+      } catch (e) {
+        setSafeHtml($("#trendStats"), `<div class="dp-empty">Could not load trends: ${escHtml(e.message)}</div>`);
+        return;
+      }
+      trendCache.set(key, messages);
+    }
+    const tr = computeTrends(messages, days, compare, dpPrefs);
+    const fmtRange = ([a, b]) => {
+      const opt = { day: "numeric", month: "short" };
+      const end = new Date(b - 1);
+      return days === 1 ? new Date(a).toLocaleDateString(undefined, opt) : `${new Date(a).toLocaleDateString(undefined, opt)} – ${end.toLocaleDateString(undefined, opt)}`;
+    };
+    const delta = (c, p) => {
+      if (!p) return c ? '<span class="dp-delta">new</span>' : '<span class="dp-delta">—</span>';
+      const d = Math.round(((c - p) / p) * 100);
+      return `<span class="dp-delta ${d > 0 ? "dp-up" : d < 0 ? "dp-down" : ""}">${d > 0 ? "▲" : d < 0 ? "▼" : "="} ${Math.abs(d)}%</span>`;
+    };
+    const stat = (k, label) => `
+      <div class="dp-stat dp-stat-static">
+        <span class="dp-stat-value">${tr.current[k].toLocaleString()}</span>
+        <span class="dp-stat-label">${label}</span>
+        <span class="dp-stat-compare">${delta(tr.current[k], tr.previous[k])} vs ${tr.previous[k].toLocaleString()}</span>
+      </div>`;
+    setSafeHtml($("#trendStats"), [
+      stat("total", "Emails"), stat("unread", "Still unread"), stat("senders", "Unique senders"),
+      stat("newSenders", "New senders"),
+    ].join(""));
+    $("#trendChartNote").textContent = `${fmtRange(cur)} vs ${fmtRange(prev)}`;
+
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    const textColor = isLight ? "#4a5060" : "#a0a6b4";
+    initViewChart("trendChart", {
+      backgroundColor: "transparent",
+      tooltip: { trigger: "axis" },
+      legend: { data: ["This period", "Compared period"], textStyle: { color: textColor }, top: 0 },
+      grid: { left: 36, right: 16, top: 36, bottom: 28 },
+      xAxis: { type: "category", data: tr.days.map((d) => new Date(d).toLocaleDateString(undefined, { day: "numeric", month: "short" })), axisLabel: { color: textColor } },
+      yAxis: { type: "value", minInterval: 1, axisLabel: { color: textColor }, splitLine: { lineStyle: { opacity: 0.15 } } },
+      series: [
+        { name: "This period", type: days === 1 ? "bar" : "line", smooth: true, data: tr.currentPerDay, itemStyle: { color: colorFor(0) }, areaStyle: days === 1 ? undefined : { opacity: 0.12 } },
+        { name: "Compared period", type: days === 1 ? "bar" : "line", smooth: true, data: tr.previousPerDay, itemStyle: { color: "#94a3b8" }, lineStyle: { type: "dashed" } },
+      ],
+    });
+
+    setSafeHtml($("#trendSenders"), `
+      <div class="dp-card-head"><div class="dp-card-title"><span class="dp-card-icon">◔</span><h3>Top senders this period</h3></div></div>
+      <div class="dp-rows">${tr.topSenders.length ? tr.topSenders.map((r) => `
+        <div class="dp-row">
+          ${dpAvatar("", r.email)}
+          <div class="dp-row-main"><div class="dp-sender">${escHtml(displayEmail(r.email))}</div></div>
+          <div class="dp-row-meta"><strong>${r.current.toLocaleString()}</strong> ${delta(r.current, r.previous)}</div>
+        </div>`).join("") : '<div class="dp-empty">No email in this period.</div>'}</div>`);
+  }
+
   async function openMessageInThunderbird(messageId) {
     if (messageId == null || messageId === "") return;
     try {
@@ -3475,21 +4115,35 @@
       statusEl.textContent = statusText;
       statusEl.classList.toggle("modal-progress-error", isError);
     }
-    // On error there's nothing further the progress loop will do (the batch call already
-    // settled) and no auto-dismiss timer runs for this path, so without this the modal had
-    // no way to be dismissed at all short of reloading the whole dashboard -- losing the
-    // in-memory scan and forcing a full re-index just to get back to a usable UI.
-    const closeRow = $(`#${prefix}CloseRow`);
-    if (closeRow) closeRow.style.display = isError ? "flex" : "none";
   }
 
-  // Wired once (not per-modal-open): Close just dismisses the stuck error state and
-  // returns control to the existing in-memory session -- it does not re-run or undo
-  // anything, matching the fact that whatever the batch loop already completed (moved,
-  // skipped-as-already-gone) is real and was already reflected in allMessages before this
-  // error branch could even be reached.
-  $("#deleteModalCloseBtn")?.addEventListener("click", () => { $("#deleteModal").style.display = "none"; });
-  $("#folderModalCloseBtn")?.addEventListener("click", () => { $("#folderModal").style.display = "none"; });
+  /** Cancel is visible while a batch loop is actually running; Close replaces it once the
+   * operation has settled (done, partial, cancelled, or error) — there's otherwise no way
+   * to dismiss a settled-with-errors modal short of reloading the whole dashboard, losing
+   * the in-memory scan and forcing a full re-index just to get back to a usable UI. */
+  function setModalRunning(prefix, running) {
+    const cancelBtn = $(`#${prefix}CancelBtn`);
+    const closeBtn = $(`#${prefix}CloseBtn`);
+    if (cancelBtn) {
+      cancelBtn.style.display = running ? "" : "none";
+      cancelBtn.disabled = false;
+      cancelBtn.textContent = "Cancel";
+    }
+    if (closeBtn) closeBtn.style.display = running ? "none" : "";
+  }
+
+  // Close just dismisses the modal and returns control to the existing in-memory session
+  // -- it does not re-run or undo anything, matching the fact that whatever the batch loop
+  // already completed (moved, skipped-as-already-gone) is real and was already reflected
+  // in allMessages before this point.
+  $("#deleteModalCloseBtn")?.addEventListener("click", () => {
+    $("#deleteModal").style.display = "none";
+    $("#deleteModal").classList.remove("floating");
+  });
+  $("#folderModalCloseBtn")?.addEventListener("click", () => {
+    $("#folderModal").style.display = "none";
+    $("#folderModal").classList.remove("floating");
+  });
 
   function showDeleteModal(targetIds = null) {
     const idsToAct = targetIds || Array.from(selectedIds);
@@ -3507,6 +4161,7 @@
     const modal = $("#deleteModal");
     const confirmView = $("#deleteModalConfirmView");
     const progressView = $("#deleteModalProgress");
+    modal.classList.remove("floating");
     confirmView.style.display = "";
     progressView.style.display = "none";
     setModalProgress("deleteModal", 0, count, "Preparing…");
@@ -3516,7 +4171,18 @@
     $("#modalConfirm").onclick = async () => {
       confirmView.style.display = "none";
       progressView.style.display = "flex";
+      // A long-running bulk operation against a slow mail store shouldn't lock the user
+      // out of the rest of the app for however long it takes — once actually confirmed,
+      // the modal becomes a small non-blocking card instead of a full-screen overlay.
+      modal.classList.add("floating");
+      setModalRunning("deleteModal", true);
       setModalProgress("deleteModal", 0, count, `Moving 0 of ${count.toLocaleString()}…`);
+
+      $("#deleteModalCancelBtn").onclick = () => {
+        $("#deleteModalCancelBtn").disabled = true;
+        $("#deleteModalCancelBtn").textContent = "Stopping…";
+        browser.runtime.sendMessage({ action: "cancelBulkOperation" }).catch(() => {});
+      };
 
       const progressListener = (msg) => {
         if (msg.action === "deleteProgress") {
@@ -3531,13 +4197,20 @@
           messageIds: idsToAct,
         });
         browser.runtime.onMessage.removeListener(progressListener);
+        setModalRunning("deleteModal", false);
 
-        if (result && result.success) {
-          const movedIds = Array.isArray(result.movedIds) ? result.movedIds : idsToAct;
+        const movedIds = Array.isArray(result?.movedIds) ? result.movedIds : [];
+        if (movedIds.length) {
           const movedSet = new Set(movedIds);
           allMessages = allMessages.filter((m) => !movedSet.has(m.id));
           movedIds.forEach((id) => { selectedIds.delete(id); reviewCheckedIds.delete(String(id)); });
           updateStats();
+        }
+
+        if (result?.cancelled) {
+          setModalProgress("deleteModal", result.count, result.total,
+            `Cancelled — moved ${result.count.toLocaleString()} of ${result.total.toLocaleString()} before stopping.`);
+        } else if (result && result.success) {
           setModalProgress("deleteModal", result.count, result.total, result.count === result.total
             ? `Done — moved ${result.count.toLocaleString()} to Trash.`
             : `Partial — moved ${result.count.toLocaleString()} of ${result.total.toLocaleString()}. Review remaining selections.`);
@@ -3546,6 +4219,7 @@
           }
           setTimeout(() => {
             modal.style.display = "none";
+            modal.classList.remove("floating");
             switchView(currentView);
           }, 1200);
         } else {
@@ -3554,6 +4228,7 @@
         }
       } catch (e) {
         browser.runtime.onMessage.removeListener(progressListener);
+        setModalRunning("deleteModal", false);
         setModalProgress("deleteModal", 0, count, `Error: ${e.message}`, true);
       }
     };
@@ -3576,6 +4251,7 @@
     const confirmBtn = $("#folderModalConfirm");
     const confirmView = $("#folderModalConfirmView");
     const progressView = $("#folderModalProgress");
+    modal.classList.remove("floating");
     confirmView.style.display = "";
     progressView.style.display = "none";
     setModalProgress("folderModal", 0, totalSel, "Preparing…");
@@ -3662,7 +4338,15 @@
 
       confirmView.style.display = "none";
       progressView.style.display = "flex";
+      modal.classList.add("floating");
+      setModalRunning("folderModal", true);
       setModalProgress("folderModal", 0, idsToMove.length, `Moving 0 of ${idsToMove.length.toLocaleString()}…`);
+
+      $("#folderModalCancelBtn").onclick = () => {
+        $("#folderModalCancelBtn").disabled = true;
+        $("#folderModalCancelBtn").textContent = "Stopping…";
+        browser.runtime.sendMessage({ action: "cancelBulkOperation" }).catch(() => {});
+      };
 
       const progressListener = (msg) => {
         if (msg.action === "moveProgress") {
@@ -3679,19 +4363,27 @@
           folderPath,
         });
         browser.runtime.onMessage.removeListener(progressListener);
+        setModalRunning("folderModal", false);
 
-        if (result && result.success) {
-          const movedIds = Array.isArray(result.movedIds) ? result.movedIds : idsToMove;
+        const movedIds = Array.isArray(result?.movedIds) ? result.movedIds : [];
+        if (movedIds.length) {
           const movedSet = new Set(movedIds);
           allMessages = allMessages.filter((m) => !movedSet.has(m.id));
           movedIds.forEach((id) => { selectedIds.delete(id); reviewCheckedIds.delete(String(id)); });
           updateStats();
+        }
+
+        if (result?.cancelled) {
+          setModalProgress("folderModal", result.count, result.total,
+            `Cancelled — moved ${result.count.toLocaleString()} of ${result.total.toLocaleString()} before stopping.`);
+        } else if (result && result.success) {
           setModalProgress("folderModal", result.count, result.total, result.count === result.total
             ? `Done — moved ${result.count.toLocaleString()} message(s).`
             : `Partial — moved ${result.count.toLocaleString()} of ${result.total.toLocaleString()} message(s). Review remaining selections.`);
           if (result.errors) console.warn("Some batches had errors:", result.errors);
           setTimeout(() => {
             modal.style.display = "none";
+            modal.classList.remove("floating");
             switchView(currentView);
           }, 1200);
         } else {
@@ -3700,6 +4392,7 @@
         }
       } catch (e) {
         browser.runtime.onMessage.removeListener(progressListener);
+        setModalRunning("folderModal", false);
         setModalProgress("folderModal", 0, idsToMove.length, `Error: ${e.message}`, true);
       }
     };
@@ -4050,10 +4743,9 @@
       if (!m.domain || !m.date) return;
       const ts = Math.floor(new Date(m.date).getTime() / 1000);
       if (!ts || isNaN(ts)) return;
-      if (!byDomain[m.domain]) byDomain[m.domain] = { dates: [], subjects: [], senders: {}, size: 0 };
+      if (!byDomain[m.domain]) byDomain[m.domain] = { dates: [], senders: {}, size: 0 };
       const g = byDomain[m.domain];
       g.dates.push(ts);
-      if (m.subject) g.subjects.push(m.subject.toLowerCase());
       if (m.senderEmail) g.senders[m.senderEmail] = true;
       g.size += m.size || 0;
     });
@@ -4079,15 +4771,12 @@
 
       if (frequency === "Occasional") return;
 
-      const hasUnsubscribe = g.subjects.some(s => s.indexOf("unsubscribe") !== -1);
-
       results.push({
         domain: domain,
         email_count: g.dates.length,
         sender_count: Object.keys(g.senders).length,
         avg_interval_days: Math.round(avgDays * 10) / 10,
         frequency: frequency,
-        is_newsletter: hasUnsubscribe,
         last_date_unix: g.dates[g.dates.length - 1],
         size_bytes: g.size
       });
@@ -4145,10 +4834,9 @@
     const tabs = $("#subscriptionsFreqTabs");
     if (!tabs) return;
 
-    const freqs = ["All", "Newsletter", ...["Daily", "Every few days", "Weekly", "Bi-weekly", "Monthly", "Quarterly"]];
+    const freqs = ["All", "Daily", "Every few days", "Weekly", "Bi-weekly", "Monthly", "Quarterly"];
     setSafeHtml(tabs, freqs.map(f => {
       const count = f === "All" ? stats.length :
-                    f === "Newsletter" ? stats.filter(s => s.is_newsletter).length :
                     stats.filter(s => s.frequency === f).length;
       return `<button class="sub-freq-tab ${f === 'All' ? 'active' : ''}" data-freq="${f}">${f} (${count})</button>`;
     }).join(''));
@@ -4167,8 +4855,7 @@
 
   function renderSubscriptionCards(stats, filter) {
     let filtered = stats;
-    if (filter === "Newsletter") filtered = stats.filter(s => s.is_newsletter);
-    else if (filter !== "All") filtered = stats.filter(s => s.frequency === filter);
+    if (filter !== "All") filtered = stats.filter(s => s.frequency === filter);
 
     const cards = $("#subscriptionsCards");
     if (!cards) return;
@@ -4178,14 +4865,16 @@
       return;
     }
 
+    const domainMsgs = (domain) => getFilteredMessages().filter((m) => m.domain === domain);
     setSafeHtml(cards, filtered.map((s, i) => {
       const lastDate = new Date(s.last_date_unix * 1000);
       const dateStr = lastDate.toLocaleDateString();
       const domain = displayDomain(s.domain);
-      return `<div class="an-sub-card" style="border-left: 4px solid ${colorFor(i)}">
+      const msgs = domainMsgs(s.domain);
+      const selected = msgs.length > 0 && msgs.every((m) => selectedIds.has(m.id));
+      return `<div class="an-sub-card ${selected ? "selected" : ""}" data-sub-domain="${escAttr(s.domain)}" style="border-left: 4px solid ${colorFor(i)}" title="${selected ? "Selected — click to deselect" : `Select ${msgs.length.toLocaleString()} emails for Review`}">
         <div class="an-sub-domain">${escHtml(domain)}</div>
         <div class="an-sub-badges">
-          ${s.is_newsletter ? '<span class="an-sub-badge an-sub-newsletter">Newsletter</span>' : ''}
           <span class="an-sub-badge an-sub-freq">${escHtml(s.frequency)}</span>
         </div>
         <div class="an-sub-meta">
@@ -4193,8 +4882,16 @@
           <div><strong>${s.avg_interval_days}</strong> days avg</div>
           <div>Last: ${dateStr}</div>
         </div>
+        <span class="an-sub-select" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg></span>
       </div>`;
     }).join(''));
+
+    cards.onclick = (e) => {
+      const card = e.target.closest("[data-sub-domain]");
+      if (!card) return;
+      toggleSelectMessages(domainMsgs(card.dataset.subDomain));
+      renderSubscriptionCards(stats, filter);
+    };
   }
 
   // ══════════════════════════════════════════
@@ -4295,7 +4992,7 @@
 
       initViewChart(hostId, {
         backgroundColor: "transparent",
-        tooltip: { trigger: "item", formatter: (p) => `${displayEmail(p.name)}: ${p.value.toLocaleString()} emails (${p.percent}%)`, textStyle: { color: textColor } },
+        tooltip: { trigger: "item", formatter: (p) => `${escHtml(displayEmail(p.name))}: ${p.value.toLocaleString()} emails (${p.percent}%)`, textStyle: { color: textColor } },
         legend: { show: false },
         series: [{
           type: "pie",
@@ -4412,6 +5109,7 @@
     });
 
     const sectionId = (letter) => `contacts-letter-${letter === "#" ? "hash" : letter}`;
+    const priority = new Set(dpPrefs.prioritySenders || []);
 
     setSafeHtml(listEl, CONTACTS_ALPHABET.filter((l) => groups[l]).map((letter) => `
       <div class="contacts-section" id="${sectionId(letter)}">
@@ -4429,9 +5127,21 @@
             <div class="contact-domain">${escHtml(displayDomain(c.domain) || "")}</div>
             <div class="contact-count">${c.count.toLocaleString()} email${c.count === 1 ? "" : "s"}</div>
             <div class="contact-last">${escHtml(formatDate(c.lastDate))}</div>
+            <button type="button" class="contact-priority ${priority.has(c.email) ? "active" : ""}" data-priority-email="${escAttr(c.email)}"
+              title="${priority.has(c.email) ? "Pinned as a priority sender — click to unpin" : "Pin as a priority sender (shown first in DailyPie)"}"
+              aria-label="Toggle priority sender"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"/><path d="M12 14v7"/></svg></button>
           </div>`;
         }).join("")}
       </div>`).join(""));
+
+    listEl.onclick = (e) => {
+      const btn = e.target.closest("[data-priority-email]");
+      if (!btn) return;
+      const email = btn.dataset.priorityEmail;
+      const list = dpPrefs.prioritySenders || [];
+      savePrefs({ prioritySenders: list.includes(email) ? list.filter((p) => p !== email) : [...list, email] });
+      renderContactsView();
+    };
 
     setSafeHtml(azEl, CONTACTS_ALPHABET.map((letter) => {
       const has = !!groups[letter];

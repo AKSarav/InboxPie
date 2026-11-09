@@ -60,6 +60,7 @@ InboxPie processes mailbox information locally in Thunderbird.
 | `messagesRead` | Read message metadata for charts, tables, search, review, and cleanup insights. |
 | `messagesMove` | Move reviewed messages to a user-selected folder. |
 | `messagesDelete` | Move reviewed messages to Trash. The extension does not permanently delete messages. |
+| `storage` | Save your settings locally: custom categories, priority senders, your DailyPie list, and the senders DailyPie has already seen. |
 
 ## Usage
 
@@ -90,6 +91,22 @@ Click the **Folders** button in the header to load your mailbox tree and choose 
 - Use **All** or **None** for quick bulk selection.
 
 ## Changelog
+
+### 1.0.6
+
+**New: DailyPie** — a second tab next to PieView, with a count of today's unread email.
+
+- **New home screen**: before you scan, PieView shows a sample pie with three steps to get started.
+- **Stays in sync while open**: emails you delete, move or read in Thunderbird update InboxPie right away, so you never act on a message that is already gone. When new mail arrives in a scanned folder, a reminder at the bottom left offers **Rescan**, which adds just those emails instead of scanning everything again.
+
+- **Today / Yesterday at a glance**: emails, unread, new senders, on your list, all others — switch to Yesterday to catch up on what you missed.
+- **New senders**: today's mail from addresses you've never received email from before.
+- **Priority senders**: add `name@company.com` or a whole `@company.com`; their mail is shown first.
+- **Pie of the day**: a compact PieView of the day's mail — domains inside, senders outside.
+- **Your list**: add any email (`+ List`) or type a task; tick it off when done. Undone items stay on the list until ticked. Stored in InboxPie only — your Thunderbird stars are untouched.
+- **All others**: everything else that arrived that day, grouped by sender, so ten emails from one sender are one row. No guessing about what matters: the day is simply split into priority senders, new senders and all others.
+- **Trends**: pick the last day, 7, 14, 30 or 90 days and compare with the period before or the same dates last month — emails, unread, unique and new senders, emails per day and top senders.
+- Still metadata only. DailyPie remembers which senders it has seen (locally, in extension storage) so it can tell who is new.
 
 ### 1.0.5
 

@@ -130,7 +130,8 @@ CLI scans require **Full Disk Access** for the host application (Terminal/Cursor
 - Run one test: `pytest tests/test_scan.py::test_envelope_index_parser`
 
 ### Thunderbird
-- No automated tests; UI verified manually via `about:debugging`
+- Pure logic (DailyPie / Trends): `node --test "THUNDERBIRD/tests/*.test.js"` (node:test, no deps)
+- UI verified manually via `about:debugging`
 - Test checklist in `THUNDERBIRD/RELEASE_CHECKLIST.md`
 
 ---

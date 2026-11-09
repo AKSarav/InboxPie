@@ -1,12 +1,19 @@
 // background.js — Mail Audit Extension v2
 // Fetches all messages, supports safe batched delete (move to trash)
 
+// Checked between top-level batches in deleteMessages()/moveMessagesToFolder() so a user
+// can stop a long-running bulk operation partway through. A module-level flag is enough
+// here (not per-operation-id) because the UI only ever runs one bulk delete/move at a
+// time -- the confirm modal blocks starting a second one while the first is in flight.
+let bulkOperationCancelled = false;
+
 // Open dashboard in a full content tab when toolbar button is clicked
-browser.browserAction.onClicked.addListener(() => {
+function openDashboard() {
   browser.tabs.create({
     url: browser.runtime.getURL("dashboard/popup.html")
   });
-});
+}
+browser.browserAction.onClicked.addListener(openDashboard);
 
 // The listener itself must stay synchronous: an `async` listener always
 // returns a Promise, even for message types it doesn't recognize, which
@@ -37,6 +44,13 @@ browser.runtime.onMessage.addListener((message, sender) => {
   }
   if (message.action === "openMessage") {
     return openMessageInTab(message.messageId);
+  }
+  if (message.action === "recordsForNewMail") {
+    return recordsForNewMail(message.folder, message.messages);
+  }
+  if (message.action === "cancelBulkOperation") {
+    bulkOperationCancelled = true;
+    return Promise.resolve({ success: true });
   }
 });
 
@@ -101,6 +115,9 @@ async function fetchAllMail(options) {
       }
     }
   }
+
+  // Every scan (full or DailyPie) teaches DailyPie which senders it has already seen.
+  await rememberSenders(allMessages);
 
   return {
     messages: allMessages,
@@ -283,13 +300,19 @@ async function moveMessagesToFolder(messageIds, accountId, folderPath) {
 
   // Same batch-size reasoning as deleteMessages() below — larger batches cut the number
   // of sequential round-trips, which is the real overhead for a local/offline-synced
-  // account.
-  const BATCH_SIZE = 500;
+  // account. BUT each batch is also one uninterruptible native call: no progress update
+  // and no cancellation can land until the whole batch resolves, so 500 traded away
+  // responsiveness for throughput more than intended (reported: progress stuck at 0% for
+  // a long first stretch, Cancel not taking effect until the in-flight batch finishes).
+  // 150 is a smaller middle ground between that and the original 100 -- still fewer
+  // round-trips than 100, but a much shorter worst-case wait for feedback/cancel.
+  const BATCH_SIZE = 150;
   let moved = 0;
   let skipped = 0;
   const movedIds = [];
   const errors = [];
   const isNotFound = (err) => /not found/i.test(err?.message || "");
+  bulkOperationCancelled = false;
 
   // browser.messages.move() is all-or-nothing for the whole batch it's given. If a message
   // was moved or deleted outside InboxPie (another client, manually in Thunderbird) since
@@ -315,6 +338,10 @@ async function moveMessagesToFolder(messageIds, accountId, folderPath) {
       if (batch.length > 1) {
         const mid = Math.floor(batch.length / 2);
         await processBatch(batch.slice(0, mid));
+        // A run with several stale IDs can bisect into many sub-batches on its own --
+        // check cancellation between halves too, not just at the top-level loop below, so
+        // Cancel doesn't have to wait out a whole bisection tree once it's started.
+        if (bulkOperationCancelled) return;
         await processBatch(batch.slice(mid));
         return;
       }
@@ -327,8 +354,11 @@ async function moveMessagesToFolder(messageIds, accountId, folderPath) {
     }
   }
 
+  let cancelled = false;
   for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
+    if (bulkOperationCancelled) { cancelled = true; break; }
     await processBatch(messageIds.slice(i, i + BATCH_SIZE));
+    if (bulkOperationCancelled) { cancelled = true; break; }
   }
 
   return {
@@ -337,7 +367,8 @@ async function moveMessagesToFolder(messageIds, accountId, folderPath) {
     skipped,
     total: messageIds.length,
     movedIds,
-    error: (moved === 0 && skipped === 0) ? (errors[0] || "No messages were moved") : undefined,
+    cancelled,
+    error: (moved === 0 && skipped === 0 && !cancelled) ? (errors[0] || "No messages were moved") : undefined,
     errors: errors.length > 0 ? errors : undefined,
   };
 }
@@ -347,17 +378,22 @@ async function moveMessagesToFolder(messageIds, accountId, folderPath) {
 // account (e.g. Gmail via Thunderbird's local cache) is the per-call round-trip overhead
 // across the WebExtension boundary, not JS compute — so fewer, larger batches is the
 // lever, not concurrency (no documented guarantee concurrent calls on the same folder are
-// safe, and it's a destructive op, so not worth the risk). 500 is a first experimental
-// bump from 100; raise further if batches keep succeeding cleanly (watch `errors`).
+// safe, and it's a destructive op, so not worth the risk). BUT each batch is also one
+// uninterruptible native call -- no progress update and no cancellation can land until the
+// whole batch resolves, so 500 traded away too much responsiveness (reported: stuck at 0%
+// for a long first stretch; Cancel not taking effect until the in-flight batch finishes).
+// 150 is a smaller middle ground -- still fewer round-trips than the original 100, but a
+// much shorter worst-case wait for feedback/cancel.
 async function deleteMessages(messageIds) {
   if (!messageIds || messageIds.length === 0) return { success: false, error: "No messages selected" };
 
-  const BATCH_SIZE = 500;
+  const BATCH_SIZE = 150;
   let moved = 0;
   let skipped = 0;
   const movedIds = [];
   const errors = [];
   const isNotFound = (err) => /not found/i.test(err?.message || "");
+  bulkOperationCancelled = false;
 
   // Same all-or-nothing-batch problem as moveMessagesToFolder() above: one message moved
   // or deleted outside InboxPie since the search ran fails messages.delete() for the WHOLE
@@ -382,6 +418,10 @@ async function deleteMessages(messageIds) {
       if (batch.length > 1) {
         const mid = Math.floor(batch.length / 2);
         await processBatch(batch.slice(0, mid));
+        // A run with several stale IDs can bisect into many sub-batches on its own --
+        // check cancellation between halves too, not just at the top-level loop below, so
+        // Cancel doesn't have to wait out a whole bisection tree once it's started.
+        if (bulkOperationCancelled) return;
         await processBatch(batch.slice(mid));
         return;
       }
@@ -418,8 +458,11 @@ async function deleteMessages(messageIds) {
     }
   }
 
+  let cancelled = false;
   for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
+    if (bulkOperationCancelled) { cancelled = true; break; }
     await processBatch(messageIds.slice(i, i + BATCH_SIZE));
+    if (bulkOperationCancelled) { cancelled = true; break; }
   }
 
   return {
@@ -428,7 +471,31 @@ async function deleteMessages(messageIds) {
     skipped,
     total: messageIds.length,
     movedIds,
-    error: (moved === 0 && skipped === 0) ? (errors[0] || "No messages were moved to Trash") : undefined,
+    cancelled,
+    error: (moved === 0 && skipped === 0 && !cancelled) ? (errors[0] || "No messages were moved to Trash") : undefined,
     errors: errors.length > 0 ? errors : undefined,
   };
+}
+
+// ══════════════════════════════════════════
+//  DAILYPIE — remembers seen senders so the dashboard can spot new ones
+// ══════════════════════════════════════════
+
+/** New-mail headers from the dashboard's live sync → the same records a scan returns. */
+async function recordsForNewMail(folder, messages) {
+  const account = await browser.accounts.get(folder.accountId);
+  const records = messages.map((m) => extractMessageData(m, account, folder));
+  await rememberSenders(records);
+  return records;
+}
+
+async function rememberSenders(messages) {
+  const { knownSenders = {} } = await browser.storage.local.get("knownSenders");
+  let changed = false;
+  for (const m of messages) {
+    if (!m.senderEmail) continue;
+    const t = new Date(m.date).getTime();
+    if (!(knownSenders[m.senderEmail] <= t)) { knownSenders[m.senderEmail] = t; changed = true; }
+  }
+  if (changed) await browser.storage.local.set({ knownSenders });
 }

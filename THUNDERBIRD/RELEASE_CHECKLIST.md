@@ -30,7 +30,8 @@ Use this checklist before publishing InboxPie to addons.thunderbird.net or GitHu
 Package only active extension files:
 
 ```bash
-zip -r app@inboxpie.com.xpi manifest.json background.js dashboard/ icons/
+rm -f app@inboxpie.com.xpi
+zip -r app@inboxpie.com.xpi manifest.json background.js dashboard/ icons/ -x "icons/*.bak" "icons/InboxPieLogo*.png" "*.DS_Store"
 ```
 
 Do not include:
