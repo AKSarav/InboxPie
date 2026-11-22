@@ -1506,6 +1506,14 @@
   //  ECHARTS UTILITIES & BAR CHART RENDERING
   // ══════════════════════════════════════════
 
+  function setChartOption(chart, option) {
+    // Message headers in tooltip formatters must be rendered as text.
+    chart.setOption({
+      ...option,
+      tooltip: { ...option.tooltip, renderMode: "richText" },
+    }, true);
+  }
+
   function initViewChart(hostId, option, legendData = null) {
     if (!window.echarts) return;
     const el = document.getElementById(hostId);
@@ -1539,7 +1547,7 @@
         if (chartHost._echartsInstance) chartHost._echartsInstance.resize();
       }).observe(chartHost);
     }
-    chartHost._echartsInstance.setOption(option, true);
+    setChartOption(chartHost._echartsInstance, option);
     requestAnimationFrame(() => {
       if (chartHost._echartsInstance) chartHost._echartsInstance.resize();
     });
@@ -1779,7 +1787,7 @@
         formatter: (info) => {
           const value = info.value || 0;
           const pct = total ? ((value / total) * 100).toFixed(1) : "0";
-          return `<strong>${escHtml(info.name)}</strong><br/>${value.toLocaleString()} emails (${pct}% of total)`;
+          return `${info.name ?? ""}\n${value.toLocaleString()} emails (${pct}% of total)`;
         },
       },
       series: [{
@@ -2152,7 +2160,7 @@
           const newOption = buildSenderBarChartOption(this.value);
           const hostEl = document.getElementById("chart-sender-host");
           if (hostEl && hostEl.querySelector('.chart-host')._echartsInstance) {
-            hostEl.querySelector('.chart-host')._echartsInstance.setOption(newOption, true);
+            setChartOption(hostEl.querySelector('.chart-host')._echartsInstance, newOption);
           }
         });
       }
@@ -2322,7 +2330,7 @@
           const newOption = buildDomainBarChartOption(this.value);
           const hostEl = document.getElementById("chart-domain-host");
           if (hostEl && hostEl.querySelector('.chart-host')._echartsInstance) {
-            hostEl.querySelector('.chart-host')._echartsInstance.setOption(newOption, true);
+            setChartOption(hostEl.querySelector('.chart-host')._echartsInstance, newOption);
           }
         });
       }
@@ -2437,7 +2445,7 @@
         const newOption = buildTopSendersChartOption(heavySenders, this.value);
         const hostEl = document.getElementById("chart-size-senders");
         if (hostEl && hostEl.querySelector('.chart-host')._echartsInstance) {
-          hostEl.querySelector('.chart-host')._echartsInstance.setOption(newOption, true);
+          setChartOption(hostEl.querySelector('.chart-host')._echartsInstance, newOption);
         }
       });
     }
